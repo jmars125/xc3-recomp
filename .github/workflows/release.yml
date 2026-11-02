@@ -1,16 +1,28 @@
-# Builds the release packages with no game files and checks them on a second runner; a version tag also makes a draft
-# release, which a person publishes after the local steps in docs/installer.md ("Making a release"). Never run
-# make_release.py --prove here: it reads generated/upd and build/extracted/upd, which are game-derived and stay local.
+# Builds the release packages with no game files and checks them on a second runner. A push to master (a merged pull
+# request) publishes them as a release: v<VERSION>, or when that tag exists the next patch number after the highest
+# v<major>.<minor>.* tag. A version tag makes a draft release, which a person publishes after the local steps in
+# docs/installer.md ("Making a release"). Never run make_release.py --prove here: it reads generated/upd and
+# build/extracted/upd, which are game-derived and stay local.
 name: Release
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+    paths-ignore:   # not evaluated for tag pushes
+      - "**.md"
+      - "docs/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# One master release at a time, so the next run sees the tag this one made.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   version:
@@ -19,12 +31,20 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - id: version
         run: |
           version=$(cat VERSION)
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match VERSION $version"
             exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] &&
+             git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            IFS=. read -r major minor _ <<< "$version"
+            last=$(git tag -l "v$major.$minor.*" | sed "s/^v$major\.$minor\.//" | grep -E '^[0-9]+$' | sort -n | tail -1)
+            version="$major.$minor.$((last + 1))"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -36,6 +56,9 @@ jobs:
       PACKAGE: XC3-Setup-${{ needs.version.outputs.version }}-windows.zip
     steps:
       - uses: actions/checkout@v7
+      - name: Version of this build
+        shell: bash
+        run: echo "${{ needs.version.outputs.version }}" > VERSION
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -69,6 +92,9 @@ jobs:
       PACKAGE: XC3-Setup-${{ needs.version.outputs.version }}-linux.AppImage
     steps:
       - uses: actions/checkout@v7
+      - name: Version of this build
+        shell: bash
+        run: echo "${{ needs.version.outputs.version }}" > VERSION
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -110,6 +136,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      - name: Version of this build
+        shell: bash
+        run: echo "${{ needs.version.outputs.version }}" > VERSION
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -136,4 +165,22 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: >-
           gh release create "$GITHUB_REF_NAME" dist/* --draft --verify-tag --generate-notes
+          --title "XC3 Recomp ${{ needs.version.outputs.version }}"
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [version, verify]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: >-
+          gh release create "v${{ needs.version.outputs.version }}" dist/* --target "$GITHUB_SHA" --generate-notes
           --title "XC3 Recomp ${{ needs.version.outputs.version }}"

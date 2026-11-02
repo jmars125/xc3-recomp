@@ -153,7 +153,12 @@ Each run builds `XC3-Setup-<version>-windows.zip` on Windows and `XC3-Setup-<ver
 For a test build, start the Release workflow on a branch from the Actions tab (or `gh workflow run release.yml --ref
 <branch>`). The packages are the run's artifacts.
 
-For a release:
+Every push to `master` that changes more than Markdown or `docs/` (a merged pull request) builds, checks and publishes
+a release on its own: `v<VERSION>` when that tag is new, else the next patch number after the highest
+`v<major>.<minor>.*` tag. Bump `VERSION` in the pull request for a new minor or major version. These releases skip the
+local `--prove` step below.
+
+For a proved release:
 
 1. On the release branch, bump `VERSION` and push.
 2. Tag that commit `v<VERSION>` and push the tag. A tag that differs from `VERSION` stops the run. A passing run
