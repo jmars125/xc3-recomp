@@ -1040,6 +1040,7 @@ void kern_core_back(int *away) {
 // and takes a core again. Shorter waits keep the core: a lock held for a moment would otherwise make the next pass wait
 // for another thread's next SVC (MacNativeGames). XC3_SPIN=0 keeps the core always (the gate's own cost only).
 #define SPIN_GAP_NS 20000ull
+#define YIELD_PAUSE_NS 1000ull   // a yield with no thread waiting for a core (SleepThread 0, -1, -2)
 static int g_spin_on = -1;
 static uint64_t g_spin_handoff_ns;
 static _Thread_local uint64_t sw_head, sw_t0, sw_last;
@@ -1768,7 +1769,17 @@ int kern_svc(Cpu *c, uint32_t imm) {
             unlock();
             return 1;
         }
-        // Yield: hand the core to a waiting thread of equal or better priority.
+        // Yield: hand the core to a waiting thread of equal or better priority. With no thread waiting for a core (a
+        // racy look: one missed now is seen at the next yield) the kernel lock is skipped and the thread pauses
+        // YIELD_PAUSE_NS, about what the SVC costs on the Switch. XC3's job wait (main+0x1280e74) yields on every pass
+        // of a poll that takes the job queue's lock; returning at once made it poll ~10 million times a second and
+        // hand that lock's cache line away from the workers it waits for.
+        if (!__atomic_load_n(&g_core_wait, __ATOMIC_RELAXED)) {
+            uint64_t until = kern_now_ns() + YIELD_PAUSE_NS;
+            do plat_pause();
+            while (kern_now_ns() < until);
+            return 1;
+        }
         lock();
         int give = 0;
         int tp = prio_of(t);
