@@ -22,6 +22,8 @@ BLOCKED_SUFFIXES = {
     ".bfres", ".bntx", ".bnsh", ".sarc", ".szs", ".zs", ".pack", ".byml",
     ".bgyml", ".msbt", ".bars", ".bwav", ".bfwav", ".bfstm", ".bfttf",
     ".bfotf", ".sharcb", ".webm",
+    # Xenoblade 3: archives, models, textures, layouts, fonts, tables, animation, collision.
+    ".ard", ".arh", ".wimdo", ".wismt", ".wismhd", ".wilay", ".wifnt", ".bdat", ".mot", ".camdo", ".beh", ".idcm",
 }
 
 # ExeFS modules carry no extension.
