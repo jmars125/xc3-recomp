@@ -21,14 +21,14 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - XC3-Setup: builds the game from your own NSP files and `prod.keys`
 - In-game settings menu (F1) and performance overlay (F10)
 - Keyboard, mouse and gamepad
-- 60 fps
+- 60 fps and above (`fps_limit` up to 360 or the display's rate)
 - Any game resolution and aspect ratio, including ultrawide (`output_res` in `xc3.ini`)
 - RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
 
 ## Planned
 
 - Linux and the Steam Deck (the Linux setup builds and installs; not yet tested on a GPU)
-- VRR
+- VRR (should work in fullscreen with `vk_present = fifo` and `fps_limit = display`; not yet tested)
 
 ## Installing
 

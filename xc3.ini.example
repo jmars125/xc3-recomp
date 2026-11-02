@@ -5,17 +5,13 @@
 
 [frame rate]
 # Frame rate limit: 30, 40, 45, 60, 90, 120, 144, any whole rate from 30 to 360, or display (the refresh rate of the
-# window's monitor). The game steps whole 60 Hz vsyncs, so it runs at 60 for a limit of 60 or more (and display) and at
-# 30 below it. Changes while the game runs take effect at once.
+# window's monitor). Changes while the game runs take effect at once.
 # fps_limit = 60
 # Older key, read only while fps_limit is unset: fps60 = 0 means a limit of 30.
 # fps60 = 1
-# Real-time frame step: game speed follows the clock instead of the frame count.
+# Real-time frame step: game speed follows the clock instead of the frame count. With 0 the game steps whole 60 Hz
+# vsyncs, so it runs at 60 for a limit of 60 or more and at 30 below it. Read at start.
 # realtime = 1
-# Cloth simulation on the real-time clock. Needs realtime = 1.
-# cloth_realtime = 1
-# Fix for physics that bounce at high frame rates.
-# highfps_fix = 1
 
 [performance]
 # The keys of this section and of [diagnostics] are for testing and troubleshooting, and take effect at the next start.
