@@ -1,14 +1,14 @@
-"""Census of every Maxwell shader in the extracted XCX RomFS and ExeFS, and an offline translation pass.
+"""Census of every Maxwell shader in the extracted XC3 RomFS and ExeFS, and an offline translation pass.
 
 Port of MacNativeGames games/totk/scripts/prepare_shader_seed.py (inventory, bnsh_shaders, sharcb_shaders, sarc) and the
 package walk of locate_shaders.py @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames contributors). Differences: no
 shared shader list, no spirv-cross, no bind-state variants; the module scan reads the NSO files under exefs/ directly;
 a control section must start with CONTROL_MAGIC (sharcb_shaders says why).
 
-Reads build/extracted/<version>/ (RomFS image plus index.json as tools/romfs_index.py reads them, and exefs/). XCX keeps
-its shaders inside bf3.ard, which this inventory does not open, so it finds none there: --played takes them from
-build/<version>/shader-programs.bin instead, the shaders a build met in play (runtime/gfx_shader.c), which is what the
-runtime probes need. Writes under build/<version>/shaders/ only:
+Reads build/extracted/<version>/ (RomFS image plus index.json as tools/romfs_index.py reads them, and exefs/). XC3 keeps
+its shaders inside bf3.ard, which this inventory does not open (tools/ard_shaders.py does), so it finds none there:
+--played takes them from build/<version>/shader-programs.bin instead, the shaders a build met in play
+(runtime/gfx_shader.c), which is what the runtime probes need. Writes under build/<version>/shaders/ only:
     code/<key>.code     translator input (graphics: SPH + instructions, compute: instructions)
     jobs.json           key -> job, source path, origin (bnsh|sharcb|main)
     spv/<key>.spv       with --translate
@@ -36,7 +36,7 @@ from pathlib import Path
 import lz4.block
 
 ROOT = Path(__file__).resolve().parent.parent
-XLATE = ROOT / 'build' / 'xlate' / ('xcx_xlate.exe' if os.name == 'nt' else 'xcx_xlate')
+XLATE = ROOT / 'build' / 'xlate' / ('xc3_xlate.exe' if os.name == 'nt' else 'xc3_xlate')
 SPIRV_VAL = Path(r'C:\msys64\ucrt64\bin\spirv-val.exe') if os.name == 'nt' else Path(shutil.which('spirv-val') or '/usr/bin/spirv-val')
 ZSTD = b'\x28\xb5\x2f\xfd'
 # NVN program control section magic, u32 0x98761234 (d2r-mobile dm/gfx/tools/shader_map.py)
@@ -206,7 +206,7 @@ def inventory(romfs, exefs):
             return raw
 
         dictionaries = {}
-        if 'Pack/ZsDic.pack.zs' in entries:   # TotK's shared dictionaries; XCX's RomFS has none
+        if 'Pack/ZsDic.pack.zs' in entries:   # TotK's shared dictionaries; XC3's RomFS has none
             for raw in sarc(zstd.decompress(read('Pack/ZsDic.pack.zs'))).values():
                 d = zstd.ZstdDict(raw)
                 dictionaries[d.dict_id] = d
@@ -250,7 +250,7 @@ def played_shaders(path):
     One shader per stage and code: the probes rebuild the control section from the job, so a record that differs only
     there would be the same shader to them."""
     data = path.read_bytes()
-    if data[:7] != b'XCXSPRG':
+    if data[:7] != b'XC3SPRG':
         raise ValueError(f'{path}: not a shader-programs.bin')
     shaders, seen, pos, group = {}, set(), 16, 0
     while pos + 44 + 0x880 <= len(data):

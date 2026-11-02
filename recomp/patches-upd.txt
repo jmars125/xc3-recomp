@@ -1,104 +1,26 @@
-# Code patches for XCX DE 2.0.0 main (recomp/patches.py).
+# Code patches for XC3 2.2.1 main (recomp/patches.py).
 #
-# xcx60 (XCX_FPS60, on): the frame rate of the frame limit XCX_FPS_LIMIT (frame_rate.c). The interval and period
-# sites are our own; the others are ported from the 60FPS mod for 1.0.1 by Fl4sh_ and StevensND
-# (github.com/Fl4sh9174/Switch-Emulator-Ultrawide-FPS-Mods): each 1.0.1 site was found in the 1.0.0 main by what the
-# patch replaces, then in 2.0.0 by the surrounding instructions (unique match); the original words below are 2.0.0's. The mod's other sites (constant time scales at
-# +0x1e245c..+0x1e24dc and +0xeb108..+0xeb128) have no clear 1.0.0 counterpart and are not ported.
+# scene (XC3_RENDER_SCALE, resolution.c): the 3D render scale. The renderer's frame setup (main+0xed49dc, the object at
+# main+0x1ba3970) has a scaled-scene path: each frame it resets the requested scale of view 0 (renderer +0x4a58, a
+# width and a height factor) to 1.0 (main+0xed5730), takes the request of any other view that asks for one (flags at
+# view +0x48, renderer +0x7d8 + 0x50 i, & 0x13 == 3), and sets bit 2 of view 0's flags (renderer +0x7d0) only when one
+# did (main+0xed58cc). With bit 2 the view loop (main+0xed5ae4) applies the request: the render size (view +0x18) is the
+# frame size times the factors. No view asks in play, so the path is unused.
+# The first site reads the flags and says a view asked (w9 = 1), the second loads both factors from the patch page's
+# +0x58 (two floats) in place of 1.0. x8 is rewritten at main+0xed573c.
+set scene XC3_SCENE_SCALE 0
+site scene main ed58cc b947d268 b947d268 52800029
+site scene main ed5730 b2091be8 @page:x8 f9402d08
 
-set xcx60 XCX_FPS60 1
-set xcx60g XCX_FPS60_GETTER 0
-set xcx60m XCX_FPS60_MODE 0
-
-# The game's frame interval in vsyncs, set once at boot (main+0x13db530 calls the setter main+0x13a2fd8 with 2). The
-# main loop's limiter (main+0x13a9ac0) waits that many vsyncs, the frame-time getter main+0x13a250c returns
-# interval * the vsync period below, and the game asks NVN for the same present interval: 1 vsync per frame.
-site xcx60 main 13db540 52800040 52800020
-# The game's vsync period, a virtual of the frame pacing object (main+0x13baa30) that returns 1/60 s: the limiter
-# waits interval * period and the frame time is the same product. The patch page's +0x40 instead (frame_rate.c, the
-# frame limit XCX_FPS_LIMIT: 1 / limit), so one interval is one frame at the limit.
-site xcx60 main 13baa34 72a79108 @page:x8 b9404108
-# The limiter's wait, interval * that period (main+0x13a9af4, then * 0.998 and compared with the time since the last
-# frame): the page's +0x48 instead, the frame time of the limit (2/60 s in cutscenes). The period above follows the
-# measured frame time (frame_rate.c, the real-time step); waiting that long would hold every frame to the slowest
-# recent one. x8 is reloaded before its next use.
-site xcx60 main 13a9af4 1e210800 @page:x8 bd404900
-# The game's frame-rate pick, flag ? 60.0 : 30.0, then stored with its reciprocal (1.0.1 +0xa2ee5c): both arms the
-# limit, the page's +0x44 (x9 is free here: the next use loads it).
-site xcx60 main a1f05c 1e27d001 @page:x9 bd404521
-# A 1/30 s time constant (0x3d088889, 1.0.1 +0x569c0; the mod's 1/60): 1 / limit, the page's +0x40.
-site xcx60 main 56d40 72a7a108 @page:x8 b9404108
-
-# The game's frame update (main+0x1e287c, a virtual reached through main+0x1e2b44) passes its step, one per frame, on
-# to the field, battle and event updates. Most turn it into time themselves; three count it as 30 fps frames, so above
-# 30 fps they ran fast (battle timing prompts): their step is s8 * the patch page's +0x4c (30 / frame rate), as the
-# 1.0.1 mod's constant 0.5 at 60 fps (1.0.1 +0x1e24a0, +0x1e24dc, +0xeb108). x9 is free at each: a call follows.
-site xcx60 main 1e28e0 1e204100 @page:x9 bd404d20 1e200900
-site xcx60 main 1e291c 1e204100 @page:x9 bd404d20 1e200900
-site xcx60 main eb408 1e204100 @page:x9 bd404d20 1e200900
-
-# The Soul Challenge ring (the timing prompt in battle): its update (around main+0x5c626c) takes a fixed amount per
-# frame, +0x120 of the prompt, off the time left at +0x11c, so above 30 fps the ring shrank fast. The amount is
-# scaled by the patch page's +0x4c (30 / frame rate), as the 1.0.1 mod's halving at 60 fps (its cave at 1.0.1
-# +0x2a02ac, called from +0x5c5874). x8 and s2 are free: every path from here calls before reading them.
-site xcx60 main 5c6284 1e213800 @page:x8 bd404d02 1e220821 1e213800
-# Right-stick camera turn (issue #19): the camera's rotation update (main+0xab514) turns the stick, after its response
-# curve, into a pitch (main+0xab74c) and a yaw (main+0xabab8) per frame, both times the turn speed it loads here from
-# the camera parameters (+0xb4); no frame time is applied, so above 30 fps the camera turned faster. The speed is scaled
-# by the patch page's +0x4c (30 / frame rate) where it is loaded, so the pitch limits still apply to the scaled step.
-# x8 is rewritten next (main+0xab704); s16 is written before it is read.
-site xcx60 main ab700 bd40b6a8 @page:x8 bd40b6a8 bd404d10 1e300908
-# The salvage hold (issue #19): its progress is a float at +0xc8 of the hold, clamped to the total at +0xcc
-# (main+0xe5300, which adds a step and clamps). While A is held the step is a data rate times a data amount
-# (main+0xe5e8c); after A is released the progress drains by +0xd0 of the hold each frame (main+0xe5860). Both steps
-# are per frame, so above 30 fps salvaging filled faster. Both are scaled by the patch page's +0x4c (30 / frame rate).
-# x0 is reloaded right after the first, x8 is free at the second, and s1 is caller-saved at both (a call follows).
-site xcx60 main e5e8c 1e280800 @page:x0 bd404c01 1e280800 1e210800
-site xcx60 main e5860 1e214000 @page:x8 bd404d01 1e214000 1e210800
-
-# The mod's getter that returns false on Switch (1.0.1 +0x13eb280): true. Off: in 2.0.0 it crashes the title screen's
-# rendering (main+0x9530b0 reads through a bad pointer).
-site xcx60g main 13db618 2a1f03e0 52800020
-
-# A flag at +0x301 of the object at main+0x1df6020, read by the getter main+0x13a288c: its callers halve time steps
-# and scales (main+0x289748, +0x3122e4, +0xa16ef4) and pick 60 at the fps pick above. Both returns of the getter give
-# true. Off: on its own it does not change the frame rate, and what it halves is untested.
-site xcx60m main 13a28a4 1a9f07e0 52800020
-site xcx60m main 13a28ac 2a1f03e0 52800020
-
-# resbuf (XCX_RES_BUFFER set, resolution.c): main+0x9ccce0 sizes two buffers from a width it loads and the docked
-# height of the resolution table; both loads read the patch page's +0x50 and +0x54 instead, as the 1.0.1 resolution
-# mods (1.0.1 +0x9dcaec, +0x9dcb00) put sizes of their own there. x8 is reloaded or unused after each.
-set resbuf XCX_RES_BUFFER 0
-site resbuf main 9cccec b9400114 @page:x8 b9405114
-site resbuf main 9ccd00 b9400115 @page:x8 b9405515
-
-# The 3D render scale (issue #33). The game runs dynamic resolution: each frame main+0x97730c compares the time from
-# main+0x13a28dc with a target and steps a level from 0 to 10, which moves the scale of its record (renderer +0x528) from
-# a maximum (+0x14, +0x18) to a minimum (+0x1c, +0x20), all read from /monolib/shader/lib_nx.ini. Then the renderer
-# (main+0x971c00) has main+0x9dc89c take the current scale, the record's floats at +0x24 (width) and +0x28 (height), cut
-# to whole percents; with scaling off in the record it is 1, with main+0x9dc980 as the exit. The scene draws in that part
-# of its full-size targets, and the game's FSR pass scales it up.
-# scene: both pointers go to the patch page's +0x58, one float, the scale XCX_RENDER_SCALE asks for. x8 and x9 are
-# what the next instructions load through, so nothing else reads them.
-# scenefull: the enable byte reads as 0, the game's own unscaled path. 100 % goes this way because main+0x9dc9f4 rounds
-# a scaled size up to a multiple of 8, past the target at a height of 900 or 1800.
-set scene XCX_RENDER_SCALE 0
-site scene main 9dc8c0 91009028 @page:x8 91016108
-site scene main 9dc8c4 9100a029 91000109
-set scenefull XCX_RENDER_SCALE 0
-site scenefull main 9dc8b4 39400028 2a1f03e8
-# sceneread: the page's +0x60 and +0x64 keep the scale in use, for the overlay (resolution.c res_sizes). Every path of
-# main+0x9dc89c arrives here with the scale main+0x9dc9f4 sizes the scene by in s1 (width) and s0 (height); the percents
-# stored after this are cut once more and can be one lower. x9 is written by the next instruction anyway.
-set sceneread XCX_SCENE_READ 1
-site sceneread main 9dc9a8 52a85909 @page:x9 2d0c0121 52a85909
-
-# uifit (XCX_UI_FIT, resolution.c): on a frame wider than 16:9 the runtime narrows the interface about the screen centre
-# (nvn_api_cmd.c ui_fit), which would pull anything placed from a 3D position, such as enemy labels, towards the centre.
-# Two functions project those positions into the canvas and end with x = (1 - ndc) * width / 2: main+0x560800 (the labels)
-# and main+0xa17454 (only caller main+0x402e64). ndc is multiplied by the patch page's +0x68, 1 / the narrowing, so the
-# narrowing lands them on their targets. x9 and s5 are free at both: neither is read again before it is written.
-set uifit XCX_UI_FIT 1
-site uifit main 56094c 1e323a23 @page:x9 bd406925 1e250a52 1e323a23
-site uifit main a17580 1e213801 @page:x9 bd406925 1e250821 1e213801
+# realtime (XC3_REALTIME, frame_rate.c): the frame step follows the time each frame is shown. The game's frame-step
+# update (main+0xf3c0) takes 60 / its vsync count per frame (main+0x1249b6c) as the frame rate (+0x210, an int), its
+# reciprocal as the step (+0x214), and the frame's measured time (main+0x12800c4) clamped to [step, 2 step] as the time
+# stepped (+0x218, ratio to 30 fps at +0x21c). The sites read the frame rate from the patch page's +8 (an int), the step
+# and the measured time from +4 (a float). The main loop's limiter (main+0x124fa34) waits until the vsync count times
+# the vsync period has passed since the last frame; it already returns at once when its object's +0xa0 bit 0 or +0x194
+# is set, and the fourth site makes that test always pass, so the host pacer alone holds frames to the limit.
+set realtime XC3_REALTIME 1
+site realtime main f3dc 1ac00d08 @page:x8 b9400908
+site realtime main f3e8 1e201821 @page:x9 bd400521
+site realtime main f400 9449c331 @page:x8 bd400500
+site realtime main 124fa70 2a090108 32000108

@@ -1,4 +1,4 @@
-"""Name module offsets and disassemble around them: xcx_sym.py sdk+0x13e81c main+0x13aa5ec [--dis N].
+"""Name module offsets and disassemble around them: xc3_sym.py sdk+0x13e81c main+0x13aa5ec [--dis N].
 
 Reads the extracted ExeFS (build/extracted/upd/exefs). PLT stubs and GOT-loaded calls are named by their relocation."""
 import bisect

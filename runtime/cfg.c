@@ -1,6 +1,6 @@
-// xcx.ini: file-backed defaults for the XCX_* environment variables (docs/controls.md, xcx.ini.example).
+// xc3.ini: file-backed defaults for the XC3_* environment variables (docs/controls.md, xc3.ini.example).
 // Format: "key = value" lines, '#' or ';' at the start of a line begins a comment, [sections] only group. A key is a
-// variable name without "XCX_" (an optional XCX_ prefix is accepted), case-insensitive. A value is the rest of the
+// variable name without "XC3_" (an optional XC3_ prefix is accepted), case-insensitive. A value is the rest of the
 // line, trimmed, optionally in double quotes; an empty value counts as unset. The environment wins over the file.
 //
 // Live settings: cfg_set changes a value in memory (readers see the new pointer; the old string is kept, so a pointer
@@ -15,7 +15,7 @@
 #include "host.h"
 #include "platform/platform.h"
 
-#define PREFIX "XCX_"
+#define PREFIX "XC3_"
 #define PREFIX_LEN 4
 #define CFG_MAX_KEYS 512
 
@@ -40,7 +40,7 @@ static const char *const known[] = {
     "FLIGHT_THUMBS", "FPS60", "FPS_LIMIT", "FREEZE_IDLE", "FREE_CORES", "FULLSCREEN", "GATHER_BIAS", "GPL", "GPL_DRAW_BUILD", "GPU",
     "GPU_INDEX", "GPU_NAME", "HIGHFPS_FIX", "INPUT", "INPUT_RECORD", "INPUT_SCRIPT", "LANG", "LIB_PREBUILD",
     "LIB_PREBUILD_KEEP", "LIB_PREBUILD_THREADS", "LOCALE", "LOD_GUARD", "MEMORY", "MENU_LANG", "MENU_TEST",
-    "MENU_TEST_DIR", "MENU_TEST_SET", "MINIMAL_LAYOUT", "MIRROR_GAP", "MOTION", "MOUSE_SENS", "MOVIE_HOST", "MOVIE_PACE",
+    "MENU_TEST_DIR", "MENU_TEST_SET", "MINIMAL_LAYOUT", "MIRROR_GAP", "MODS", "MOTION", "MOUSE_SENS", "MOVIE_HOST", "MOVIE_PACE", "MOVIE_SKIP",
     "ONE_PER_CORE", "OPERATION_MODE", "OUTPUT_RES", "PAD_LAYOUT", "PATCH_OUTPUT", "PATCH_SCENE", "PERF_OVERLAY", "PERF_SLOW_MS", "PICTURE_FIT", "PIPELINE_CACHE", "PIPE_MEMO", "PIPE_PREBUILD", "PIPE_SKIP", "PIPE_SYNC", "PIPE_WAIT",
     "PREWARM_XLATE", "PROBE_MOVIE", "PROBE_MOVIE_SHOT", "PROFILE", "PROFILE_CHAINS", "PROFILE_DIR", "PROFILE_FRAMES",
     "PROFILE_MAIN", "PROFILE_RENDER", "PUSH_SKIP", "PUSH_STAGE", "RDOC", "RDOC_DIR", "RDOC_DLL", "REALTIME", "REC_END", "REEXEC",
@@ -53,7 +53,7 @@ static const char *const known[] = {
     "WINDOW_SIZE", "XLATE", "XLATE_ID", "XLATE_PROCS", "ZSTD_CHECK", "ZSTD_NATIVE",
 };
 
-// The xcx.ini section a key cfg_set may write goes to when the file lacks it (xcx.ini.example's sections).
+// The xc3.ini section a key cfg_set may write goes to when the file lacks it (xc3.ini.example's sections).
 static const struct { const char *key, *section; } sections[] = {
     {"FPS_LIMIT", "frame rate"}, {"FPS60", "frame rate"}, {"CUTSCENE_30", "frame rate"},
     {"REALTIME", "frame rate"}, {"CLOTH_REALTIME", "frame rate"}, {"HIGHFPS_FIX", "frame rate"},
@@ -163,7 +163,7 @@ static void add(char *key, char *value, int line) {
     size_t vl = strlen(value);
     if (vl >= 2 && value[0] == '"' && value[vl - 1] == '"') value[vl - 1] = 0, value++;
     if (!*key) return;
-    if (!is_known(key)) rt_log("cfg: xcx.ini line %d: unknown key '%s'", line, key);
+    if (!is_known(key)) rt_log("cfg: xc3.ini line %d: unknown key '%s'", line, key);
     if (!*value) return;   // "key =" leaves the setting at its default
     for (int i = 0; i < n_entries; i++)
         if (!strcmp(entries[i].key, key)) {   // a repeated key: the later line wins
@@ -188,7 +188,7 @@ int cfg_load(const char *path) {
         char *s = trim(p);
         char *eq = strchr(s, '=');
         if (*s && *s != '#' && *s != ';' && *s != '[') {
-            if (!eq) rt_log("cfg: xcx.ini line %d: no '=' in '%s'", line, s);
+            if (!eq) rt_log("cfg: xc3.ini line %d: no '=' in '%s'", line, s);
             else {
                 *eq = 0;
                 add(trim(s), trim(eq + 1), line);
@@ -201,17 +201,18 @@ int cfg_load(const char *path) {
     return 1;
 }
 
-// ---- device profiles: defaults for a known machine, below the environment and xcx.ini and above the table, so any
-// key the player sets wins and resetting a key in the menu returns to the profile's value. XCX_DEVICE_PROFILE = auto
+// ---- device profiles: defaults for a known machine, below the environment and xc3.ini and above the table, so any
+// key the player sets wins and resetting a key in the menu returns to the profile's value. XC3_DEVICE_PROFILE = auto
 // (default: the Steam Deck when the firmware says so), desktop (none) or deck.
 //
 // The Steam Deck (LCD Jupiter, OLED Galileo; 1280x800, 16:10, 4 Zen 2 cores, RDNA 2 with 8 CUs sharing 16 GB): the game
-// at 1280x720 with its own 5/6 scene, letterboxed in the 16:10 screen (XCX_PICTURE_FIT) until the game draws 16:10
-// itself; fullscreen and vsync, as gamescope composes Game Mode; 40 fps, which divides 40 Hz (and 120 Hz on the OLED).
+// at 1280x720 with its own 5/6 scene, letterboxed in the 16:10 screen (XC3_PICTURE_FIT) until the game draws 16:10
+// itself; fullscreen and vsync, as gamescope composes Game Mode; 30 fps, as the console runs: the game steps whole 60 Hz
+// vsyncs (frame_rate.c vsyncs_store), so a limit between 30 and 60 would also run at 30.
 // Starting points to replace with measured ones (docs/tester-guide.md, Steam Deck).
 static const struct { const char *key, *value; } DECK[] = {
     {"FULLSCREEN", "1"}, {"WINDOW_SIZE", "1280x800"}, {"OUTPUT_RES", "1280x720"}, {"RENDER_SCALE", "game"},
-    {"VK_PRESENT", "fifo"}, {"FPS_LIMIT", "40"},
+    {"VK_PRESENT", "fifo"}, {"FPS_LIMIT", "30"},
 };
 static int profile = -1;   // 0 none, 1 Steam Deck
 
@@ -266,7 +267,7 @@ const char *cfg_get(const char *name) {
     return NULL;
 }
 
-// Whether name's value comes from the player (the environment or xcx.ini), not a profile or the table.
+// Whether name's value comes from the player (the environment or xc3.ini), not a profile or the table.
 int cfg_is_set(const char *name) { return raw_get(name) != NULL; }
 
 unsigned cfg_version(void) { return __atomic_load_n(&version, __ATOMIC_ACQUIRE); }
@@ -445,7 +446,7 @@ static void put(Out *o, const char *s, size_t n) {
     if (o->n + n + 1 > o->cap) {
         o->cap = (o->n + n + 1) * 2;
         o->buf = realloc(o->buf, o->cap);
-        if (!o->buf) rt_fatal("cfg: out of memory writing xcx.ini");
+        if (!o->buf) rt_fatal("cfg: out of memory writing xc3.ini");
     }
     memcpy(o->buf + o->n, s, n);
     o->n += n;
@@ -493,7 +494,7 @@ int cfg_save_to(const char *path) {
     // after[i]: entries to write after line i (-1 = none); replace[i]: the entry whose value line i now carries
     int *replace = malloc(sizeof(int) * ((size_t)nl + 1)), *after_key = malloc(sizeof(int) * (size_t)(n + 1));
     char *drop = calloc((size_t)nl + 1, 1);   // lines of a reset key
-    if (!lines || !replace || !after_key || !drop) rt_fatal("cfg: out of memory writing xcx.ini");
+    if (!lines || !replace || !after_key || !drop) rt_fatal("cfg: out of memory writing xc3.ini");
     for (int i = 0, at = 0; i < nl; i++) {
         size_t start = (size_t)at;
         while ((uint64_t)at < size && text[at] != '\n') at++;
@@ -607,7 +608,7 @@ static int find_ini(void) {
     char *cut = plat_last_sep(path);
     if (!cut) cut = strrchr(path, '/');
     if (!cut || cut + 10 >= path + sizeof path) return 0;
-    strcpy(cut + 1, "xcx.ini");
+    strcpy(cut + 1, "xc3.ini");
     snprintf(ini_path, sizeof ini_path, "%s", path);
     return 1;
 }
@@ -628,13 +629,13 @@ static void load_ini(void) {
     for (int i = 0; i < n_entries; i++) {
         char var[128];
         snprintf(var, sizeof var, PREFIX "%s", entries[i].key);
-        if (getenv(var)) rt_log("cfg: %s is set in the environment and overrides xcx.ini", var);
+        if (getenv(var)) rt_log("cfg: %s is set in the environment and overrides xc3.ini", var);
     }
 }
 
 void cfg_init(void) {
     load_ini();
     if (profile_of())
-        rt_log("cfg: device profile Steam Deck: defaults for the keys xcx.ini does not set (XCX_DEVICE_PROFILE=desktop "
+        rt_log("cfg: device profile Steam Deck: defaults for the keys xc3.ini does not set (XC3_DEVICE_PROFILE=desktop "
                "turns it off)");
 }

@@ -76,8 +76,15 @@ typedef struct VkExec {
     VkPipeState pipe;
 
     // ---- vk_exec_draw.c slots (draws, binds, dispatch): left empty by vk_exec.c
-    const prog_t *prog;                  // OP_BIND_PROGRAM
-    int32_t prog_stages;
+    const prog_t *bound[6];              // OP_BIND_PROGRAM: per NVN stage
+    const prog_t *prog;                  // the last program bound, for the dumps
+    uint8_t gs_topology;                 // GFX_TOPOLOGY_* of the draw being prepared
+    struct {                             // transform feedback (vk_exec_draw.c)
+        uint64_t addr[4], size[4];       // OP_XFB_BUF
+        uint64_t ctl;                    // the control buffer of the capture
+        uint32_t n;                      // buffers bound while active
+        uint8_t on, active, started, resume;   // between Begin and End; running now; a draw reached it; counters to resume from
+    } xfb;
     NVNbufferRange vbuf[16];             // OP_BIND_VBUF
     p_bind_buf ubo[6][18], ssbo[6][16];  // OP_BIND_UBO / OP_BIND_SSBO per stage and index
     uint64_t tex[6][128], samp[6][128], img[6][32];   // OP_BIND_TEX / OP_BIND_SAMP / OP_BIND_IMG handles per stage
@@ -114,7 +121,8 @@ void vk_exec_pass_end(VkExec *ex);
 // Full memory barrier (all commands, all memory); ends the open pass first. Copies and dispatches order themselves with
 // it. Skipped when nothing was recorded since the last one.
 void vk_exec_barrier(VkExec *ex);
-// vk_texture.c (XCX_TEX_ALIAS): commands that must run at the replay's current position. vk_exec_inline_begin returns
+void vk_exec_xfb_pause(VkExec *ex);
+// vk_texture.c (XC3_TEX_ALIAS): commands that must run at the replay's current position. vk_exec_inline_begin returns
 // the command buffer being recorded after a full barrier (an open pass is ended; *reopen says so), or VK_NULL_HANDLE
 // when this thread is not recording a replay. vk_exec_inline_end begins the pass again when it was open.
 // vk_exec_inline_buffer: a device buffer for transfers, destroyed when the submission completes.
@@ -135,7 +143,7 @@ int vk_exec_targets_recent(VkExec *ex, int any);
 // The current pass's targets with their formats, extents and the frames they were last rendered in (diagnostics).
 void vk_exec_targets_describe(VkExec *ex, char *buf, size_t cap);
 
-// XCX_TRACE=gfx: replay counters of the current frame, logged and reset at each present (vk_exec_frame_log).
+// XC3_TRACE=gfx: replay counters of the current frame, logged and reset at each present (vk_exec_frame_log).
 typedef struct {
     uint64_t passes, draws_seen, draws, clears, copies, dispatches, submits;
     uint64_t fb_draws, fb_barriers, fb_restarts, fb_layouts;   // feedback loops: draws sampling a written target of
@@ -147,8 +155,8 @@ void vk_exec_frame_written(const tex_t *t);                    // vk_texture_gpu
 uint64_t vk_exec_recording_fence(void);                        // fence of the submission this thread records, else 0
 void vk_exec_frame_log(const tex_t *presented, uint64_t frame);
 
-// XCX_DUMP=<frame> (vk_dump.c): between presents frame-1 and frame, every pass's targets and every dispatch's storage
-// images are copied out and written as PNGs to XCX_DUMP_DIR (default "dump"), with passes.txt (targets, pipelines,
+// XC3_DUMP=<frame> (vk_dump.c): between presents frame-1 and frame, every pass's targets and every dispatch's storage
+// images are copied out and written as PNGs to XC3_DUMP_DIR (default "dump"), with passes.txt (targets, pipelines,
 // textures, samplers) and images.txt (per image value statistics). The hooks run only when vk_dump_armed is set.
 extern int vk_dump_armed;
 void vk_dump_init(void);                 // reads the environment; vk_exec_record's first call
@@ -158,7 +166,7 @@ void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPip
 void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload);   // before a copy or texture clear is replayed
 void vk_dump_present(uint64_t frame);    // vk_be_present: waits for the dump frame's copies and closes the logs
 
-// c0, the NVN driver constant bank of one stage (vk_exec_draw.c; XCX_FIX_C0=0 binds zeros instead): bank is
+// c0, the NVN driver constant bank of one stage (vk_exec_draw.c; XC3_FIX_C0=0 binds zeros instead): bank is
 // VK_C0_BYTES, stage an NVN stage (0 vertex, 1 fragment, 5 compute), ssbo and ubo the 16 bound slots of that stage.
 #define VK_C0_BYTES 0x800u
 void vk_c0_fill(uint8_t bank[VK_C0_BYTES], int stage, const p_bind_buf ssbo[16], const p_bind_buf ubo[16],

@@ -13,7 +13,7 @@ NZCV, ADCS) write F.nz, the packed form; a reader whose definitions are of sever
 definitions then also write it.
 
 A read that can see flags a callee left reads the caller's flags from before the call instead. AAPCS64 code never
-reads a callee's flags, so such a read only sits on a path that does not run: in XCX it follows calls to noreturn
+reads a callee's flags, so such a read only sits on a path that does not run: in XC3 it follows calls to noreturn
 functions (asserts) that the compiler placed before another branch's target. Plan.after_call counts them.
 """
 import re

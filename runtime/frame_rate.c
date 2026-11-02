@@ -1,35 +1,30 @@
 // Adapted from MacNativeGames games/totk/runtime/game_patches.c @ ebe621d (MIT, Copyright (c) 2026 MacNativeGames
 // contributors): runtime_frame_step_update (2338bb0: no 1/120 s floor) and the speed survey's player chain
 // (world_survey.c player_actor).
-// Frame rate: the frame limit and the real-time frame step, the host half of the patch sets fps60, realtime and cloth
-// (build tables patches-v121.txt, patches-v143.txt).
+// Frame rate: the frame limit and the real-time frame step, the host half of the patch set realtime
+// (recomp/patches-upd.txt).
 //
-// XCX's adaptive present-interval controller (main+0x8f26c8) turns the main thread's measured work into a number of
-// 60 Hz ticks clamped to [minimum, maximum]; shipping data sets the minimum to 2 (30 fps), the set fps60 lowers it to
-// 1. The controller still raises the interval when a frame does not fit. Shipping code then steps the game by whole
-// vsyncs (VFR step main+0x7ede6c: ratio = interval * 0.5, seconds = interval / 60; global ratio at main+0x8f2394), so
-// game speed is right only when frames take exactly their interval. With the set realtime both read the patch page
-// instead: +0 ratio = seconds * 30, +4 seconds (1.4.3: +8 interval = seconds * 60, the producer's nominal interval
-// before its half-step coefficient), the moving average of the last 5 display intervals, at most 1/15 s
-// (slower frames slow the game down, as on the console), no lower bound, so a higher frame-rate cap only changes the
-// pacer (frame_step_cap_ns, XCX_FPS_LIMIT). The set cloth gives hair and cloth the same clock and needs realtime.
+// XC3 2.2.1 counts its frame interval in 60 Hz vsyncs, an int at main+0x1b42db0 (boot sets 2: 30 fps). Its main loop's
+// limiter (main+0x124fa34) waits for that many vsync periods, and its frame-step update (main+0xf3c0) makes 60 / the
+// count the frame rate and its reciprocal the step. With the set realtime the step update reads the patch page instead:
+// +4 the step in seconds, the moving average of the last 5 display intervals, at most 1/15 s (slower frames slow the
+// game down, as on the console), +8 the frame rate it makes, rounded; and the game's limiter returns at once, so the
+// host pacer (nvn_api_obj.c present_period) holds frames to the limit (XC3_FPS_LIMIT), 30 to 360 fps or the display's
+// rate. Without the set (XC3_REALTIME=0) vsyncs_store writes the count, 1 for a limit of 60 or more, 2 below, and the
+// game steps whole vsyncs.
 //
 // The sample is the display time the pacer gives each present (nvnQueuePresentTexture), so the step follows the
-// frames as shown, pacing waits included. With the step on, the pacer ignores the game's interval and holds a frame
-// only to the frame limit (nvn_api_obj.c present_period): the controller's 2 or 3 vsyncs would only add latency. The
-// vsync event stays at 60 Hz whatever the limit: the game does not wait for it each frame (1.4.3 shows its title at 144
-// fps with the event at 60 Hz).
-// One 64-bit and one 32-bit store per present; the guest reads the floats on its own threads, and each stays finite
-// and in range whichever store it sees.
+// frames as shown, pacing waits included. One 64-bit and one 32-bit store per present; the guest reads them on its own
+// threads, and each stays finite and in range whichever store it sees.
 //
 // The world clock (frame_step_world_us) sums the steps from the first present that finds the player actor away from
 // the origin, where the title screen keeps it: the end of the first save load. Recorded and scripted input
 // (input.c) runs on it, so a replay presses at the same game time at any frame rate and after a first load of any
 // length; a later load (fast travel) still shifts what follows by its length.
 //
-// XCX_TRACE=perf adds a line per 120 presents: fps, the game seconds stepped against wall seconds, and with
-// XCX_SPEED_PROBE=1 the player's position and ground speed (an independent check: Link runs at the same speed at
-// any frame rate when game time follows wall time).
+// XC3_TRACE=perf adds a line per 120 presents: fps, the game seconds stepped against wall seconds, and with
+// XC3_SPEED_PROBE=1 the player's position and ground speed (an independent check: the player runs at the same speed
+// at any frame rate when game time follows wall time).
 #include <math.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -50,145 +45,75 @@
 
 static _Atomic uint64_t *step_word;   // patch page +0: ratio (low float), seconds (high float)
 static double step_now = STEP_FIRST_S;   // the step the patch page holds: what the game steps each frame
-static _Atomic uint32_t *step_interval;   // patch page +8: seconds * 60 (patches-v143.txt realtime)
+static _Atomic int32_t *step_fps;   // patch page +8: the frame rate the step makes, rounded (patches-upd.txt realtime)
 static uint64_t last_ns;
 static double samples[STEP_SAMPLES];
 static unsigned sample_count, sample_next;
 
 static void step_store(float seconds) {
     step_now = seconds;
-    float ratio = seconds * 30.0f, interval = seconds * 60.0f;
-    uint32_t lo, hi, iv;
+    float ratio = seconds * 30.0f;
+    uint32_t lo, hi;
     memcpy(&lo, &ratio, 4);
     memcpy(&hi, &seconds, 4);
-    memcpy(&iv, &interval, 4);
     atomic_store_explicit(step_word, (uint64_t)lo | (uint64_t)hi << 32, memory_order_release);
-    atomic_store_explicit(step_interval, iv, memory_order_release);
+    atomic_store_explicit(step_fps, (int32_t)(1.0f / seconds + 0.5f), memory_order_release);
 }
 
 static void frame_limit_live(void);
+static int limit_hz;
 
-// XCX 2.0.0 (recomp/patches-upd.txt, set xcx60): the game runs one vsync per frame and its vsync period, frame-rate
-// pick and 1/30 s constant read the patch page, +0x40 the period and +0x44 the rate, so the game steps one period per
-// frame; +0x4c is 30 / frame rate, the step of the updates that count 30 fps frames. In play the period is the
-// measured frame time (the 5-frame average of display intervals, at most 1/15 s, frame_step_present), so the game
-// keeps real time when frames miss the limit; in cutscenes it is 1/60 s with 2 vsyncs a frame, as on the console.
-// +0x48 is the game limiter's wait, the frame time of the limit; the pacer shows frames at the limit. The guest reads
-// each word whole.
-static int xcx_rate = -2;
-static _Atomic uint32_t *xcx_words;
-static int xcx_cut;   // a cutscene runs at 30 fps: the step stays 1/30 s
+// The game's vsync count per frame (main+0x1b42db0; setter main+0x124a528, getter main+0x1249b6c).
+static _Atomic uint32_t *vsyncs_word;
 
-static void xcx_rate_store(double hz, double fps) {   // hz: the game's vsync rate; fps: frames per second shown
-    static double stored, stored_fps;
-    if (hz == stored && fps == stored_fps) return;
-    stored = hz;
-    stored_fps = fps;
-    step_now = 1.0 / fps;
-    float rate = (float)hz, period = (float)(1.0 / hz), ticks = (float)(30.0 / fps);
-    uint32_t r, p, t;
-    memcpy(&r, &rate, 4);
-    memcpy(&p, &period, 4);
-    memcpy(&t, &ticks, 4);
-    atomic_store_explicit(&xcx_words[0], p, memory_order_release);
-    atomic_store_explicit(&xcx_words[1], r, memory_order_release);
-    atomic_store_explicit(&xcx_words[3], t, memory_order_release);   // +0x4c
+static void vsyncs_store(void) {
+    uint32_t want = !step_word && limit_hz && limit_hz < 60 ? 2 : 1;
+    if (atomic_load_explicit(vsyncs_word, memory_order_relaxed) != want)
+        atomic_store_explicit(vsyncs_word, want, memory_order_release);
 }
 
-static void xcx_wait_store(double seconds) {
-    float w = (float)seconds;
-    uint32_t b;
-    memcpy(&b, &w, 4);
-    atomic_store_explicit(&xcx_words[2], b, memory_order_release);   // +0x48
-}
-
-// The game's frame interval in vsyncs (main+0x1d943a0, the variable of the setter main+0x13a2fd8; 1.0.1's
-// main+0x1da33a0, which the 60FPS mod's cheat sets to 2 in cutscenes): 1, or 2 in a cutscene with the vsync period
-// at 1/60 s, so a cutscene runs exactly as on the console at 30 fps: lip sync counts vsyncs.
-static void xcx_interval_store(int n) {
-    static int stored = 1;
-    if (n == stored) return;
-    stored = n;
-    __atomic_store_n((uint32_t *)(uintptr_t)(MOD_MAIN_BASE + 0x1d943a0), (uint32_t)n, __ATOMIC_RELEASE);
-    rt_log("frame rate: %s", n == 2 ? "cutscene, 30 fps (2 vsyncs of 1/60 s)" : "limit again");
-}
-
-int frame_rate_paced(void) { return xcx_words != NULL; }
-
-// Cutscenes and pre-rendered movies run at 30 fps, as the console runs them: their text and animation advance per frame (a movie's subtitles ran
-// ahead of the picture at 120 fps). A movie is a live host decoder (ov_movie.c movie_playing). The game's event state, a 32-bit field at
-// main+0x1fefaf4 (+0xcc of the object at main+0x1fefa28, getter main+0xcc5a0), is 0 in normal play and 2 or more
-// while a cutscene plays, as the 1.0.1 60FPS mod's cheat reads it (1.0.1 main+0x1ffeaf4). XCX_CUTSCENE_30=0 keeps the
-// limit in cutscenes; XCX_CUTSCENE_30=mixed keeps it in state 3 and runs 30 fps in state 4 and in movies only, as the
-// mod's "60-30FPS Cutscenes" variant (its cheat: state 3 one vsync per frame, state 4 two).
-static int xcx_cutscene(void) {
-    static int mode = -1;   // 0 off, 1 every cutscene, 2 mixed
-    if (mode < 0) {
-        const char *e = cfg_get("XCX_CUTSCENE_30");
-        mode = !e ? 1 : !strcmp(e, "mixed") ? 2 : strcmp(e, "0") != 0;
-    }
-    if (!mode) return 0;
-    if (movie_playing()) return 1;
-    uint32_t state;
-    if (!plat_mem_read(MOD_MAIN_BASE + 0x1fefaf4, &state, 4)) return 0;
-    static uint32_t last = 0;
-    if (state != last) rt_log("frame rate: event state %u -> %u", last, state), last = state;
-    return mode == 2 ? state == 4 : state >= 2;
+static int vsyncs_find(void) {
+    uint32_t v;
+    if (!plat_mem_read(MOD_MAIN_BASE + 0x1b42db0, &v, sizeof v) || (v != 0xffffffffu && v != 2)) return 0;
+    vsyncs_word = (_Atomic uint32_t *)(uintptr_t)(MOD_MAIN_BASE + 0x1b42db0);
+    return 1;
 }
 
 void frame_step_init(void) {
-    xcx_rate = rt_patch_set("xcx60");
-    if (rt_patch_enabled(xcx_rate)) {
-        xcx_words = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 0x40);
-        xcx_rate_store(60, 60);
-        xcx_wait_store(1.0 / 60);
-        frame_limit_live();
-        rt_log("frame rate: one vsync per frame, the game steps the measured frame time (5-frame average of display "
-               "intervals, at most 1/15 s)");
+    int realtime = rt_patch_set("realtime");
+    if (!vsyncs_find()) {
+        rt_log("frame rate: the vsync count is not at main+0x1b42db0; shipping 30 fps whole-vsync steps");
         return;
     }
-    int fps60 = rt_patch_set("fps60"), realtime = rt_patch_set("realtime"), cloth = rt_patch_set("cloth");
-    if (realtime < 0) {
-        rt_log("frame rate: no patch table, shipping 30 fps whole-vsync steps");
-        return;
-    }
-    if (!rt_patch_enabled(realtime) && rt_patch_enabled(cloth)) {
-        rt_patch_disable(cloth);
-        rt_log("frame rate: cloth clock off, it needs the real-time step (XCX_REALTIME=0)");
-    }
-    if (rt_patch_enabled(realtime)) {
+    if (realtime >= 0 && rt_patch_enabled(realtime)) {
         step_word = (_Atomic uint64_t *)rt_patch_page();
-        step_interval = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 8);
+        step_fps = (_Atomic int32_t *)((uint8_t *)rt_patch_page() + 8);
         step_store((float)STEP_FIRST_S);
     }
-    frame_limit_live();   // XCX_FPS_LIMIT decides the set fps60 from the start
-    rt_log("frame rate: present interval %s, %s", rt_patch_enabled(fps60) ? "1..3 (above 30 fps)" : "2..3 (shipping 30 fps)",
-           step_word ? "real-time step (5-frame average of display intervals, at most 1/15 s)" : "whole-vsync steps");
+    frame_limit_live();
+    rt_log("frame rate: %s", step_word ? "real-time step (5-frame average of display intervals, at most 1/15 s)"
+                                       : "whole-vsync steps, vsync count 1 at a limit of 60 or more");
 }
 
 int frame_step_realtime(void) { return step_word != NULL; }
 
-// The frame limit (menu, XCX_FPS_LIMIT, live): 30, 60, 120, 144, any whole rate from 30 to 360, or display (the
-// refresh rate of the window's monitor). Unset, the older XCX_FPS60=0 still means 30. A limit of 30 switches the set
-// fps60 off (the shipping minimum interval 2), every other limit switches it on; the controller reads its minimum
-// interval from the patched sites each frame. With the real-time step the pacer holds frames to the limit; above 60
-// only the pacer changes, as the step has no lower bound. Without it the game steps whole 60 Hz vsyncs and the pacer
-// follows the game's interval, so the limit stops at 60.
+// The frame limit (menu, XC3_FPS_LIMIT, live): 30, 60, 120, 144, any whole rate from 30 to 360, or display (the
+// refresh rate of the window's monitor). Unset, the older XC3_FPS60=0 still means 30. Without the real-time step the
+// limit stops at 60.
 #define LIMIT_MIN_HZ 30
 #define LIMIT_MAX_HZ 360
-static int fps60_set = -2;
 static unsigned limit_seen;
 static int limit_read;
-static int limit_hz = -1;   // 0: display; -1 before the first read
+static int limit_hz = -1;   // 0: display; -1 before the first read (declared above vsyncs_store)
 
 static int limit_parse(void) {
-    const char *e = cfg_get("XCX_FPS_LIMIT"), *old = cfg_get("XCX_FPS60");
+    const char *e = cfg_get("XC3_FPS_LIMIT"), *old = cfg_get("XC3_FPS60");
     if (!e || !*e) return old && !strcmp(old, "0") ? 30 : 60;
     if (!strcmp(e, "display")) return 0;
     char *end;
     long n = strtol(e, &end, 10);
     if (!*end && n >= LIMIT_MIN_HZ && n <= LIMIT_MAX_HZ) return (int)n;
-    rt_log("frame rate: XCX_FPS_LIMIT=%s is not 30..360 or display; 60", e);
+    rt_log("frame rate: XC3_FPS_LIMIT=%s is not 30..360 or display; 60", e);
     return 60;
 }
 
@@ -200,15 +125,8 @@ static void frame_limit_live(void) {
     int hz = limit_parse();
     if (hz == limit_hz) return;
     limit_hz = hz;
-    if (fps60_set == -2) fps60_set = rt_patch_set("fps60");
-    if (fps60_set >= 0) rt_patch_switch(fps60_set, hz != 30);
-    if (xcx_words) {
-        double r = hz ? hz : gfx_window_refresh_hz();
-        r = r < LIMIT_MIN_HZ ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;
-        xcx_rate_store(r, r);
-    }
-    if ((hz > 60 || hz == 0) && !step_word && !xcx_words)
-        rt_log("frame rate: limits above 60 need the real-time step (XCX_REALTIME=1); 60 fps");
+    if ((hz > 60 || hz == 0) && !step_word)
+        rt_log("frame rate: limits above 60 need the real-time step, which this build lacks; 60 fps");
     else if (hz) rt_log("frame rate: limit %d fps", hz);
     else if (gfx_window_refresh_hz() > 0) rt_log("frame rate: limit at the monitor's refresh rate (%.3f Hz now)", gfx_window_refresh_hz());
     else rt_log("frame rate: limit at the monitor's refresh rate (60 until the window measures it)");
@@ -219,16 +137,6 @@ uint64_t frame_step_cap_ns(void) {
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
-    if (xcx_words) {   // every frame: the cutscene state, and for "display" the window's measured rate, which settles late
-        int cut = hz > 30 && xcx_cutscene();
-        if (cut != xcx_cut) sample_count = sample_next = 0;   // the average starts again at the new rate
-        if (cut) xcx_rate_store(60, 30);
-        else if (xcx_cut || !sample_count) xcx_rate_store(hz, hz);   // until frame_step_present has samples again
-        xcx_cut = cut;
-        xcx_interval_store(cut ? 2 : 1);
-        if (cut) hz = 30;
-        xcx_wait_store(1.0 / hz);
-    }
     return (uint64_t)(1e9 / hz + 0.5);
 }
 
@@ -239,10 +147,10 @@ double frame_step_limit_hz(void) {
     if (hz < 0) return 0;
     double r = hz ? hz : gfx_window_refresh_hz();
     if (r < LIMIT_MIN_HZ) r = 60;
-    return !step_word && !xcx_words && r > 60 ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;
+    return !step_word && r > 60 ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;
 }
 
-// ---- XCX_TRACE=perf speed lines
+// ---- XC3_TRACE=perf speed lines
 static uint64_t win_t0, win_frames, win_hist[4];   // win_hist: frames by present interval 1, 2, 3+ ([0] unused)
 static double win_game;
 static int probe = -1;
@@ -255,7 +163,7 @@ static uint64_t read_ptr(uint64_t a) {
     return read_guest(a, &p, 8) ? p : 0;
 }
 // 1.2.1: [main+0x4728538] (1.4.3: [main+0x3add238]) +0x1e8 scene, its component 13 lists the resident actors; the one
-// named "Player" has its position at +0x2b4 (MacNativeGames world_survey.c, game_version.h XCX_GAME_V121/V143).
+// named "Player" has its position at +0x2b4 (MacNativeGames world_survey.c, game_version.h XC3_GAME_V121/V143).
 static int player_pos(float xyz[3]) {
     uint64_t module = read_ptr(MOD_MAIN_BASE + (RT_V143 ? 0x3add238 : 0x4728538)), scene = module ? read_ptr(module + 0x1e8) : 0;
     int32_t count = 0;
@@ -283,7 +191,7 @@ static void speed_report(uint64_t now, double step, int interval) {
     win_hist[interval < 1 ? 1 : interval > 3 ? 3 : interval]++;
     if (win_frames < 120) return;
     if (probe < 0) {
-        const char *e = cfg_get("XCX_SPEED_PROBE");
+        const char *e = cfg_get("XC3_SPEED_PROBE");
         probe = e && !strcmp(e, "1");
     }
     double wall = (double)(now - win_t0) * 1e-9;
@@ -322,7 +230,7 @@ static void world_clock(double dt, double step) {
     presents++;
     int64_t w = atomic_load_explicit(&world_us, memory_order_relaxed);
     if (w < 0) {
-        // XCX: XCX's player lookup (player_pos) reads XCX's scene, so the clock starts at the first present instead.
+        // XC3: XC3's player lookup (player_pos) reads XC3's scene, so the clock starts at the first present instead.
         rt_log("frame step: world clock starts at present %llu, %.2f s after the guest started",
                (unsigned long long)presents, rt_guest_start_ns ? (kern_now_ns() - rt_guest_start_ns) / 1e9 : 0.0);
         atomic_store_explicit(&world_us, 0, memory_order_relaxed);
@@ -334,8 +242,9 @@ static void world_clock(double dt, double step) {
 
 void frame_step_present(uint64_t display_ns, int interval) {
     frame_limit_live();
+    if (vsyncs_word) vsyncs_store();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
-    if ((step_word || xcx_words) && last_ns) {
+    if (step_word && last_ns) {
         if (dt > STEP_RESET_S || dt < 0.001) {
             sample_count = sample_next = 0;
         } else {
@@ -345,14 +254,13 @@ void frame_step_present(uint64_t display_ns, int interval) {
             double sum = 0;
             for (unsigned i = 0; i < sample_count; i++) sum += samples[i];
             step = sum / sample_count;
-            if (step_word) step_store((float)step);
-            else if (!xcx_cut) xcx_rate_store(1.0 / step, 1.0 / step);
+            step_store((float)step);
         }
     }
     last_ns = display_ns;
     // The game clock of untimed script lines: what the game stepped this frame, the patch page's step with the
     // real-time step (kept through a reset), whole vsyncs without it.
-    double game = step_word || xcx_words ? step_now : (interval > 0 ? interval : 1) / 60.0;
+    double game = step_word ? step_now : (interval > 0 ? interval : 1) / 60.0;
     atomic_store_explicit(&game_us, atomic_load_explicit(&game_us, memory_order_relaxed) + (uint64_t)(game * 1e6 + 0.5),
                           memory_order_relaxed);
     world_clock(dt, step);

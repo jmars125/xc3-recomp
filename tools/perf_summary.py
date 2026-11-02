@@ -1,4 +1,4 @@
-"""Condense the XCX_TRACE=perf and XCX_TRACE=sched lines of a game log over a frame window.
+"""Condense the XC3_TRACE=perf and XC3_TRACE=sched lines of a game log over a frame window.
 
     python tools/perf_summary.py build/v121/logs/fight.log 1560 2600
 

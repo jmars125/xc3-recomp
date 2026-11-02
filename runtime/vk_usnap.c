@@ -2,7 +2,7 @@
 // constants soon after; here the replay records for several milliseconds, and the GPU reads a pool's bytes when it
 // runs the part that uses them (the VRAM mirror's sync copies run then, vk_memory.c "VRAM mirror"). Meanwhile the game,
 // having handed the frame over, rewrites per-object uniform blocks on other threads with no fence: late draws read
-// another object's matrix (phantom rocks, a flat far field; XCX 1.2.1's producer f_70008c6460, 14-24 ms after the
+// another object's matrix (phantom rocks, a flat far field; XC3 1.2.1's producer f_70008c6460, 14-24 ms after the
 // submit). So at the start of a submission's recording every uniform range it binds is copied into an arena of its own,
 // and the uniform bindings of the replay use the copy.
 // - Only ranges of imported pools (memory the CPU writes) are copied, aligned out to 256 bytes (the largest
@@ -12,10 +12,10 @@
 // - A GPU write within the submission (UpdateUniformBuffer, a storage buffer a shader writes, a buffer copy or fill,
 //   an image-to-buffer copy: vk_usnap_drop) drops the copies it touches from then on, so later draws read the result.
 // - The arena goes back to a free list once the submission's fence is done (completion thread).
-// The design follows MacNativeGames' XCX_UBO_SNAPSHOT (games/totk/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m usnap_take,
+// The design follows MacNativeGames' XC3_UBO_SNAPSHOT (games/totk/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m usnap_take,
 // usnap_drop; MIT, Copyright (c) 2026 jhaizhou); the code is ours.
 // The copy is taken where vk_exec_record starts: at the submit call when the replay runs on the submitting thread, later
-// with XCX_REPLAY_ASYNC. XCX_UBO_SNAPSHOT=0 binds live memory as before; =ab alternates (XCX_AB).
+// with XC3_REPLAY_ASYNC. XC3_UBO_SNAPSHOT=0 binds live memory as before; =ab alternates (XC3_AB).
 #include <stdlib.h>
 #include <string.h>
 

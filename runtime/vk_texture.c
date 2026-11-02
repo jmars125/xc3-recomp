@@ -89,7 +89,7 @@ static Tex *rel_head, *rel_tail;   // released entries in release order (sweep_r
 static uint64_t n_uploads, n_reuploads;
 // Re-uploads since the last perf line (tex_lock): all, and those of textures a WriteTexels wrote since their last upload.
 static uint64_t ru_n, ru_bytes, ru_ns, ru_wt_n, ru_wt_bytes, ru_wt_ns;
-// XCX_TEX_ALIAS (default on; =0: a new image over live storage starts empty): a new descriptor over the storage of a
+// XC3_TEX_ALIAS (default on; =0: a new image over live storage starts empty): a new descriptor over the storage of a
 // live image that the GPU wrote gets that image's content (alias_copy). Counts since the last log line.
 static int tex_alias = -1;
 static uint64_t n_alias_copied, n_alias_upload, n_alias_uninit;
@@ -109,7 +109,7 @@ static uint32_t slots_gen = 1;
 static uint32_t samp_gen = 1;   // bumped whenever a sampler slot is registered: vk_sampler_by_id may answer otherwise
 static uint64_t n_checks;    // draw-binding storage checks (make_fresh_snap) since the last perf line
 // tex_gen per storage address (hashed): a slot resolves through the entries at its own address only (slot_resolve), so
-// a slot's resolution stays valid while its address's generation does. XCX finalizes and initializes transient
+// a slot's resolution stays valid while its address's generation does. XC3 finalizes and initializes transient
 // textures every frame: about 90 tex_gen and 160 slots_gen bumps per frame in the monsters fight, one every 16 draws,
 // which emptied every cache keyed on the global generations.
 #define AGEN_N 4096
@@ -149,6 +149,12 @@ static void make_key(const tex_t *t, TexKey *k) {
     k->addr = (uintptr_t)t->mem;
     k->d = t->d;
     k->d.dsmode = 0;   // a STENCIL-mode descriptor names the same image as its DEPTH twin (slot_resolve)
+    // XC3 renders the G-buffer depth through a COMPRESSIBLE descriptor and samples it through COMPRESSIBLE | IMAGE. With
+    // the flag in the key the sampled descriptor got an image of its own that nothing draws into: every stencil read
+    // returned 0, the lighting mask stayed empty and terrain and characters went black. No depth format is a storage
+    // image, so the flag never changes what such an image can do.
+    if (t->d.format >= NVN_FORMAT_STENCIL8 && t->d.format <= NVN_FORMAT_DEPTH32F_STENCIL8)
+        k->d.flags &= ~NVN_TEXTURE_FLAGS_IMAGE;
     k->has_layout = t->has_layout;
     memcpy(k->layout, t->layout, 8);
 }
@@ -335,7 +341,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
                             .samples = (VkSampleCountFlagBits)samples, .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage,
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     int bw, bh, block_views = 0;
-    // XCX_BLOCK_VIEWS_3D (default 0): a 3D BC image also gets block views. On RDNA2 cards (driver 26.10.1, TotK Recomp
+    // XC3_BLOCK_VIEWS_3D (default 0): a 3D BC image also gets block views. On RDNA2 cards (driver 26.10.1, TotK Recomp
     // issue #5) the 32x32x32 BC4 volume TotK creates at its logo, made BLOCK_TEXEL_VIEW_COMPATIBLE and
     // 2D_ARRAY_COMPATIBLE, took a GPU write just past the end of its memory: device lost at the first submit after it
     // when the image ended its memory block. Draws into a 3D BC image go through a stand-in instead (vk_exec.c
@@ -343,7 +349,7 @@ static Tex *create_tex(const tex_t *t, const TexKey *k, int defer_init) {
     static int bv3d = -1;
     if (bv3d < 0) {
         bv3d = rt_knob("BLOCK_VIEWS_3D", "0");
-        rt_log("vk: 3D BC textures %s (XCX_BLOCK_VIEWS_3D=%d)", bv3d ? "get block views (renderable)" : "have no block views",
+        rt_log("vk: 3D BC textures %s (XC3_BLOCK_VIEWS_3D=%d)", bv3d ? "get block views (renderable)" : "have no block views",
                bv3d);
     }
     if (!ds && samples == 1 && f.vk == f.ideal && nvn_fmt_bpb(d->format, &bw, &bh) && bw == 4 && bh == 4 &&
@@ -491,7 +497,7 @@ static void destroy_tex(Tex *e) {
 }
 
 // Released entries with another descriptor at the same address are replaced; past RELEASED_MAX released entries the
-// oldest one goes at each release (it comes back on demand, a mirrored one re-uploaded from its storage). XCX
+// oldest one goes at each release (it comes back on demand, a mirrored one re-uploaded from its storage). XC3
 // finalizes and initializes transient textures every frame, so a released entry is mostly taken back within frames.
 // Dropping all of them at once when the count passed 4096 destroyed thousands of images in one frame: 333-422 ms
 // frames every 40-50 s on a GTX 1050 Ti, then the textures still in use were created and uploaded again.
@@ -530,7 +536,7 @@ static void shrink_rgb(int format, const uint8_t *src, uint8_t *dst, size_t n) {
     for (size_t i = 0; i < n; i++, src += 4 * e, dst += 3 * e) memcpy(dst, src, 3 * e);
 }
 
-// XCX_ASTC=check: the compute decoder's texels of n regions (gpu: the regions one after the other) against
+// XC3_ASTC=check: the compute decoder's texels of n regions (gpu: the regions one after the other) against
 // astc_decode_ldr of the same raw blocks (raw: the staging bytes the regions point into).
 static void astc_check(const Tex *e, const uint8_t *raw, const VkAstcRegion *ar, int n, const uint8_t *gpu) {
     static volatile int32_t n_bad;
@@ -570,6 +576,22 @@ static void astc_check(const Tex *e, const uint8_t *raw, const VkAstcRegion *ar,
                (unsigned long long)n_texels, (unsigned long long)n_diff_tex);
 }
 
+// Whether [mem, mem + size) of a texture's storage is readable. VirtualQuery waits on the process's address space lock,
+// which a driver allocation holds for tens of ms, and a scene change uploads hundreds of textures, so a pool found
+// readable once is not asked again: it stays mapped while textures in it exist. Texture lock held.
+static int storage_readable(const tex_t *t) {
+    static struct { const uint8_t *mem; uint64_t size; } known[64];
+    const pool_t *p = t->pool;
+    if (!p || !p->mem || t->mem < p->mem || t->L.size > p->size || (uint64_t)(t->mem - p->mem) > p->size - t->L.size)
+        return plat_mem_readable((uint64_t)(uintptr_t)t->mem, 1) &&
+               plat_mem_readable((uint64_t)(uintptr_t)t->mem + t->L.size - 1, 1);
+    typeof(known[0]) *k = &known[((uintptr_t)p->mem >> 16) % 64];
+    if (k->mem == p->mem && k->size == p->size) return 1;
+    if (!plat_mem_readable((uint64_t)(uintptr_t)p->mem, p->size)) return plat_mem_readable((uint64_t)(uintptr_t)t->mem, t->L.size);
+    k->mem = p->mem, k->size = p->size;
+    return 1;
+}
+
 // Copies the whole storage into the image (every level and layer the image has).
 static void upload(Tex *e) {
     static volatile int32_t n_bad, n_undecoded;
@@ -577,9 +599,8 @@ static void upload(Tex *e) {
     const nvn_texdesc *d = &t->d;
     int bw, bh, bpb = nvn_fmt_bpb(d->format, &bw, &bh);
     if (!bpb || !t->mem) return;
-    // the copy below reads [mem, mem + L.size): both ends must be readable (a page each, cheap on every upload)
-    if (!t->L.size || !plat_mem_readable((uint64_t)(uintptr_t)t->mem, 1) ||
-        !plat_mem_readable((uint64_t)(uintptr_t)t->mem + t->L.size - 1, 1)) {
+    // the copy below reads [mem, mem + L.size)
+    if (!t->L.size || !storage_readable(t)) {
         static volatile int32_t n_over;
         log_limited(&n_over, "texture %#llx mem %p fmt %#x target %d %ux%ux%u levels %u flags %#x stride %u tiles %u/%u "
                     "layout %d: storage %#llx bytes, pool %p+%#llx (%#llx bytes, flags %#x) is not readable; not uploaded",
@@ -727,7 +748,7 @@ static void make_fresh_snap(Tex *e) {
     if (ch) upload(e);
 }
 
-// ---------------------------------------------------------------- aliases (XCX_TEX_ALIAS)
+// ---------------------------------------------------------------- aliases (XC3_TEX_ALIAS)
 // Bytes per block and block size of the image's VkFormat (ASTC decodes to RGBA8, RGB expands to RGBA); 0 when the
 // VkFormat substitutes another one of unknown size.
 static int img_block(const Tex *e, int *bw, int *bh) {
@@ -811,7 +832,7 @@ static Tex *entry_of(const tex_t *t) {
     Tex *e = nvn_hm_get(&by_key, &k);
     if (!e) {
         if (tex_alias < 0) {
-            tex_alias = cfg_bool("XCX_TEX_ALIAS");
+            tex_alias = cfg_bool("XC3_TEX_ALIAS");
             rt_log("vk: texture aliases: %s", tex_alias ? "a new image takes the live image's content" : "a new image starts empty");
         }
         if (!(e = create_tex(t, &k, tex_alias))) return NULL;
@@ -1305,7 +1326,7 @@ void vk_write_texels(const tex_t *t, const view_t *v, const NVNcopyRegion *r, co
 
 // ---------------------------------------------------------------- CPU reads of GPU-written storage
 // A mirrored texture the GPU rendered into holds its texels in its image only; its storage keeps what the CPU last put
-// there. The game may still read that storage with the CPU: XCX moves its generated grass maps between pools with
+// there. The game may still read that storage with the CPU: XC3 moves its generated grass maps between pools with
 // memcpy once the GPU is done, and the copy then carried zeros. Such a read writes the image back first.
 static void write_back(Tex *e) {
     const nvn_texdesc *d = &e->t.d;
@@ -1385,7 +1406,7 @@ uint64_t vk_texture_dirty_fence(uint64_t addr, uint64_t size) {
     return f;
 }
 
-// The image is the newest content only while nothing wrote the storage since the GPU render: XCX finalizes grass maps,
+// The image is the newest content only while nothing wrote the storage since the GPU render: XC3 finalizes grass maps,
 // reuses their storage for new data and memcpys that data on, and writing the old image back first handed the copy
 // a stale map or stale resource bytes (wrong textures in the distance). Every hit is checked before any is written
 // back, since a write-back is itself a CPU write to storage another hit may share; the hits then go back oldest render
@@ -1412,7 +1433,7 @@ void vk_texture_write_back(uint64_t addr, uint64_t size) {
     unlock();
 }
 
-// XCX's grass system renders a 128x128 RGBA8 map of cut and trampled grass into a CPU-cached pool every frame and its
+// XC3's grass system renders a 128x128 RGBA8 map of cut and trampled grass into a CPU-cached pool every frame and its
 // CPU code reads the pool bytes without nvnMemoryPoolInvalidateMappedRange (cut reactions: blades, insects, the cut
 // itself). On the Switch the bytes are there once the frame's fence has passed. So when the
 // CPU waits for a fence, mirrored targets up to WB_SMALL bytes rendered by work up to that fence go back to their
@@ -1548,7 +1569,7 @@ static VkSampler make_sampler(VkCtx *c, const samp_par *d) {
 }
 
 void vk_sampler_register(int id, const samp_par *s) {
-    if (id < 0 || id >= (1 << 12)) rt_fatal("vk: sampler slot %d out of range", id);
+    if (id < 0 || id >= (1 << 14)) rt_fatal("vk: sampler slot %d out of range", id);
     lock();
     if (id >= nsslots) {
         int n = nsslots ? nsslots : 256;

@@ -1,6 +1,6 @@
 // --probe-gfx-abi: every host object of nvn_obj.h fits the storage nvn.h reserves
 // for its NVN type, the layouts the game reads directly (NVNtextureView, the command buffer's inline fast-path
-// fields) sit where XCX's NVN 55 code expects them, and the GPU address window lies above every guest region.
+// fields) sit where XC3's NVN 55 code expects them, and the GPU address window lies above every guest region.
 // The same facts are static assertions in nvn_obj.h; this mode prints the sizes so a change shows its margin.
 // Needs no game files.
 #include <stddef.h>
@@ -33,7 +33,7 @@ static const Fit fits[] = {
     FIT(va_st, NVNvertexAttribState),           FIT(vs_st, NVNvertexStreamState),
 };
 
-_Static_assert(sizeof(NVNtextureView) == 16, "NVNtextureView is 16 bytes in XCX's NVN 55");
+_Static_assert(sizeof(NVNtextureView) == 16, "NVNtextureView is 16 bytes in XC3's NVN 55");
 _Static_assert(offsetof(cmd_t, inline_cur) == 0x20 && offsetof(cmd_t, inline_end) == 0x28, "cmd_t inline fields");
 _Static_assert(RT_GPU_VA_BASE >= RT_ADDRESS_LIMIT, "GPU address window overlaps the guest address space");
 

@@ -329,7 +329,7 @@ int ipc_svc(Cpu *c, uint32_t imm) {
 // use: sm: -> audren:u -> GetWorkBufferSize -> an audio renderer with the null mixer, whose frame event the probe
 // times while it sends RequestUpdate every frame. A child process checks the unknown-service fatal.
 #define PROBE_FRAMES 200
-#define PROBE_CHILD_ENV "XCX_PROBE_IPC_CHILD"
+#define PROBE_CHILD_ENV "XC3_PROBE_IPC_CHILD"
 #define PROBE_UNKNOWN_SERVICE "lm"
 #define H_CURRENT_PROCESS 0xFFFF8001u
 
@@ -455,7 +455,7 @@ static uint32_t get_service(Cpu *c, uint32_t sm, const char *name, int tipc) {
     return r.nmove ? r.move[0] : 0;
 }
 
-// A XCX-like renderer: 48 kHz, 240-sample (5 ms) frames, final mix plus submixes, two sinks, REV11.
+// A XC3-like renderer: 48 kHz, 240-sample (5 ms) frames, final mix plus submixes, two sinks, REV11.
 static const AudrenParameter g_param = {
     .sample_rate = 48000, .sample_count = 240, .mix_buffer_count = 24, .submix_count = 8, .voice_count = 192,
     .sink_count = 2, .effect_count = 12, .revision = AUDREN_REV(11)};
@@ -719,7 +719,7 @@ static void probe_sdk_client(Cpu *c) {
     printf("sdk: InitializeAudioRendererParameter -> %d Hz x%d, mix buffers %d, revision word %#x (REV%d)\n", param[0],
            param[1], param[2], (uint32_t)param[13], revision_number_of((uint32_t)param[13]));
     CHECK(param[0] == 48000 && param[1] == 240 && (uint32_t)param[13] == AUDREN_REV(RT_V143 ? 15 : 11),
-          "SDK default parameter (XCX 1.2.1 builds REV11 requests, 1.4.3 REV15)");
+          "SDK default parameter (XC3 1.2.1 builds REV11 requests, 1.4.3 REV15)");
     param[2] = g_param.mix_buffer_count, param[3] = g_param.submix_count, param[4] = g_param.voice_count;
     param[5] = g_param.sink_count, param[6] = g_param.effect_count;
     uint64_t work = rt_call(c, stub(SYM_WORK_SIZE), 1, (uint64_t)(uintptr_t)param);

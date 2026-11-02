@@ -8,7 +8,7 @@ before a call, an SVC, a trap, a return or a tail exit it stores the registers i
 and after an SVC it loads them all again (reload). The other registers stay in the Cpu.
 
 After a call it reloads only X0-X18 and X30: AAPCS64 has the callee preserve X19-X29 and SP, so their locals still
-hold what the Cpu holds. What would break that does not occur in XCX: main and subsdk0 import neither longjmp nor
+hold what the Cpu holds. What would break that does not occur in XC3: main and subsdk0 import neither longjmp nor
 the C++ unwinder, sdk's longjmp, __cxa_throw and _Unwind_* have no direct callers, and the runtime writes no register
 above X3 of a running thread's Cpu except X30, which rt_call restores (runtime/hostfn.c). Guest fibers each run on a host fiber of their own with their own Cpu (runtime/kernel.c),
 and ExitThread leaves by longjmp without returning. gen.py --no-callee-saved-trust reloads those registers too.
@@ -32,7 +32,7 @@ SP = 31   # index of SP in the register sets
 SPILL, RELOAD, RELOAD_CALL = '\x00S', '\x00R', '\x00C'
 CALLEE_SAVED = frozenset(range(19, 30)) | {SP}
 # Locals per function: the most used registers. More cost more than they save, as clang then spills them to the stack
-# and the syncs stay (300 hot XCX functions: fewest instructions and memory operands at 4-6).
+# and the syncs stay (300 hot XC3 functions: fewest instructions and memory operands at 4-6).
 LOCALS = 6
 
 

@@ -33,7 +33,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_ON] = "On", [UI_MENU_OFF] = "Off", [UI_MENU_AUTO] = "Automatic", [UI_MENU_DEFAULT_MARK] = "default",
     [UI_MENU_AFTER_RESTART] = "after restart", [UI_MENU_SET_BY_ENV] = "set by environment variable",
     [UI_MENU_SAVE_FAILED] = "could not save settings",
-    [UI_MENU_VERSION] = "XCX Recomp %s, game %s",
+    [UI_MENU_VERSION] = "XC3 Recomp %s, game %s",
 
     [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 toggles it.",
     [UI_MENU_WINDOW_SIZE] = "Window size", [UI_MENU_WINDOW_SIZE_DESC] = "Size of the game window when not fullscreen.",
@@ -54,11 +54,11 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_OUTPUT_RES_DESC] = "The size the game draws its picture and interface in. Above 1920 x 1080 the game needs "
                                 "more video memory and GPU time.",
     [UI_MENU_RENDER_SCALE] = "3D render scale",
-    [UI_MENU_RENDER_SCALE_DESC] = "Size of the 3D scene relative to the game resolution; the game's FSR scales it to "
-                                  "that size. Game leaves it to the game's dynamic resolution; a percentage fixes it. "
+    [UI_MENU_RENDER_SCALE_DESC] = "Size of the 3D scene relative to the game resolution; the game scales it up to "
+                                  "that size and draws the interface at full size. Game draws the whole scene. "
                                   "For supersampling, set the game resolution above the window's. Takes effect after "
                                   "a restart.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Game (dynamic)",
+    [UI_MENU_RENDER_SCALE_GAME] = "Game (whole)",
     [UI_MENU_UPSCALER] = "Scaling to the window",
     [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
                               "edges and detail sharper than bilinear.",
@@ -266,7 +266,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_DEFAULT_MARK] = "по умолчанию",
     [UI_MENU_AFTER_RESTART] = "после перезапуска", [UI_MENU_SET_BY_ENV] = "задано переменной окружения",
     [UI_MENU_SAVE_FAILED] = "не удалось сохранить настройки",
-    [UI_MENU_VERSION] = "XCX Recomp %s, игра %s",
+    [UI_MENU_VERSION] = "XC3 Recomp %s, игра %s",
 
     [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 переключает режим.",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
@@ -288,11 +288,11 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_OUTPUT_RES_DESC] = "Размер, в котором игра рисует картинку и интерфейс. Выше 1920 × 1080 игре нужно больше "
                                 "видеопамяти и времени GPU.",
     [UI_MENU_RENDER_SCALE] = "Масштаб 3D-отрисовки",
-    [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; FSR игры доводит её до этого размера. "
-                                  "«Как в игре» оставляет его динамическому разрешению игры; процент фиксирует его. "
+    [UI_MENU_RENDER_SCALE_DESC] = "Размер 3D-сцены относительно разрешения игры; игра растягивает её до этого размера, "
+                                  "а интерфейс рисует в полном. «Как в игре» рисует сцену целиком. "
                                   "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
                                   "перезапуска.",
-    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (динамически)",
+    [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (целиком)",
     [UI_MENU_UPSCALER] = "Масштабирование под окно",
     [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
                               "детали чётче билинейного.",
@@ -540,10 +540,10 @@ const char *ui_text_in(const char *lang, UiTextId id) {
 
 const char *ui_text(UiTextId id) { return ui_text_in(ui_text_lang(ov_language()), id); }
 
-// The menu language, re-read when cfg_version changes. XCX_MENU_LANG "ru" or "en"; anything else (unset included)
+// The menu language, re-read when cfg_version changes. XC3_MENU_LANG "ru" or "en"; anything else (unset included)
 // follows the system UI language: Russian for "ru", "ru-RU", ..., else English.
 static const char *resolve_menu_lang(void) {
-    const char *v = cfg_value("XCX_MENU_LANG");
+    const char *v = cfg_value("XC3_MENU_LANG");
     if (v && !strcmp(v, "ru")) return "ru";
     if (v && !strcmp(v, "en")) return "en";
     const char *sys = plat_ui_language();

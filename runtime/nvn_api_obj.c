@@ -6,7 +6,7 @@
 //
 // Objects are stored in place in the NVN object memory the game provides (nvn_obj.h); every argument is read from the
 // AAPCS64 registers (host.h arg_x / arg_s / arg_p) and every result returned with ret_x. Command-buffer procs are in
-// nvn_api_cmd.c, the XCX extension procs in nvn_ext.c.
+// nvn_api_cmd.c, the XC3 extension procs in nvn_ext.c.
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,9 +19,16 @@
 #include "platform/platform.h"
 
 // ---------- Descriptor pools
+// The back end has one table of texture slots and one of sampler slots. Each pool owns the range from its base, so the
+// same id in two pools names two slots: XC3 has a texture pool of 40960 and one of 2048, and registers ids in both
+// every frame, and sampler pools of 4096 and 2048.
+static int tex_pool_slots, samp_pool_slots;
+
 // NVNboolean nvnTexturePoolInitialize(NVNtexturePool *tp, const NVNmemoryPool *p, ptrdiff_t offset, int n)
 NVN_API(nvnTexturePoolInitialize) {
-    *(dpool_t *)arg_p(c, 0) = (dpool_t){arg_p(c, 1), (int64_t)arg_x(c, 2), (int32_t)arg_x(c, 3)};
+    int n = (int)arg_x(c, 3), base = __atomic_fetch_add(&tex_pool_slots, n, __ATOMIC_RELAXED);
+    if (n < 0 || base + n > 1 << 20) rt_fatal("nvn: texture pools exceed the slot table: %d at %d", n, base);
+    *(dpool_t *)arg_p(c, 0) = (dpool_t){arg_p(c, 1), (int64_t)arg_x(c, 2), n, base};
     NVN_LOG("TexturePool n=%d", (int)arg_x(c, 3));
     ret_x(c, 1);
 }
@@ -29,17 +36,19 @@ NVN_API(nvnTexturePoolInitialize) {
 NVN_API(nvnTexturePoolFinalize) { (void)c; }
 // void nvnTexturePoolRegisterTexture(const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v)
 NVN_API(nvnTexturePoolRegisterTexture) {
-    gfx_backend()->texture_register((int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
+    gfx_backend()->texture_register(((const dpool_t *)arg_p(c, 0))->base + (int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
 }
 // void nvnTexturePoolRegisterImage(const NVNtexturePool *tp, int id, const NVNtexture *t, const NVNtextureView *v)
-// XCX calls it; XCX never did. An image handle is a texture pool index here (nvn_api_cmd.c, BindImage), so the
+// An image handle is a texture pool index here (nvn_api_cmd.c, BindImage), so the
 // slot takes the same registration as a sampled texture.
 NVN_API(nvnTexturePoolRegisterImage) {
-    gfx_backend()->texture_register((int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
+    gfx_backend()->texture_register(((const dpool_t *)arg_p(c, 0))->base + (int)arg_x(c, 1), arg_p(c, 2), arg_p(c, 3));
 }
 // NVNboolean nvnSamplerPoolInitialize(NVNsamplerPool *sp, const NVNmemoryPool *p, ptrdiff_t offset, int n)
 NVN_API(nvnSamplerPoolInitialize) {
-    *(dpool_t *)arg_p(c, 0) = (dpool_t){arg_p(c, 1), (int64_t)arg_x(c, 2), (int32_t)arg_x(c, 3)};
+    int n = (int)arg_x(c, 3), base = __atomic_fetch_add(&samp_pool_slots, n, __ATOMIC_RELAXED);
+    if (n < 0 || base + n > 1 << 14) rt_fatal("nvn: sampler pools exceed the slot table: %d at %d", n, base);
+    *(dpool_t *)arg_p(c, 0) = (dpool_t){arg_p(c, 1), (int64_t)arg_x(c, 2), n, base};
     NVN_LOG("SamplerPool n=%d", (int)arg_x(c, 3));
     ret_x(c, 1);
 }
@@ -47,7 +56,7 @@ NVN_API(nvnSamplerPoolInitialize) {
 NVN_API(nvnSamplerPoolFinalize) { (void)c; }
 // void nvnSamplerPoolRegisterSampler(const NVNsamplerPool *sp, int id, const NVNsampler *s)
 NVN_API(nvnSamplerPoolRegisterSampler) {
-    gfx_backend()->sampler_register((int)arg_x(c, 1), &((const samp_t *)arg_p(c, 2))->p);
+    gfx_backend()->sampler_register(((const dpool_t *)arg_p(c, 0))->base + (int)arg_x(c, 1), &((const samp_t *)arg_p(c, 2))->p);
 }
 
 // ---------- Texture builder
@@ -90,7 +99,7 @@ NVN_API(nvnTextureBuilderSetSize3D) {
 }
 NVN_API(nvnTextureBuilderSetLevels) { TB(c)->d.levels = (uint32_t)arg_x(c, 1); }
 NVN_API(nvnTextureBuilderSetFormat) { TB(c)->d.format = (int)arg_x(c, 1); }
-// The plane a depth-stencil texture samples. XCX sets STENCIL on the texture instead of a view; the back end samples
+// The plane a depth-stencil texture samples. XC3 sets STENCIL on the texture instead of a view; the back end samples
 // that texture through a STENCIL view of the same image (vk_texture.c slot_resolve).
 NVN_API(nvnTextureBuilderSetDepthStencilMode) {
     uint32_t m = (uint32_t)arg_x(c, 1);
@@ -580,7 +589,7 @@ NVN_API(nvnWindowBuilderSetTextures) {
     b->ntex = n;
     for (int i = 0; i < n; i++) b->tex[i] = t[i];
 }
-// XCX sets two active images; the limit bounds what WindowAcquireTexture hands out. No prototype in nvn.h.
+// XC3 sets two active images; the limit bounds what WindowAcquireTexture hands out. No prototype in nvn.h.
 NVN_API(nvnWindowBuilderSetNumActiveTextures) {
     int n = (int)arg_x(c, 1);
     if (n < 2 || n > 4) rt_fatal("nvn: unsupported active texture count %d", n);
@@ -641,11 +650,11 @@ NVN_API(nvnWindowSetCrop) {
 // ---------- Present pacing
 // The vsync thread ticks at a fixed 60 Hz whatever the monitor does, so one game frame lasts `interval` ticks. With
 // the real-time frame step (frame_rate.c) game speed does not depend on the interval, so a frame is shown when it is
-// ready, at most at the frame limit (XCX_FPS_LIMIT: 30 to 360 per second or the monitor's rate): holding it to the
+// ready, at most at the frame limit (XC3_FPS_LIMIT: 30 to 360 per second or the monitor's rate): holding it to the
 // 2nd or 3rd tick would only add latency and 50 ms frames.
 #define VSYNC_HZ 60ull
 static uint64_t present_period(const win_t *o) {
-    if (frame_step_realtime() || frame_rate_paced()) return frame_step_cap_ns();
+    if (frame_step_realtime()) return frame_step_cap_ns();
     return (o->interval > 0 ? (uint64_t)o->interval : 1ull) * 1000000000ull / VSYNC_HZ;
 }
 

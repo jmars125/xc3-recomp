@@ -23,10 +23,10 @@
 #define SYM_INIT_START "_ZN2nn4init5StartEmmPFvvES2_S2_"
 // main: return addresses of nnMain's SetFocusHandlingMode call (1.2.1 from this port's analysis of main; 1.4.3 from
 // MacNativeGames' scripts/verify_boot.py) and of the first nvnBootstrapLoader call, per game version.
-// XCX 2.0.0: nnMain never calls SetFocusHandlingMode, so it has no checkpoint (0); its first nvnBootstrapLoader call
-// returns to main+0x953268 (the call is at +0x953264).
+// XC3 2.2.1: no checkpoint (0); its first nvnBootstrapLoader call
+// returns to main+0xe9906c (the call is at +0xe99068).
 #define CHECKPOINT_RET 0ull
-#define NVN_RET 0x953268ull
+#define NVN_RET 0xe9906cull
 #define CTOR_DONE 2                      // a module's constructor flag after its DT_INIT ran the init_array
 
 // The init_array sizes (1.2.1: counted in the modules; 1.4.3: DT_INIT_ARRAYSZ); MacNativeGames' boot check expects
@@ -34,9 +34,9 @@
 typedef struct { const char *name; uint64_t entries; } InitCount;
 static const InitCount inits_121[] = {{"main", 10673}, {"subsdk0", 45}, {"sdk", 116}};
 static const InitCount inits_143[] = {{"main", 10717}, {"subsdk0", 45}, {"sdk", 83}};
-// XCX DE 2.0.0 (DT_INIT_ARRAYSZ of its modules). This fork runs only XCX, so its counts are the ones checked.
-static const InitCount inits_xcx[] = {{"main", 1998}, {"subsdk0", 45}, {"sdk", 87}};
-#define expected_inits inits_xcx
+// XC3 2.2.1 (DT_INIT_ARRAYSZ of its modules). This fork runs only XC3, so its counts are the ones checked.
+static const InitCount inits_xc3[] = {{"main", 838}, {"subsdk0", 45}, {"sdk", 112}};
+#define expected_inits inits_xc3
 
 static volatile int32_t inits_done, checkpoint_seen;
 uint64_t rt_guest_start_ns;
@@ -142,7 +142,7 @@ void rt_boot_event(const char *what, Cpu *c, const char *detail) {
 
 // ---- --seconds S
 // A PNG with stored (uncompressed) deflate blocks: no compression library, and the shot is only read by tools.
-// rt_write_png (declared in vk.h) is shared with the XCX_DUMP frame dump (vk_dump.c).
+// rt_write_png (declared in vk.h) is shared with the XC3_DUMP frame dump (vk_dump.c).
 static uint32_t crc32_update(uint32_t crc, const uint8_t *p, size_t n) {
     static uint32_t table[256];
     if (!table[1])
@@ -227,9 +227,9 @@ static void save_shot(const tex_t *t, const char *path) {
     rt_logf("boot: shot %s (%ux%u)\n", path, w, h);
 }
 
-// XCX_SHOTS=lo-hi:step [XCX_SHOTS_DIR=dir]: every step-th present in [lo, hi] saved as <dir>/f<n>.png (n the
-// present), box-filtered to 480x270; XCX_SHOTS=w<lo>-<hi>:<step> takes them by world-clock seconds instead, the first
-// present at or after each step (full size with XCX_SHOTS_FULL=1), for finding short glitches. Pipeline builds stay asynchronous, so the
+// XC3_SHOTS=lo-hi:step [XC3_SHOTS_DIR=dir]: every step-th present in [lo, hi] saved as <dir>/f<n>.png (n the
+// present), box-filtered to 480x270; XC3_SHOTS=w<lo>-<hi>:<step> takes them by world-clock seconds instead, the first
+// present at or after each step (full size with XC3_SHOTS_FULL=1), for finding short glitches. Pipeline builds stay asynchronous, so the
 // pictures show what a player sees.
 static void series_shot(const tex_t *t, uint64_t n) {
     static int parsed;
@@ -237,14 +237,14 @@ static void series_shot(const tex_t *t, uint64_t n) {
     static const char *dir;
     static int full, world;
     if (!parsed) {
-        full = cfg_get("XCX_SHOTS_FULL") != NULL;
-        const char *e = cfg_get("XCX_SHOTS");
+        full = cfg_get("XC3_SHOTS_FULL") != NULL;
+        const char *e = cfg_get("XC3_SHOTS");
         double wl, wh, ws;
         if (e && e[0] == 'w' && sscanf(e + 1, "%lf-%lf:%lf", &wl, &wh, &ws) == 3 && ws > 0)   // world-clock seconds
             world = 1, lo = (unsigned long long)(wl * 1e6), hi = (unsigned long long)(wh * 1e6),
             step = (unsigned long long)(ws * 1e6), next = lo;
         else if (!e || sscanf(e, "%llu-%llu:%llu", &lo, &hi, &step) != 3 || !step) hi = 0;
-        dir = cfg_get("XCX_SHOTS_DIR") ? cfg_get("XCX_SHOTS_DIR") : ".";
+        dir = cfg_get("XC3_SHOTS_DIR") ? cfg_get("XC3_SHOTS_DIR") : ".";
         if (hi) plat_file_mkdir_p(dir);
         parsed = 1;
     }
@@ -260,7 +260,7 @@ static void series_shot(const tex_t *t, uint64_t n) {
     if (!bgra && fmt != NVN_FORMAT_RGBA8 && fmt != NVN_FORMAT_RGBA8_SRGB) return;
     uint32_t w = t->d.width, h = t->d.height, ow = full ? w : 480, oh = full ? h : 270;
     uint8_t *px = malloc(4ull * w * h), *out = malloc(4ull * ow * oh);
-    if (!px || !out) rt_fatal("boot: out of memory for a XCX_SHOTS frame");
+    if (!px || !out) rt_fatal("boot: out of memory for a XC3_SHOTS frame");
     view_t view;
     memset(&view, 0, sizeof view);
     NVNcopyRegion r = {.width = (int)w, .height = (int)h, .depth = 1};
@@ -286,9 +286,9 @@ static void series_shot(const tex_t *t, uint64_t n) {
     free(px);
 }
 
-// XCX_HANG_DUMP=<seconds>: when no frame was presented for that long, kern_hang_dump logs every guest thread's wait
+// XC3_HANG_DUMP=<seconds>: when no frame was presented for that long, kern_hang_dump logs every guest thread's wait
 // and call chain, once per stall. Started by the first present, so loading before it does not count.
-// XCX_STATE_DUMP=<seconds>: the same dump three times, that long after the first present and 0.3 s apart, stall or
+// XC3_STATE_DUMP=<seconds>: the same dump three times, that long after the first present and 0.3 s apart, stall or
 // not (what the threads wait for in a frame that runs slow).
 static volatile int64_t g_last_present_ms;
 
@@ -317,10 +317,10 @@ static void hang_note_present(void) {
     static volatile int32_t started;
     plat_xchg64(&g_last_present_ms, (int64_t)plat_now_ms());
     if (started || plat_xchg32(&started, 1)) return;
-    const char *e = cfg_get("XCX_HANG_DUMP");
+    const char *e = cfg_get("XC3_HANG_DUMP");
     long s = e ? strtol(e, NULL, 10) : 0;
     if (s > 0) plat_thread_detach(plat_thread_new(hang_watch, (void *)(uintptr_t)s, "hang_watch"));
-    e = cfg_get("XCX_STATE_DUMP");
+    e = cfg_get("XC3_STATE_DUMP");
     s = e ? strtol(e, NULL, 10) : 0;
     if (s > 0) plat_thread_detach(plat_thread_new(state_watch, (void *)(uintptr_t)s, "state_watch"));
 }
@@ -368,7 +368,7 @@ static void guest_main(Cpu *c) {
 static void prewarm_main(void *arg) {
     (void)arg;
     vk_pipeline_prewarm();
-    const char *prep = cfg_get("XCX_TEST_PREPARE_SHADERS");   // Task 2.3 test hook; Task 2.6 builds the preparation
+    const char *prep = cfg_get("XC3_TEST_PREPARE_SHADERS");   // Task 2.3 test hook; Task 2.6 builds the preparation
     if (prep && !strcmp(prep, "1")) {
         int cpus = (int)plat_cpu_count();
         gfx_shader_prepare_recorded(cpus, cpus / 2 > 16 ? 16 : cpus / 2 < 1 ? 1 : cpus / 2);

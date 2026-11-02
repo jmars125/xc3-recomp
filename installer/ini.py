@@ -1,6 +1,6 @@
-"""xcx.ini: set the game language and keep everything else (keys and syntax as runtime/cfg.c reads them).
+"""xc3.ini: set the game language and keep everything else (keys and syntax as runtime/cfg.c reads them).
 
-A new file starts from xcx.ini.example, whose lines are all commented defaults. The language goes into `lang`
+A new file starts from xc3.ini.example, whose lines are all commented defaults. The language goes into `lang`
 (a Switch language code, runtime/ov_system.c): an active `lang = ...` line is rewritten in place, else the commented
 `# lang = ...` line of the example is activated, else the line is added to [language] (created at the end if
 missing). Other lines, comments and line order stay as they are.
@@ -9,14 +9,14 @@ import os
 import re
 from pathlib import Path
 
-# runtime/ov_system.c: the codes XCX_LANG accepts.
+# runtime/ov_system.c: the codes XC3_LANG accepts.
 LANGUAGES = ('ja', 'en-US', 'en-GB', 'fr', 'fr-CA', 'de', 'it', 'es', 'es-419', 'nl', 'pt', 'pt-BR', 'ru', 'ko',
              'zh-CN', 'zh-TW', 'zh-Hans', 'zh-Hant')
 # Their text falls back to the Switch shared fonts (runtime/ov_system.c), which the installer does not extract.
 NEED_SHARED_FONTS = ('ko', 'zh-CN', 'zh-TW', 'zh-Hans', 'zh-Hant')
 
-ACTIVE = re.compile(r'^(\s*)(?:xcx_)?lang(\s*=\s*)(.*?)(\s*)$', re.IGNORECASE)
-COMMENTED = re.compile(r'^\s*[#;]\s*(?:xcx_)?lang\s*=.*$', re.IGNORECASE)
+ACTIVE = re.compile(r'^(\s*)(?:xc3_)?lang(\s*=\s*)(.*?)(\s*)$', re.IGNORECASE)
+COMMENTED = re.compile(r'^\s*[#;]\s*(?:xc3_)?lang\s*=.*$', re.IGNORECASE)
 SECTION = re.compile(r'^\s*\[(.*)\]\s*$')
 
 
@@ -52,8 +52,8 @@ def get_language(text):
 
 
 def write(dest, lang, example=None):
-    """Write dest/xcx.ini with lang; an existing file keeps its other lines. Returns the path."""
-    path = Path(dest) / 'xcx.ini'
+    """Write dest/xc3.ini with lang; an existing file keeps its other lines. Returns the path."""
+    path = Path(dest) / 'xc3.ini'
     if path.is_file():
         text = path.read_text(encoding='utf-8-sig')
     elif example and Path(example).is_file():
@@ -63,7 +63,7 @@ def write(dest, lang, example=None):
     new = set_language(text, lang)
     if path.is_file() and new == text:
         return path
-    tmp = path.with_name('xcx.ini.tmp')
+    tmp = path.with_name('xc3.ini.tmp')
     tmp.write_text(new, encoding='utf-8', newline='\n')
     os.replace(tmp, path)
     return path

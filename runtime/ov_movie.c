@@ -1,7 +1,7 @@
 // Adapted from MacNativeGames games/totk/runtime/movie_host.c @ b75be8cf (MIT, Copyright (c) 2026 MacNativeGames
 // contributors).
 // movie::Decoder for VP9 on the host with libvpx (BSD-3-Clause, linked statically).
-// XCX's pre-rendered movies (Event/Movie/*.webm, 28 files: VP9 profile 0, 1920x1080, 30 fps, video only) play through
+// XC3's pre-rendered movies (Event/Movie/*.webm, 28 files: VP9 profile 0, 1920x1080, 30 fps, video only) play through
 // the SDK movie library in subsdk0, Android's MediaCodec over NVIDIA NvMM. Its decoder opens NVDEC through NvRm, whose
 // first NvOsDrvOpen (sdk+0x3f9050) aborts with "Use of nv::InitializeGraphics is required." because ov_gfx.c takes
 // nv::InitializeGraphics over; nvdrv and mm:u are not served either. The game's own demuxer (movie::Extractor) runs as
@@ -21,7 +21,7 @@
 // decoded frames are handed over when their presentation time is due, counted from the first frame (movie_tick, at every
 // present on the presenting guest thread), at most one per present. When the game falls behind, a frame more than 1.5
 // periods late is dropped if the next one is due too, so the picture keeps time with the movie's sound.
-// XCX_MOVIE_PACE=0 hands every decoded frame over at the next present; XCX_MOVIE_HOST=0 leaves every decoder to the
+// XC3_MOVIE_PACE=0 hands every decoded frame over at the next present; XC3_MOVIE_HOST=0 leaves every decoder to the
 // library (which aborts at the first movie).
 #include <emmintrin.h>
 #include <stdint.h>
@@ -56,7 +56,7 @@ typedef struct { int index; unsigned flags; int64_t time; } Ready;
 typedef struct { int index, offset, size; int64_t time; unsigned flags; } Pending;
 typedef struct {
     uint64_t guest;                          // the movie::Decoder object
-    int format, configured, started, w, h, eos_in, format_sent, last_error;
+    int format, configured, started, w, h, eos_in, format_sent, last_error, sent;
     uint64_t events;                         // guest DecoderEvents *: EventType * per MOVIE_EV_*
     vpx_codec_ctx_t vpx;
     int vpx_live;
@@ -94,15 +94,24 @@ void movie_set_clock(uint64_t (*clock)(void)) { g_clock = clock ? clock : kern_n
 void movie_set_pace(int on) { g_pace = on; }
 static int pace_on(void) {
     if (g_pace < 0) {
-        const char *e = cfg_get("XCX_MOVIE_PACE");
+        const char *e = cfg_get("XC3_MOVIE_PACE");
         g_pace = !(e && !strcmp(e, "0"));
     }
     return g_pace;
 }
+// XC3_MOVIE_SKIP=<frames>: test runs end every movie after this many frames, as if its file ended there.
+static int skip_after(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = cfg_get("XC3_MOVIE_SKIP");
+        v = e && *e ? atoi(e) : 0;
+    }
+    return v;
+}
 static int host_off(void) {
     static int v = -1;
     if (v < 0) {
-        const char *e = cfg_get("XCX_MOVIE_HOST");
+        const char *e = cfg_get("XC3_MOVIE_HOST");
         v = e && !strcmp(e, "0");
     }
     return v;
@@ -340,6 +349,7 @@ static void reset_queues(Movie *m) {
     memset(m->out_held, 0, sizeof m->out_held);
     m->npending = m->nready = m->ndecoded = 0;
     m->eos_in = 0;
+    m->sent = 0;
     m->t0 = 0;
 }
 static void release_codec(Movie *m) {   // m->mu held, worker quiesced
@@ -444,7 +454,7 @@ static void ov_ctor(Cpu *c) {
     guest_init();
     if (type != MOVIE_TYPE_VP9 || mode != MOVIE_MODE_BUFFER || host_off()) {
         rt_log("movie: decoder type %d mode %d format %d left to the library%s", type, mode, format,
-               host_off() ? " (XCX_MOVIE_HOST=0)" : " (only VP9 in buffer mode runs on the host)");
+               host_off() ? " (XC3_MOVIE_HOST=0)" : " (only VP9 in buffer mode runs on the host)");
         pass(c, MOVIE_CTOR);
         return;
     }
@@ -704,10 +714,12 @@ static void ov_send_input(Cpu *c) {
     plat_mutex_lock(&m->mu);
     int st = ST_OK;
     if (!m->started || m->npending == IN_BUFS) st = ST_ERROR;
-    else if (m->eos_in) {   // after end of stream: hand the buffer back
+    else if (m->eos_in) {
+        // After end of stream: the buffer goes back without an input event. An event would have the game send end of
+        // stream again at once, for ever, and the call in flight at the next Flush would end the next movie at its start.
         m->in_free[m->nin_free++] = index;
-        m->owed |= 1u << MOVIE_EV_INPUT;
     } else {
+        if (skip_after() && ++m->sent >= skip_after()) flags |= MOVIE_FLAG_EOS;
         m->pending[m->npending++] = (Pending){index, offset, size, time, flags};
         plat_cond_signal(&m->work);
     }

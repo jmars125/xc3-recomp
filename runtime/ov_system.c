@@ -5,13 +5,13 @@
 // host. Stub rule: queries and initialisation succeed with neutral values, data paths stop with a named fatal.
 //
 // Environment:
-//   XCX_LANG=<Switch language code>   the game's language as given ("ja", "en-GB", "zh-Hant", ...)
-//   XCX_LOCALE=<BCP 47 tag>           else the language for this locale ("pt-BR"), else the Windows user locale;
+//   XC3_LANG=<Switch language code>   the game's language as given ("ja", "en-GB", "zh-Hant", ...)
+//   XC3_LOCALE=<BCP 47 tag>           else the language for this locale ("pt-BR"), else the Windows user locale;
 //                                      a language the game does not ship becomes en-US
-//   XCX_OPERATION_MODE=docked|handheld   operation and performance mode reported to the game (default docked)
-//   XCX_ASSUME_FOCUS=1                GetCurrentFocusState always reports in focus, whatever the window says; the
+//   XC3_OPERATION_MODE=docked|handheld   operation and performance mode reported to the game (default docked)
+//   XC3_ASSUME_FOCUS=1                GetCurrentFocusState always reports in focus, whatever the window says; the
 //                                      window opens without taking focus (gfx_window_win.c), for scripted runs
-//   XCX_SHARED_FONTS=<dir>            nn::pl shared fonts (tools/extract_fonts.py output), default
+//   XC3_SHARED_FONTS=<dir>            nn::pl shared fonts (tools/extract_fonts.py output), default
 //                                      <romfs>/../../firmware/shared-fonts
 #include <ctype.h>
 #include <stdio.h>
@@ -37,15 +37,15 @@ static void need(int ok, const char *what) {
 static const char *caller(Cpu *c, char *buf, int n) { return ldr_describe(c->x[30] - 4, buf, n); }
 
 // ==== nn::oe (services.c)
-// XCX_OPERATION_MODE, read once: 1 handheld (OperationMode 0, PerformanceMode Normal 0), 0 docked (1, Boost 1).
+// XC3_OPERATION_MODE, read once: 1 handheld (OperationMode 0, PerformanceMode Normal 0), 0 docked (1, Boost 1).
 int ov_handheld(void) {
     static volatile int32_t v = -1;
     int32_t h = v;
     if (h < 0) {
-        const char *e = cfg_value("XCX_OPERATION_MODE");
+        const char *e = cfg_value("XC3_OPERATION_MODE");
         if (!strcmp(e, "docked")) h = 0;
         else if (!strcmp(e, "handheld")) h = 1;
-        else rt_fatal("XCX_OPERATION_MODE must be docked or handheld, not '%s'", e);
+        else rt_fatal("XC3_OPERATION_MODE must be docked or handheld, not '%s'", e);
         if (plat_cas32(&v, h, -1) == -1)
             rt_log("oe: operation mode reported to the game: %s", h ? "handheld (performance normal)"
                                                                   : "docked (performance boost)");
@@ -87,17 +87,17 @@ static const char *switch_language(const char *tag) {
     return "en-US";
 }
 
-// The game's language as a Switch language code (XCX_LANG, else XCX_LOCALE, else the Windows user locale).
+// The game's language as a Switch language code (XC3_LANG, else XC3_LOCALE, else the Windows user locale).
 const char *ov_language(void) {
     static const char *const codes[] = {"ja", "en-US", "fr", "de", "it", "es", "zh-CN", "ko", "nl", "pt", "ru",
                                         "zh-TW", "en-GB", "fr-CA", "es-419", "zh-Hans", "zh-Hant", "pt-BR"};
-    const char *code = cfg_get("XCX_LANG");   // no fixed default: XCX_LOCALE or the Windows user locale decides when unset
+    const char *code = cfg_get("XC3_LANG");   // no fixed default: XC3_LOCALE or the Windows user locale decides when unset
     if (code && *code) {
         for (size_t i = 0; i < sizeof codes / sizeof *codes; i++)
             if (!strcmp(code, codes[i])) return codes[i];
-        rt_fatal("XCX_LANG '%s' is not a Switch language code", code);
+        rt_fatal("XC3_LANG '%s' is not a Switch language code", code);
     }
-    const char *tag = cfg_get("XCX_LOCALE");
+    const char *tag = cfg_get("XC3_LOCALE");
     char sys[85] = "en-US";
     if (!tag || !*tag) {
         if (*plat_user_locale()) snprintf(sys, sizeof sys, "%s", plat_user_locale());
@@ -106,9 +106,23 @@ const char *ov_language(void) {
     return switch_language(tag);
 }
 
+// The console's pick among the languages the game declares in its NACP: XC3 ships en-GB, ja, fr, de, es, it, ko, zh-Hant
+// and zh-Hans (SupportedLanguageFlag 0x70de). Its file names carry the result (menu/font/bf3_gb.wisty), so a language
+// without data ends in a null font at the first text.
+static const char *game_language(const char *code) {
+    static const char *const shipped[] = {"ja", "fr", "de", "it", "es", "ko", "en-GB", "zh-Hans", "zh-Hant"};
+    static const struct { const char *from, *to; } near[] = {{"fr-CA", "fr"}, {"es-419", "es"}, {"zh-CN", "zh-Hans"},
+                                                             {"zh-TW", "zh-Hant"}, {"pt-BR", "es"}, {"pt", "es"}};
+    for (size_t i = 0; i < sizeof shipped / sizeof *shipped; i++)
+        if (!strcmp(code, shipped[i])) return code;
+    for (size_t i = 0; i < sizeof near / sizeof *near; i++)
+        if (!strcmp(code, near[i].from)) return near[i].to;
+    return "en-GB";
+}
+
 // LanguageCode GetDesiredLanguage(): char[8] in x0
 static void ov_desired_language(Cpu *c) {
-    const char *code = ov_language();
+    const char *code = game_language(ov_language());
     uint64_t v = 0;
     memcpy(&v, code, strlen(code));
     ret_x(c, v);
@@ -148,14 +162,14 @@ static void ov_focus_mode(Cpu *c) {
 }
 
 // FocusState GetCurrentFocusState(): 1 in focus, 2 out of focus (nn::oe::FocusState). In focus until the window
-// reports otherwise through oe_set_focus; XCX_ASSUME_FOCUS=1 (unattended runs) pins it to 1. The caller of
+// reports otherwise through oe_set_focus; XC3_ASSUME_FOCUS=1 (unattended runs) pins it to 1. The caller of
 // oe_set_focus also pushes OE_MSG_FOCUS_STATE_CHANGED.
 static volatile int32_t focus_state = 1;
 static int assume_focus(void) {
     static volatile int32_t v = -1;
     int32_t a = v;
     if (a < 0) {
-        const char *e = cfg_get("XCX_ASSUME_FOCUS");
+        const char *e = cfg_get("XC3_ASSUME_FOCUS");
         a = e && atoi(e) ? 1 : 0;
         plat_xchg32(&v, a);
     }
@@ -295,7 +309,7 @@ static void ov_show_error(Cpu *c) {
 // ==== SDK-internal initialisation (services.c)
 static void ov_diag_startup(Cpu *c) { (void)c; rt_log("diag: host diagnostics"); }
 static void ov_aoc_initialize(Cpu *c) { (void)c; rt_log("aoc: %d add-on content present", fs_aoc_list(NULL, 0, 0)); }
-// The add-on content installed beside the RomFS (fs_host.c fs_aoc_list); XCX 1.4.3 and XCX list it.
+// The add-on content installed beside the RomFS (fs_host.c fs_aoc_list); XC3 1.4.3 and XC3 list it.
 // int ListAddOnContent(AddOnContentIndex *out, int offset, int count)
 static void ov_aoc_list(Cpu *c) {
     int offset = (int)arg_x(c, 1), count = (int)arg_x(c, 2);
@@ -444,7 +458,7 @@ static void ov_user_existence(Cpu *c) {
     ret_x(c, 0);
 }
 
-// ---- XCX: account calls XCX never makes. The host has one local user and no network service account.
+// ---- XC3: account calls XC3 never makes. The host has one local user and no network service account.
 #define ACCOUNT_R_NSA_UNAVAILABLE 0x2307cu   // module 124 (account), description 280: no network service account
 
 // Result OpenUser(UserHandle *out, const Uid &)
@@ -758,12 +772,12 @@ static void ov_location_updated(Cpu *c) {
     ret_x(c, 0);
 }
 
-// ==== nn::pl shared fonts (shared_font.c). XCX asks for them only from its font loader, only with Simplified Chinese,
+// ==== nn::pl shared fonts (shared_font.c). XC3 asks for them only from its font loader, only with Simplified Chinese,
 // Korean or Traditional Chinese text, and only for type 0; tools/extract_fonts.py writes
 // them from the user's firmware. Each type is read on first use into guest-visible memory as the BFTTF file the pl
 // shared memory holds; Address is 8 bytes past the file start (after the BFTTF header) and Size the decoded font size,
 // as in MNG. The load state is always Loaded: the game spins until it is, so missing files stop with a named fatal at
-// Address/Size instead of a hang. XCX_SHARED_FONTS=<dir> overrides <romfs>/../../firmware/shared-fonts.
+// Address/Size instead of a hang. XC3_SHARED_FONTS=<dir> overrides <romfs>/../../firmware/shared-fonts.
 #define SHARED_FONT_TYPES 6
 #define BFTTF_MAGIC 0x7f9a0218u
 static const char *const font_files[SHARED_FONT_TYPES] = {
@@ -772,10 +786,10 @@ static const char *const font_files[SHARED_FONT_TYPES] = {
 static struct { PlatMutex lock; const uint8_t *file[SHARED_FONT_TYPES]; uint64_t size[SHARED_FONT_TYPES]; } fonts;
 
 const char *ov_shared_font_dir(char *buf, size_t n) {
-    const char *e = cfg_get("XCX_SHARED_FONTS");
+    const char *e = cfg_get("XC3_SHARED_FONTS");
     if (e && *e) snprintf(buf, n, "%s", e);
     else {
-        char exe[PLAT_PATH_MAX], probe[PLAT_PATH_MAX + 40];   // shared-fonts next to xcx.exe (tools/package_build.py), else the repo's
+        char exe[PLAT_PATH_MAX], probe[PLAT_PATH_MAX + 40];   // shared-fonts next to xc3.exe (tools/package_build.py), else the repo's
         int len = plat_exe_path(exe, sizeof exe);
         char *cut = len && len < sizeof exe ? plat_last_sep(exe) : NULL;
         if (cut) *cut = 0;
@@ -814,7 +828,7 @@ static const uint8_t *font_data(Cpu *c, const char *fn, int64_t t) {
         FILE *f = fopen(path, "rb");
         if (!f)
             rt_fatal("nn::pl::%s(%lld) from %s: no shared font %s (needed for Chinese and Korean text); run "
-                     "tools/extract_fonts.py --firmware <firmware NCA dir> or set XCX_SHARED_FONTS", fn, (long long)t,
+                     "tools/extract_fonts.py --firmware <firmware NCA dir> or set XC3_SHARED_FONTS", fn, (long long)t,
                      caller(c, lr, sizeof lr), path);
         plat_fseek64(f, 0, SEEK_END);
         int64_t len = plat_ftell64(f);
@@ -844,7 +858,7 @@ static void ov_font_size(Cpu *c) {
     ret_x(c, fonts.size[t]);
 }
 
-// ---- XCX: oe calls XCX never makes
+// ---- XC3: oe calls XC3 never makes
 static void ov_nop(Cpu *c) { (void)c; }   // Enter/LeaveExitRequestHandlingSection: the host never asks the game to exit
 static void ov_ret_zero(Cpu *c) { ret_x(c, 0); }   // inactivity extension getters: not extended
 // void GetPseudoDeviceId(util::Uuid *out): one fixed id per host, as the console gives one per application
@@ -854,11 +868,11 @@ static void ov_pseudo_device_id(Cpu *c) {
     if (out) memcpy(out, id, 16);
 }
 
-// ---- XCX: nifm. The host is offline: the game's online features (NPLN) see no network and stay off.
+// ---- XC3: nifm. The host is offline: the game's online features (NPLN) see no network and stay off.
 #define NIFM_R_NO_NETWORK 0x6a46eu   // module 110 (nifm), description 3400: network not available
 static void ov_nifm_unavailable(Cpu *c) { ret_x(c, NIFM_R_NO_NETWORK); }
 
-// ---- XCX: int clock_gettime(clockid_t, struct timespec *), musl in sdk. Its CLOCK_REALTIME path reads a time service
+// ---- XC3: int clock_gettime(clockid_t, struct timespec *), musl in sdk. Its CLOCK_REALTIME path reads a time service
 // session the host never opens, so std::chrono::system_clock::now threw. Every clock comes from the host instead:
 // CLOCK_REALTIME (0) from the host's wall clock, the others from its monotonic clock.
 static void ov_clock_gettime(Cpu *c) {
@@ -869,7 +883,7 @@ static void ov_clock_gettime(Cpu *c) {
     ret_x(c, 0);
 }
 
-// ---- XCX: add-on content count, the language list, the profanity filter, screenshots
+// ---- XC3: add-on content count, the language list, the profanity filter, screenshots
 static void ov_aoc_count(Cpu *c) { ret_x(c, (uint64_t)fs_aoc_list(NULL, 0, 0)); }   // int CountAddOnContent()
 
 // The languages a console offers, in nn::settings::Language order; each LanguageCode is 8 bytes.
@@ -885,6 +899,15 @@ static void ov_language_codes(Cpu *c) {
     if (!out || n < 0) n = 0;
     for (int i = 0; i < n; i++) memcpy(out + 8 * i, languages[i], 8);
     ret_x(c, (uint64_t)n);
+}
+
+// Result detail::MakeLanguageCode(LanguageCode *out, Language): XC3 compares its text languages through
+// nn::settings::operator==, which ends here instead of in the settings service.
+static void ov_make_language_code(Cpu *c) {
+    int lang = (int)arg_x(c, 1);
+    if (lang < 0 || lang >= NLANG) rt_fatal("settings: MakeLanguageCode(%d)", lang);
+    memcpy(arg_p(c, 0), languages[lang], 8);
+    ret_x(c, 0);
 }
 
 // ngc::ProfanityFilter: Initialize and SetMaskMode succeed; MaskProfanityWordsInText(int *count, char *, uint32)
@@ -926,9 +949,19 @@ HOST_OVERRIDE("_ZN2nn2oe25TryPopNotificationMessageEPj", ov_try_pop);
 HOST_OVERRIDE("_ZN2nn2oe22PopNotificationMessageEv", ov_pop);
 HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SaveEv", ov_report_save);
 HOST_OVERRIDE("_ZN2nn5prepo10PlayReport4SaveERKNS_7account3UidE", ov_report_save);
+// void GetDisplayVersion(DisplayVersion *): a 16-byte string, read for the version the title screen shows.
+static void ov_display_version(Cpu *c) {
+    char *out = arg_p(c, 0);
+    memset(out, 0, 16);
+    memcpy(out, "2.2.1", 5);
+}
+HOST_OVERRIDE("_ZN2nn2oe17GetDisplayVersionEPNS0_14DisplayVersionE", ov_display_version);
+HOST_OVERRIDE("_ZN2nn2oe33EnableAlbumImageTakenNotificationEv", ov_nop);
+HOST_OVERRIDE("_ZN2nn2oe34DisableAlbumImageTakenNotificationEv", ov_nop);
+HOST_OVERRIDE("_ZN2nn5prepo10InitializeEv", ov_nop);   // XC3: would open the prepo:u service
 HOST_OVERRIDE("_ZN2nn5prepo28RequestImmediateTransmissionEv", ov_result_ok);
 HOST_OVERRIDE("_ZN2nn5prepo27AddInternetConnectionStatusEPNS0_10PlayReportEPKcS4_S4_", ov_result_ok);
-HOST_OVERRIDE("_ZN2nn5prepo12AddSessionIdEPNS0_10PlayReportEPKc", ov_result_ok);   // XCX: would open the prepo:u session
+HOST_OVERRIDE("_ZN2nn5prepo12AddSessionIdEPNS0_10PlayReportEPKc", ov_result_ok);   // XC3: would open the prepo:u session
 HOST_OVERRIDE("_ZN2nn3nfp10InitializeEv", ov_nfp_initialize);
 HOST_OVERRIDE("_ZN2nn3nfp8FinalizeEv", ov_nfp_finalize);
 HOST_OVERRIDE("_ZN2nn3nfp8GetStateEv", ov_nfp_state);
@@ -951,6 +984,7 @@ HOST_OVERRIDE("_ZN2nn3aoc16ListAddOnContentEPiii", ov_aoc_list);
 HOST_OVERRIDE("_ZN2nn3aoc17CountAddOnContentEv", ov_aoc_count);
 HOST_OVERRIDE("_ZN2nn8settings29GetAvailableLanguageCodeCountEv", ov_language_count);
 HOST_OVERRIDE("_ZN2nn8settings25GetAvailableLanguageCodesEPNS0_12LanguageCodeEi", ov_language_codes);
+HOST_OVERRIDE("_ZN2nn8settings6detail16MakeLanguageCodeEPNS0_12LanguageCodeENS0_8LanguageE", ov_make_language_code);
 HOST_OVERRIDE("_ZN2nn3ngc15ProfanityFilter10InitializeEPvm", ov_ret_zero);
 HOST_OVERRIDE("_ZN2nn3ngc15ProfanityFilter11SetMaskModeENS1_8MaskModeE", ov_ret_zero);
 HOST_OVERRIDE("_ZN2nn3ngc15ProfanityFilter24MaskProfanityWordsInTextEPiPcj", ov_profanity_mask);

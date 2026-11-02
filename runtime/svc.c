@@ -2,7 +2,7 @@
 // contributors), lines 304-382.
 // The SVC entry of the lifted code: preemption checkpoint, trace, then the thread and
 // synchronization SVCs (kernel.c), IPC (ipc.c), memory (memory.c), Break, OutputDebugString, GetInfo and ExitProcess. The 21 SVCs
-// XCX has but never reaches on MNG's boot path stop with a named fatal, the caller and the guest backtrace.
+// XC3 has but never reaches on MNG's boot path stop with a named fatal, the caller and the guest backtrace.
 #include <stdio.h>
 #include <string.h>
 
@@ -16,7 +16,7 @@
 #define ST_FREE 0u
 #define ST_STACK 0xBu
 #define PERM_RW 3u
-#define PROGRAM_ID 0x0100453019aa8000ull   // XCX DE
+#define PROGRAM_ID 0x010074f013262000ull   // XC3
 
 static uint64_t g_svcs;
 void (*volatile svc_test_exit_hook)(unsigned code);

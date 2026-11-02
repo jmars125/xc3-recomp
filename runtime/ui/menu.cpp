@@ -175,7 +175,7 @@ static uint64_t g_cost_ns, g_cost_frames;   // CPU time of layout and recording 
 // Sizes are tuned for 1080 lines and follow the window's height; under 720 lines they stay at the 720 size.
 static float menu_scale(uint32_t h) { return (h >= 720 ? h : 720) / 1080.0f; }
 
-// XCX's own menu look: dark navy panels, cyan accents.
+// XC3's own menu look: dark navy panels, cyan accents.
 static void style_init(ImGuiStyle &s) {
     ImGui::StyleColorsDark(&s);
     s.WindowRounding = 14; s.FrameRounding = 8; s.GrabRounding = 8; s.TabRounding = 8; s.ChildRounding = 10;
@@ -204,7 +204,7 @@ static void make_context(void) {
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-    io.BackendPlatformName = "xcx_menu";
+    io.BackendPlatformName = "xc3_menu";
     style_init(g_base_style);
     ImGui::GetStyle() = g_base_style;
     g_ctx_ok = 1;
@@ -294,34 +294,34 @@ extern "C" void menu_vk_release(void) {
 }
 
 // ---- test hooks
-// XCX_MENU_TEST=<frame>[:<frames per page>]: at that presented frame the menu opens on its first tab; each tab stays
-// <frames per page> frames (default 30) and its last frame's swapchain image goes to XCX_MENU_TEST_DIR (default: the
+// XC3_MENU_TEST=<frame>[:<frames per page>]: at that presented frame the menu opens on its first tab; each tab stays
+// <frames per page> frames (default 30) and its last frame's swapchain image goes to XC3_MENU_TEST_DIR (default: the
 // working directory) as menu-test-<frame>-<page>.png; after the last tab the menu closes.
-// XCX_MENU_TEST_SET=<frame>:<key>=<value>[,<key>=<value>...][;<frame>:...]: cfg_set of each key (XCX_ prefix
-// optional) at that presented frame; changes live settings with no input, menu open or not. xcx.ini is written only by
+// XC3_MENU_TEST_SET=<frame>:<key>=<value>[,<key>=<value>...][;<frame>:...]: cfg_set of each key (XC3_ prefix
+// optional) at that presented frame; changes live settings with no input, menu open or not. xc3.ini is written only by
 // the pseudo-key SAVE=1 (cfg_save, as a row change does; a failed write shows the menu's save note).
 enum { TAB_SCREEN, TAB_GAME, TAB_SOUND, TAB_CONTROLS, TAB_MENU, TAB_ADVANCED, TAB_COUNT };
 enum { TEST_PAGE_FRAMES = 30, TEST_SETS = 16 };
 struct TestSet { uint64_t frame; char key[64], value[64]; };
 static struct {
     int parsed;
-    uint64_t at;          // XCX_MENU_TEST frame; 0 none
+    uint64_t at;          // XC3_MENU_TEST frame; 0 none
     uint64_t per_page;
     uint64_t opened;      // the frame the hook opened the menu; 0 not yet
     int page;             // the tab being shot; -1 none
     TestSet sets[TEST_SETS];
-    int n_sets, next_set; // XCX_MENU_TEST_SET, in frame order
+    int n_sets, next_set; // XC3_MENU_TEST_SET, in frame order
 } g_test = {0, 0, 0, 0, -1, {}, 0, 0};
 
 static void test_parse(void) {
     g_test.parsed = 1;
-    if (const char *e = cfg_get("XCX_MENU_TEST")) {
+    if (const char *e = cfg_get("XC3_MENU_TEST")) {
         long long at = atoll(e), per = 0;
         if (const char *c = strchr(e, ':')) per = atoll(c + 1);
         g_test.at = at > 0 ? (uint64_t)at : 0;
         g_test.per_page = per > 0 ? (uint64_t)per : TEST_PAGE_FRAMES;
     }
-    const char *s = cfg_get("XCX_MENU_TEST_SET");
+    const char *s = cfg_get("XC3_MENU_TEST_SET");
     while (s && *s) {   // groups "<frame>:<key>=<value>,..." separated by ';'
         char *end;
         unsigned long long f = strtoull(s, &end, 10);
@@ -334,7 +334,7 @@ static void test_parse(void) {
                 TestSet &t = g_test.sets[g_test.n_sets++];
                 t.frame = f;
                 int kn = (int)(eq - s), vn = (int)(s + n - eq - 1);
-                snprintf(t.key, sizeof t.key, "%s%.*s", strncmp(s, "XCX_", 4) ? "XCX_" : "", kn, s);
+                snprintf(t.key, sizeof t.key, "%s%.*s", strncmp(s, "XC3_", 4) ? "XC3_" : "", kn, s);
                 snprintf(t.value, sizeof t.value, "%.*s", vn, eq + 1);
             }
             s += n;
@@ -352,7 +352,7 @@ static void test_apply_sets(uint64_t frame) {
     for (; g_test.next_set < g_test.n_sets && g_test.sets[g_test.next_set].frame <= frame; g_test.next_set++) {
         const TestSet &t = g_test.sets[g_test.next_set];
         rt_log("menu: test hook: frame %llu: %s=%s", (unsigned long long)frame, t.key, t.value);
-        if (!strcmp(t.key, "XCX_SAVE")) rt_log("menu: test hook: cfg_save %s", cfg_save() ? "wrote" : "failed");
+        if (!strcmp(t.key, "XC3_SAVE")) rt_log("menu: test hook: cfg_save %s", cfg_save() ? "wrote" : "failed");
         else cfg_set(t.key, t.value);
     }
 }
@@ -362,7 +362,7 @@ enum { MAX_GPUS = 8 };
 static char g_gpu_names[MAX_GPUS][VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
 static int g_gpu_n = -1;   // -1: not listed yet
 
-// The Vulkan devices in vkEnumeratePhysicalDevices order, which XCX_GPU_INDEX counts in (vk_device.c pick_device).
+// The Vulkan devices in vkEnumeratePhysicalDevices order, which XC3_GPU_INDEX counts in (vk_device.c pick_device).
 static void list_gpus(VkInstance inst) {
     if (g_gpu_n >= 0) return;
     VkPhysicalDevice pd[MAX_GPUS];
@@ -377,7 +377,7 @@ static void list_gpus(VkInstance inst) {
 }
 
 // The sizes of the two resolution rows. Window sizes fit the monitor, but for the 1920x1080 default; the game resolution
-// has no such limit. 1280x720 is the Steam Deck's (letterboxed in its 1280x800 screen, XCX_PICTURE_FIT). Sizes of another
+// has no such limit. 1280x720 is the Steam Deck's (letterboxed in its 1280x800 screen, XC3_PICTURE_FIT). Sizes of another
 // shape are listed only for a monitor of that shape, the monitor's own size and the current value always.
 static const int kWindowSizes[][2] = {{1280, 720}, {1366, 768}, {1600, 900}, {1920, 1080}, {2560, 1440}, {3200, 1800},
                                       {3840, 2160}};
@@ -429,13 +429,13 @@ static void row_sizes(const char *key, UiTextId label, UiTextId desc, const int 
 }
 
 static void row_window_size(void) {
-    row_sizes("XCX_WINDOW_SIZE", UI_MENU_WINDOW_SIZE, UI_MENU_WINDOW_SIZE_DESC, kWindowSizes,
+    row_sizes("XC3_WINDOW_SIZE", UI_MENU_WINDOW_SIZE, UI_MENU_WINDOW_SIZE_DESC, kWindowSizes,
               sizeof kWindowSizes / sizeof *kWindowSizes, true);
 }
 
 // The game resolution (resolution.c).
 static void row_output_res(void) {
-    row_sizes("XCX_OUTPUT_RES", UI_MENU_OUTPUT_RES, UI_MENU_OUTPUT_RES_DESC, kOutputSizes,
+    row_sizes("XC3_OUTPUT_RES", UI_MENU_OUTPUT_RES, UI_MENU_OUTPUT_RES_DESC, kOutputSizes,
               sizeof kOutputSizes / sizeof *kOutputSizes, false);
 }
 
@@ -449,7 +449,7 @@ static void row_render_scale(void) {
         snprintf(shown[i], sizeof shown[i], "%s %%", vals[i]);
         names[i] = shown[i];
     }
-    opt_choice_list("XCX_RENDER_SCALE", UI_MENU_RENDER_SCALE, vals, names, N, UI_MENU_RENDER_SCALE_DESC);
+    opt_choice_list("XC3_RENDER_SCALE", UI_MENU_RENDER_SCALE, vals, names, N, UI_MENU_RENDER_SCALE_DESC);
 }
 
 static void row_gpu(void) {
@@ -462,10 +462,10 @@ static void row_gpu(void) {
         vals[i + 1] = idx[i];
         names[i + 1] = g_gpu_names[i];
     }
-    opt_choice_list("XCX_GPU_INDEX", UI_MENU_GPU, vals, names, g_gpu_n + 1, UI_MENU_GPU_DESC);
+    opt_choice_list("XC3_GPU_INDEX", UI_MENU_GPU, vals, names, g_gpu_n + 1, UI_MENU_GPU_DESC);
 }
 
-// The game language: one entry per language XCX ships (a Switch code that names it), each under its own name. The
+// The game language: one entry per language XC3 ships (a Switch code that names it), each under its own name. The
 // Switch's Portuguese is not among them.
 static void row_game_lang(void) {
     static const struct { const char *code; UiTextId name; } langs[] = {
@@ -478,14 +478,14 @@ static void row_game_lang(void) {
     const char *vals[N], *names[N];
     vals[0] = "";
     names[0] = menu_text(UI_MENU_GAME_LANG_AUTO);
-    const char *now = cfg_value("XCX_LANG");
+    const char *now = cfg_value("XC3_LANG");
     int cur = *now ? -1 : 0;
     for (int i = 1; i < N; i++) {
         vals[i] = langs[i - 1].code;
         names[i] = menu_text(langs[i - 1].name);
         if (*now && !strcmp(ui_text_lang(now), ui_text_lang(vals[i]))) cur = i;   // en-GB is English too
     }
-    opt_choice_list("XCX_LANG", UI_MENU_GAME_LANG, vals, names, N, UI_MENU_GAME_LANG_DESC, cur);
+    opt_choice_list("XC3_LANG", UI_MENU_GAME_LANG, vals, names, N, UI_MENU_GAME_LANG_DESC, cur);
 }
 
 // The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
@@ -503,12 +503,12 @@ static void row_fps_limit() {
         snprintf(display, sizeof display, menu_text(UI_MENU_FPS_DISPLAY_HZ), hz);
         names[N - 1] = display;
     }
-    const char *set = cfg_get("XCX_FPS_LIMIT"), *old = cfg_get("XCX_FPS60");
+    const char *set = cfg_get("XC3_FPS_LIMIT"), *old = cfg_get("XC3_FPS60");
     int cur = (!set || !*set) && old && !strcmp(old, "0") ? 0 : -1;
-    opt_choice_list("XCX_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, N, UI_MENU_FPS_LIMIT_DESC, cur);
+    opt_choice_list("XC3_FPS_LIMIT", UI_MENU_FPS_LIMIT, vals, names, N, UI_MENU_FPS_LIMIT_DESC, cur);
 }
 
-// The menu's name of a XCX_VK_PRESENT mode (gfx_window_present_mode); NULL for another.
+// The menu's name of a XC3_VK_PRESENT mode (gfx_window_present_mode); NULL for another.
 static const char *present_name(const char *mode) {
     static const struct { const char *mode; UiTextId name; } names[] = {
         {"mailbox", UI_MENU_PRESENT_MAILBOX}, {"fifo", UI_MENU_PRESENT_VSYNC}, {"immediate", UI_MENU_PRESENT_IMMEDIATE},
@@ -522,7 +522,7 @@ static const char *present_name(const char *mode) {
 // mailbox gets fifo); NULL when they agree or before the first swapchain.
 static const char *present_note(void) {
     const char *got = gfx_window_present_mode(), *name = present_name(got);
-    if (!*got || !strcmp(got, cfg_value("XCX_VK_PRESENT")) || !name) return nullptr;
+    if (!*got || !strcmp(got, cfg_value("XC3_VK_PRESENT")) || !name) return nullptr;
     static char note[96];
     snprintf(note, sizeof note, menu_text(UI_MENU_PRESENT_IN_USE), name);
     return note;
@@ -531,21 +531,21 @@ static const char *present_note(void) {
 // ---- the tabs
 static void tab_screen(float scale) {
     opt_begin("##screen", scale);
-    opt_toggle("XCX_FULLSCREEN", UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC);
+    opt_toggle("XC3_FULLSCREEN", UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC);
     row_window_size();
     static const UiTextId present[] = {UI_MENU_PRESENT_MAILBOX, UI_MENU_PRESENT_VSYNC, UI_MENU_PRESENT_IMMEDIATE};
-    opt_choice("XCX_VK_PRESENT", UI_MENU_PRESENT, present, 3, UI_MENU_PRESENT_DESC, present_note());
+    opt_choice("XC3_VK_PRESENT", UI_MENU_PRESENT, present, 3, UI_MENU_PRESENT_DESC, present_note());
     row_gpu();
     static const UiTextId perf[] = {UI_MENU_PERF_OFF, UI_MENU_PERF_FPS, UI_MENU_PERF_FULL};
-    opt_choice("XCX_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
+    opt_choice("XC3_PERF_OVERLAY", UI_MENU_PERF_OVERLAY, perf, 3, UI_MENU_PERF_OVERLAY_DESC);
     opt_group(UI_MENU_GRAPHICS);
     row_output_res();
     row_render_scale();
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR};
-    opt_choice("XCX_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
+    opt_choice("XC3_UPSCALER", UI_MENU_UPSCALER, up, 2, UI_MENU_UPSCALER_DESC);
     static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};
-    opt_choice("XCX_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
-    opt_slider("XCX_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
+    opt_choice("XC3_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
+    opt_slider("XC3_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");
     opt_end();
 }
 
@@ -553,23 +553,23 @@ static void tab_game(float scale) {
     opt_begin("##game", scale);
     row_fps_limit();
     static const UiTextId cut[] = {UI_MENU_CUTSCENE_30, UI_MENU_CUTSCENE_MIXED, UI_MENU_CUTSCENE_LIMIT};
-    opt_choice("XCX_CUTSCENE_30", UI_MENU_CUTSCENE_FPS, cut, 3, UI_MENU_CUTSCENE_FPS_DESC);
+    opt_choice("XC3_CUTSCENE_30", UI_MENU_CUTSCENE_FPS, cut, 3, UI_MENU_CUTSCENE_FPS_DESC);
     row_game_lang();
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
-    opt_choice("XCX_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
+    opt_choice("XC3_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
     opt_end();
 }
 
 static void tab_sound(float scale) {
     opt_begin("##sound", scale);
-    opt_slider("XCX_VOLUME", UI_MENU_VOLUME, 0, 100, UI_MENU_VOLUME_DESC, 5, "%.0f %%");
+    opt_slider("XC3_VOLUME", UI_MENU_VOLUME, 0, 100, UI_MENU_VOLUME_DESC, 5, "%.0f %%");
     opt_end();
 }
 
 // "in use: Xbox" under the layout when it is Automatic and a gamepad is connected; NULL otherwise.
 static const char *pad_layout_note(void) {
     int got = input_pad_layout();
-    if (got < 0 || strcmp(cfg_value("XCX_PAD_LAYOUT"), "auto")) return nullptr;
+    if (got < 0 || strcmp(cfg_value("XC3_PAD_LAYOUT"), "auto")) return nullptr;
     static char note[96];
     snprintf(note, sizeof note, menu_text(UI_MENU_PAD_LAYOUT_IN_USE),
              menu_text(got == PAD_LAYOUT_XBOX ? UI_MENU_PAD_LAYOUT_XBOX : UI_MENU_PAD_LAYOUT_NINTENDO));
@@ -579,12 +579,12 @@ static const char *pad_layout_note(void) {
 static void tab_controls(float scale) {
     opt_begin("##controls", scale);
     static const UiTextId layout[] = {UI_MENU_PAD_LAYOUT_AUTO, UI_MENU_PAD_LAYOUT_NINTENDO, UI_MENU_PAD_LAYOUT_XBOX};
-    opt_choice("XCX_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
-    opt_toggle("XCX_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);
-    opt_slider("XCX_RUMBLE_STRENGTH", UI_MENU_RUMBLE_STRENGTH, 0, 300, UI_MENU_RUMBLE_STRENGTH_DESC, 10, "%.0f %%");
-    opt_slider("XCX_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");
-    opt_toggle("XCX_RUMBLE_TRIGGERS", UI_MENU_RUMBLE_TRIGGERS, UI_MENU_RUMBLE_TRIGGERS_DESC);
-    opt_slider("XCX_MOUSE_SENS", UI_MENU_MOUSE_SENS, 0, 10, UI_MENU_MOUSE_SENS_DESC, 0.1f, "%.1f");
+    opt_choice("XC3_PAD_LAYOUT", UI_MENU_PAD_LAYOUT, layout, 3, UI_MENU_PAD_LAYOUT_DESC, pad_layout_note());
+    opt_toggle("XC3_MOTION", UI_MENU_MOTION, UI_MENU_MOTION_DESC);
+    opt_slider("XC3_RUMBLE_STRENGTH", UI_MENU_RUMBLE_STRENGTH, 0, 300, UI_MENU_RUMBLE_STRENGTH_DESC, 10, "%.0f %%");
+    opt_slider("XC3_RUMBLE_CURVE", UI_MENU_RUMBLE_CURVE, 0.2f, 1.5f, UI_MENU_RUMBLE_CURVE_DESC, 0.05f, "%.2f");
+    opt_toggle("XC3_RUMBLE_TRIGGERS", UI_MENU_RUMBLE_TRIGGERS, UI_MENU_RUMBLE_TRIGGERS_DESC);
+    opt_slider("XC3_MOUSE_SENS", UI_MENU_MOUSE_SENS, 0, 10, UI_MENU_MOUSE_SENS_DESC, 0.1f, "%.1f");
     binds_rows(scale);
     opt_end();
     binds_after_page();
@@ -593,7 +593,7 @@ static void tab_controls(float scale) {
 static void tab_menu(float scale) {
     opt_begin("##menu", scale);
     static const UiTextId langs[] = {UI_MENU_MENU_LANG_AUTO, UI_MENU_LANGNAME_EN, UI_MENU_LANGNAME_RU};
-    opt_choice("XCX_MENU_LANG", UI_MENU_MENU_LANG, langs, 3, UI_MENU_MENU_LANG_DESC);
+    opt_choice("XC3_MENU_LANG", UI_MENU_MENU_LANG, langs, 3, UI_MENU_MENU_LANG_DESC);
     opt_end();
 }
 
@@ -630,7 +630,7 @@ static bool validation_layer_present(void) {
     return have != 0;
 }
 
-// Every setting the menu shows back to its default (the environment's keys stay), written to xcx.ini.
+// Every setting the menu shows back to its default (the environment's keys stay), written to xc3.ini.
 static void reset_all(void) {
     const char *keys[128];
     int n = 0;
@@ -657,60 +657,60 @@ static void tab_advanced(float scale) {
 
     opt_group(UI_MENU_GROUP_SCHED);
     static const UiTextId preempt[] = {UI_MENU_PREEMPT_OFF, UI_MENU_PREEMPT_ON, UI_MENU_PREEMPT_INHERIT};   // 0|1|2
-    opt_choice("XCX_ASYNC_PREEMPT", UI_MENU_ASYNC_PREEMPT, preempt, 3, UI_MENU_ASYNC_PREEMPT_DESC);
-    opt_toggle("XCX_REPLAY_ASYNC", UI_MENU_REPLAY_ASYNC, UI_MENU_REPLAY_ASYNC_DESC);
-    opt_toggle("XCX_FREE_CORES", UI_MENU_FREE_CORES, UI_MENU_FREE_CORES_DESC);
-    opt_toggle("XCX_TIMER_1MS", UI_MENU_TIMER_1MS, UI_MENU_TIMER_1MS_DESC);
+    opt_choice("XC3_ASYNC_PREEMPT", UI_MENU_ASYNC_PREEMPT, preempt, 3, UI_MENU_ASYNC_PREEMPT_DESC);
+    opt_toggle("XC3_REPLAY_ASYNC", UI_MENU_REPLAY_ASYNC, UI_MENU_REPLAY_ASYNC_DESC);
+    opt_toggle("XC3_FREE_CORES", UI_MENU_FREE_CORES, UI_MENU_FREE_CORES_DESC);
+    opt_toggle("XC3_TIMER_1MS", UI_MENU_TIMER_1MS, UI_MENU_TIMER_1MS_DESC);
 
     opt_group(UI_MENU_GROUP_SHADERS);
     static const UiTextId wait[] = {UI_MENU_PIPE_WAIT_DEFAULT, UI_MENU_PIPE_WAIT_DRAW};
-    opt_choice("XCX_PIPE_WAIT", UI_MENU_PIPE_WAIT, wait, 2, UI_MENU_PIPE_WAIT_DESC);
+    opt_choice("XC3_PIPE_WAIT", UI_MENU_PIPE_WAIT, wait, 2, UI_MENU_PIPE_WAIT_DESC);
     static const UiTextId skip[] = {UI_MENU_PIPE_SKIP_STRICT, UI_MENU_PIPE_SKIP_ANY, UI_MENU_PIPE_SKIP_FULLSCREEN};
-    opt_choice("XCX_PIPE_SKIP", UI_MENU_PIPE_SKIP, skip, 3, UI_MENU_PIPE_SKIP_DESC);
-    opt_toggle("XCX_LIB_PREBUILD", UI_MENU_LIB_PREBUILD, UI_MENU_LIB_PREBUILD_DESC);
-    row_threads("XCX_LIB_PREBUILD_THREADS", UI_MENU_LIB_PREBUILD_THREADS, UI_MENU_LIB_PREBUILD_THREADS_DESC);
-    opt_toggle("XCX_PIPE_PREBUILD", UI_MENU_PIPE_PREBUILD, UI_MENU_PIPE_PREBUILD_DESC);
-    row_threads("XCX_PREWARM_XLATE", UI_MENU_PREWARM_XLATE, UI_MENU_PREWARM_XLATE_DESC);
-    opt_toggle("XCX_GPL", UI_MENU_GPL, UI_MENU_GPL_DESC);
+    opt_choice("XC3_PIPE_SKIP", UI_MENU_PIPE_SKIP, skip, 3, UI_MENU_PIPE_SKIP_DESC);
+    opt_toggle("XC3_LIB_PREBUILD", UI_MENU_LIB_PREBUILD, UI_MENU_LIB_PREBUILD_DESC);
+    row_threads("XC3_LIB_PREBUILD_THREADS", UI_MENU_LIB_PREBUILD_THREADS, UI_MENU_LIB_PREBUILD_THREADS_DESC);
+    opt_toggle("XC3_PIPE_PREBUILD", UI_MENU_PIPE_PREBUILD, UI_MENU_PIPE_PREBUILD_DESC);
+    row_threads("XC3_PREWARM_XLATE", UI_MENU_PREWARM_XLATE, UI_MENU_PREWARM_XLATE_DESC);
+    opt_toggle("XC3_GPL", UI_MENU_GPL, UI_MENU_GPL_DESC);
 
     opt_group(UI_MENU_GROUP_TEXMEM);
     static const UiTextId astc[] = {UI_MENU_ASTC_AUTO, UI_MENU_ASTC_GPU, UI_MENU_ASTC_NATIVE, UI_MENU_ASTC_CPU};
-    opt_choice("XCX_ASTC", UI_MENU_ASTC, astc, 4, UI_MENU_ASTC_DESC);
+    opt_choice("XC3_ASTC", UI_MENU_ASTC, astc, 4, UI_MENU_ASTC_DESC);
     static const UiTextId mem[] = {UI_MENU_MEMORY_AUTO, UI_MENU_MEMORY_IMPORT, UI_MENU_MEMORY_MIRROR,
                                    UI_MENU_MEMORY_VERIFY};
-    opt_choice("XCX_MEMORY", UI_MENU_MEMORY, mem, 4, UI_MENU_MEMORY_DESC);
-    opt_toggle("XCX_TEX_ALIAS", UI_MENU_TEX_ALIAS, UI_MENU_TEX_ALIAS_DESC);
+    opt_choice("XC3_MEMORY", UI_MENU_MEMORY, mem, 4, UI_MENU_MEMORY_DESC);
+    opt_toggle("XC3_TEX_ALIAS", UI_MENU_TEX_ALIAS, UI_MENU_TEX_ALIAS_DESC);
 
     opt_group(UI_MENU_GROUP_FIXES);
-    opt_toggle("XCX_LOD_GUARD", UI_MENU_LOD_GUARD, UI_MENU_LOD_GUARD_DESC);
-    opt_toggle("XCX_FIX_C0", UI_MENU_FIX_C0, UI_MENU_FIX_C0_DESC);
-    opt_toggle("XCX_FIX_ZERO", UI_MENU_FIX_ZERO, UI_MENU_FIX_ZERO_DESC);
-    opt_toggle("XCX_BIND_SKIP", UI_MENU_BIND_SKIP, UI_MENU_BIND_SKIP_DESC);
-    opt_toggle("XCX_SHADER_MEMO", UI_MENU_SHADER_MEMO, UI_MENU_SHADER_MEMO_DESC);
-    opt_toggle("XCX_PIPE_MEMO", UI_MENU_PIPE_MEMO, UI_MENU_PIPE_MEMO_DESC);
-    opt_toggle("XCX_TEX_MEMO", UI_MENU_TEX_MEMO, UI_MENU_TEX_MEMO_DESC);
-    opt_toggle("XCX_DESC_TEMPLATE", UI_MENU_DESC_TEMPLATE, UI_MENU_DESC_TEMPLATE_DESC);
-    opt_toggle("XCX_PUSH_SKIP", UI_MENU_PUSH_SKIP, UI_MENU_PUSH_SKIP_DESC);
-    opt_slider("XCX_SPLIT_DRAWS", UI_MENU_SPLIT_DRAWS, 0, 1000, UI_MENU_SPLIT_DRAWS_DESC, 8, "%.0f");
+    opt_toggle("XC3_LOD_GUARD", UI_MENU_LOD_GUARD, UI_MENU_LOD_GUARD_DESC);
+    opt_toggle("XC3_FIX_C0", UI_MENU_FIX_C0, UI_MENU_FIX_C0_DESC);
+    opt_toggle("XC3_FIX_ZERO", UI_MENU_FIX_ZERO, UI_MENU_FIX_ZERO_DESC);
+    opt_toggle("XC3_BIND_SKIP", UI_MENU_BIND_SKIP, UI_MENU_BIND_SKIP_DESC);
+    opt_toggle("XC3_SHADER_MEMO", UI_MENU_SHADER_MEMO, UI_MENU_SHADER_MEMO_DESC);
+    opt_toggle("XC3_PIPE_MEMO", UI_MENU_PIPE_MEMO, UI_MENU_PIPE_MEMO_DESC);
+    opt_toggle("XC3_TEX_MEMO", UI_MENU_TEX_MEMO, UI_MENU_TEX_MEMO_DESC);
+    opt_toggle("XC3_DESC_TEMPLATE", UI_MENU_DESC_TEMPLATE, UI_MENU_DESC_TEMPLATE_DESC);
+    opt_toggle("XC3_PUSH_SKIP", UI_MENU_PUSH_SKIP, UI_MENU_PUSH_SKIP_DESC);
+    opt_slider("XC3_SPLIT_DRAWS", UI_MENU_SPLIT_DRAWS, 0, 1000, UI_MENU_SPLIT_DRAWS_DESC, 8, "%.0f");
 
     opt_group(UI_MENU_GROUP_VULKAN);
-    if (!validation_layer_present() && !cfg_bool("XCX_VK_VALIDATION")) opt_disable_next(UI_MENU_VK_VALIDATION_MISSING);
-    opt_toggle("XCX_VK_VALIDATION", UI_MENU_VK_VALIDATION, UI_MENU_VK_VALIDATION_DESC);
+    if (!validation_layer_present() && !cfg_bool("XC3_VK_VALIDATION")) opt_disable_next(UI_MENU_VK_VALIDATION_MISSING);
+    opt_toggle("XC3_VK_VALIDATION", UI_MENU_VK_VALIDATION, UI_MENU_VK_VALIDATION_DESC);
     static const UiTextId dyn[] = {UI_MENU_AUTO, UI_MENU_OFF, UI_MENU_ON};   // unset, 0, 1
-    opt_choice("XCX_VK_DYN_VERTEX", UI_MENU_VK_DYN_VERTEX, dyn, 3, UI_MENU_VK_DYN_VERTEX_DESC);
-    opt_choice("XCX_VK_DYN_A2C", UI_MENU_VK_DYN_A2C, dyn, 3, UI_MENU_VK_DYN_A2C_DESC);
-    opt_toggle("XCX_VK_SUBGROUP_PIN", UI_MENU_VK_SUBGROUP_PIN, UI_MENU_VK_SUBGROUP_PIN_DESC);
+    opt_choice("XC3_VK_DYN_VERTEX", UI_MENU_VK_DYN_VERTEX, dyn, 3, UI_MENU_VK_DYN_VERTEX_DESC);
+    opt_choice("XC3_VK_DYN_A2C", UI_MENU_VK_DYN_A2C, dyn, 3, UI_MENU_VK_DYN_A2C_DESC);
+    opt_toggle("XC3_VK_SUBGROUP_PIN", UI_MENU_VK_SUBGROUP_PIN, UI_MENU_VK_SUBGROUP_PIN_DESC);
 
     opt_group(UI_MENU_GROUP_DIAG);
-    row_set_or_not("XCX_TRACE", UI_MENU_TRACE, UI_MENU_TRACE_DESC, "perf");
-    opt_toggle("XCX_FLIGHT", UI_MENU_FLIGHT, UI_MENU_FLIGHT_DESC);
-    opt_slider("XCX_FLIGHT_SPIKE_MS", UI_MENU_FLIGHT_SPIKE_MS, 20, 1000, UI_MENU_FLIGHT_SPIKE_MS_DESC, 10, "%.0f");
+    row_set_or_not("XC3_TRACE", UI_MENU_TRACE, UI_MENU_TRACE_DESC, "perf");
+    opt_toggle("XC3_FLIGHT", UI_MENU_FLIGHT, UI_MENU_FLIGHT_DESC);
+    opt_slider("XC3_FLIGHT_SPIKE_MS", UI_MENU_FLIGHT_SPIKE_MS, 20, 1000, UI_MENU_FLIGHT_SPIKE_MS_DESC, 10, "%.0f");
     static char rec_path[600];   // the recording goes beside the log
     if (!rec_path[0]) {
         char dir[512];
         snprintf(rec_path, sizeof rec_path, "%s/input-record.txt", sysinfo_log_folder(dir, sizeof dir) ? dir : ".");
     }
-    row_set_or_not("XCX_INPUT_RECORD", UI_MENU_INPUT_RECORD, UI_MENU_INPUT_RECORD_DESC, rec_path);
+    row_set_or_not("XC3_INPUT_RECORD", UI_MENU_INPUT_RECORD, UI_MENU_INPUT_RECORD_DESC, rec_path);
     if (opt_button("##open_log", UI_MENU_OPEN_LOG, UI_MENU_OPEN_LOG_DESC, action_value(log_note, UI_MENU_OPEN_LOG))) {
         char dir[512];
         bool ok = sysinfo_log_folder(dir, sizeof dir) && plat_open_folder(dir);
@@ -836,15 +836,15 @@ static void layout_menu(uint32_t w, uint32_t h, float scale) {
     ImGui::End();
 }
 
-static int g_save_pending;   // a changed setting still waits for its write to xcx.ini (opt_save_tick)
+static int g_save_pending;   // a changed setting still waits for its write to xc3.ini (opt_save_tick)
 
-// ---- the performance overlay (XCX_PERF_OVERLAY), in the top right corner. "fps": the frame rate over the presents of
+// ---- the performance overlay (XC3_PERF_OVERLAY), in the top right corner. "fps": the frame rate over the presents of
 // the last half second. "full": a panel of perfmon.c's numbers, in the style of SavageWindRecomp's perf_overlay_draw
 // (menu.mm): the machine's load and temperatures, the frame rate and frame times with a graph, the render thread's waits.
 // Off, it costs a cfg_version load per present.
 static unsigned g_perf_ver = ~0u;
 static int g_perf_mode;                  // 0 off, 1 fps, 2 full
-static std::atomic<int> g_perf_save;     // F10 changed the mode: xcx.ini is written on the present thread
+static std::atomic<int> g_perf_save;     // F10 changed the mode: xc3.ini is written on the present thread
 static uint64_t g_perf_last_ns, g_perf_win_ns, g_perf_max_ns;
 static int g_perf_frames;
 static char g_perf_text[96];
@@ -853,7 +853,7 @@ static int perf_mode_of(const char *s) { return !strcmp(s, "full") ? 2 : !strcmp
 
 extern "C" void menu_perf_cycle(void) {
     static const char *const modes[] = {"off", "fps", "full"};
-    cfg_set("XCX_PERF_OVERLAY", modes[(perf_mode_of(cfg_value("XCX_PERF_OVERLAY")) + 1) % 3]);
+    cfg_set("XC3_PERF_OVERLAY", modes[(perf_mode_of(cfg_value("XC3_PERF_OVERLAY")) + 1) % 3]);
     g_perf_save.store(1);
 }
 
@@ -886,7 +886,7 @@ static void perf_gpu_once(const MenuTarget *t) {
 static void perf_tick(uint64_t now, const MenuTarget *t) {
     if (cfg_version() != g_perf_ver) {
         g_perf_ver = cfg_version();
-        int m = perf_mode_of(cfg_value("XCX_PERF_OVERLAY"));
+        int m = perf_mode_of(cfg_value("XC3_PERF_OVERLAY"));
         if (m != g_perf_mode) {
             g_perf_last_ns = 0, g_perf_text[0] = 0;
             if (m == 2) perf_gpu_once(t);
@@ -964,7 +964,7 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     snprintf(v[1], sizeof v[1], menu_text(UI_MENU_OV_FMT_SIZE), (unsigned)t->image_w, (unsigned)t->image_h);
     snprintf(v[2], sizeof v[2], menu_text(UI_MENU_OV_FMT_SCENE), scene[0], scene[1], scene[0] * 100.0 / out[0]);
     if (t->scaler == 2) {
-        int s = cfg_int("XCX_SHARPNESS");
+        int s = cfg_int("XC3_SHARPNESS");
         snprintf(v[3], sizeof v[3], menu_text(UI_MENU_OV_FMT_FSR), s < 0 ? 0 : s > 100 ? 100 : s);
     } else {
         snprintf(v[3], sizeof v[3], "%s", menu_text(t->scaler ? UI_MENU_OV_SCALE_BILINEAR : UI_MENU_OV_SCALE_NONE));
@@ -1090,7 +1090,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     perf_tick(plat_now_ns(), t);
     bool open = g_open.load(std::memory_order_relaxed);
     if (!open) {
-        if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to xcx.ini now
+        if (g_save_pending) g_save_pending = opt_save_tick(1);   // closed: the last change goes to xc3.ini now
         if (g_test.at && !g_test.opened && frame >= g_test.at) {
             g_test.opened = frame;
             g_test.page = 0;
@@ -1152,7 +1152,7 @@ extern "C" int menu_overlay_frame(uint64_t frame, const MenuTarget *t, const cha
     g_cost_ns += plat_now_ns() - t0;
     if (g_test.page >= 0 && frame >= g_test.opened + g_test.per_page * (uint64_t)(g_test.page + 1)) {
         static char path[512];   // this frame's image goes to a file; then the next tab, or the menu closes
-        const char *dir = cfg_get("XCX_MENU_TEST_DIR");
+        const char *dir = cfg_get("XC3_MENU_TEST_DIR");
         snprintf(path, sizeof path, "%s/menu-test-%llu-%d.png", dir ? dir : ".", (unsigned long long)frame, g_test.page);
         *shot = path;
         if (++g_test.page == TAB_COUNT) {

@@ -1,29 +1,24 @@
-"""Prepare the default variant of every game shader and the variants of the MacNativeGames shared shader list for a
-build, once, before play.
+"""Prepare the default variant of every game shader for a build, once, before play.
 
-The list (refs/MacNativeGames games/totk/assets/shader_list.tsv, MIT; docs/shader-list.md there) names shader variants
-players met: a shader key (sha256 of the NVN control section and code, as tools/shader_census.py names shaders) and
-the translator answers it was translated for. This tool reads the shaders from the extracted RomFS and ExeFS
-(tools/shader_census.py inventory), keeps the list's variants whose shader is in this game version, adds each shader's
-default variant (every texture slot a 2D texture, float vertex inputs and colour outputs, as MacNativeGames' seed
-translates every shader for its default bind state: prepare_shader_seed.py all_default), and writes them next to the
-build's xcx.exe in the record layouts of runtime/gfx_shader.c ("answers met in play"):
+tools/ard_shaders.py finds every shader in the game's .ard archives and the add-on content. Each shader gets its default
+variant: every texture slot a 2D texture, float vertex inputs and colour outputs. tools/data/shader-variants-xc3-2.2.1.bin
+adds the variants met in play (a record file of runtime/gfx_shader.c: code hashes and bind-state answers, no game code);
+the translation adds those it can derive from each shader (gfx_shader.c derive_variants); --list adds the variants of a
+MacNativeGames-format shader list. The result goes next to the build's
+xc3.exe in the record layouts of runtime/gfx_shader.c ("answers met in play"):
 
-    seed-programs.bin  "XCXSPRG": stage, length, c1 length, runtime code hash, control section, code, c1
-    seed-answers.bin   "XCXSANS": stage, code hash, input id (zero: the runtime computes it), answers, priority
+    seed-programs.bin  "XC3SPRG": stage, length, c1 length, runtime code hash, control section, code, c1
+    seed-answers.bin   "XC3SANS": stage, code hash, input id (zero: the runtime computes it), answers, priority
 
-Priority (the pad byte): 0 shaders the list's warm rows flag as title/menu (t), 1 other warm rows (S, C, R), 2 the
-rest; a default variant takes its shader's priority. Then it runs `xcx.exe --prepare-shaders`, which translates every record into the build's shader cache, writes
-shader-prepared.bin (one record per variant, in priority order) and builds every variant's stage library or compute
-pipeline once, so the GPU driver's own disk cache holds them (vk_pipeline.c "stage library prebuild"). The seed files
-can be deleted afterwards.
+Then it runs `xc3.exe --prepare-shaders`, which translates every record into shader-prepared.bin (one record per variant,
+in priority order) and builds every variant's stage library or compute pipeline once, so the GPU driver's own disk cache
+holds them (vk_pipeline.c "stage library prebuild"). The seed files are deleted after a successful run.
 
-Game-derived output stays in the build directory (ignored). The list is read at preparation time from tools/data/shader_list.tsv when that file exists (the installer archive
-bundles it; it stays out of the repository), else from refs/ through git with the rows its history dropped
-(tools/shader_list.py); nothing of it is copied into the repository. Needs Python 3.14 (compression.zstd), so run it in .venv-py314 or the embeddable 3.14:
+Game-derived output stays in the build directory (ignored). Needs Python 3.14 (compression.zstd), so run it in .venv-py314:
 
-    .venv-py314\\Scripts\\python tools\\prepare_shaders.py build\\v121 [--version v121] [--list <tsv>] [--no-run]
-                                                     [--romfs DIR --exefs DIR]   # instead of build\\extracted\\<version>
+    .venv-py314\\Scripts\\python tools\\prepare_shaders.py build\\upd [--root build\\extracted\\upd] [--list <tsv>] [--no-run]
+
+--root is a folder with romfs/ and aoc/, as an install folder or build/extracted/<version> has them.
 """
 import argparse
 import hashlib
@@ -36,13 +31,12 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-while not (ROOT / 'tools' / 'shader_census.py').is_file() and ROOT != ROOT.parent:
+while not (ROOT / 'tools' / 'ard_shaders.py').is_file() and ROOT != ROOT.parent:
     ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT / 'tools'))
-import shader_list  # noqa: E402
-from shader_census import inventory  # noqa: E402
+from ard_shaders import inventory  # noqa: E402
 
-STAGES = {'vs': 0, 'ps': 4, 'cs': 5}                       # runtime/gfx.h GFX_STAGE_*
+STAGES = {'vs': 0, 'gs': 3, 'ps': 4, 'cs': 5}              # runtime/gfx.h GFX_STAGE_*
 TEX = [None, '1d', '1darray', 'buffer', '2d', '2darray', '2dms', '2dmsarray', '3d', 'cube', 'cubearray']
 FMT = [None, 'R8Unorm', 'R8Snorm', 'R8Uint', 'R8Sint', 'R16Float', 'R16Unorm', 'R16Snorm', 'R16Uint', 'R16Sint',
        'R32Float', 'R32Uint', 'R32Sint', 'R8G8Unorm', 'R8G8Snorm', 'R8G8Uint', 'R8G8Sint', 'R16G16Float', 'R16G16Unorm',
@@ -54,19 +48,7 @@ TYPES = {'float': 0, 'sint': 1, 'uint': 2}
 DEFAULT = {'tex': {str(slot): '2d' for slot in range(32)}}   # answers outside a shader's use mask are dropped
 CONTROL = 0x880
 ANS_REC = 4 + 32 + 32 + 147 + 1
-
-
-BUNDLED_LIST = ROOT / 'tools' / 'data' / 'shader_list.tsv'   # the installer archive carries a copy (no git, no refs/)
-if not BUNDLED_LIST.is_file():
-    BUNDLED_LIST = ROOT / 'data' / 'shader_list.tsv'          # release folder layout (tools/make_release.py)
-
-
-def read_list(path):
-    if path:
-        return Path(path).read_text(encoding='utf-8')
-    if BUNDLED_LIST.is_file():
-        return BUNDLED_LIST.read_text(encoding='utf-8')
-    return shader_list.history(ROOT / 'refs' / 'MacNativeGames')
+PLAYED = ROOT / 'tools' / 'data' / 'shader-variants-xc3-2.2.1.bin'
 
 
 def parse_list(text):
@@ -107,6 +89,8 @@ def answers(deps, stage, control):
     for idx, t in deps.get('fout', {}).items():
         fout[int(idx)] = TYPES[t]
     local = [0, 0, 0]   # vk_exec_draw.c answers_for: zero for graphics stages (they are in the input id)
+    if stage == 3:      # geometry: the input primitive, GFX_TOPOLOGY_TRIANGLES unless a played variant says otherwise
+        local = [4, 0, 0]
     if stage == 5:      # compute: the control section's local size, 0 read as 1
         local = [v or 1 for v in struct.unpack_from('<III', control, 0x748)]
     packed = bytes(tex + img + fmt + attr + fout) + struct.pack('<HHHIB', *local, 0, 0)
@@ -122,17 +106,16 @@ def code_hash(stage, control, code, length, c1):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument('build', type=Path, help='build directory holding xcx.exe (build\\v121)')
-    ap.add_argument('--version', default='v121', help='build/extracted/<version>')
-    ap.add_argument('--romfs', type=Path, help='RomFS directory (default build/extracted/<version>/romfs)')
-    ap.add_argument('--exefs', type=Path, help='ExeFS directory (default build/extracted/<version>/exefs)')
-    ap.add_argument('--list', help='a shader_list.tsv instead of tools/data/shader_list.tsv or refs/MacNativeGames')
+    ap.add_argument('build', type=Path, help='build directory holding xc3.exe (build\\v121)')
+    ap.add_argument('--root', type=Path, help='folder with romfs/ and aoc/ (default build/extracted/upd)')
+    ap.add_argument('--list', type=Path, help='a shader_list.tsv of variants to prepare as well')
     ap.add_argument('--no-run', action='store_true', help='write the seed files only')
     a = ap.parse_args()
     t0 = time.monotonic()
-    variants, prio = parse_list(read_list(a.list))
-    extracted = ROOT / 'build' / 'extracted' / a.version
-    shaders, _ = inventory(a.romfs or extracted / 'romfs', a.exefs or extracted / 'exefs')
+    variants, prio = parse_list(a.list.read_text(encoding='utf-8')) if a.list else ([], {})
+    shaders, problems = inventory(a.root or ROOT / 'build' / 'extracted' / 'upd')
+    if problems['undecoded'] or problems['damaged']:
+        print(f'archive problems: {problems}', flush=True)
     t1 = time.monotonic()
     progs, recs, seen, skipped = {}, [], set(), {'not in this version': 0, 'stage': 0}
     listed = len(variants)
@@ -160,25 +143,38 @@ def main():
         rec = struct.pack('<I', stage) + h + bytes(32) + packed + bytes([prio.get(key, 2)])
         assert len(rec) == ANS_REC
         recs.append((prio.get(key, 2), rec))
+    known = {h for h, _ in progs.values()}
+    played = PLAYED.read_bytes() if PLAYED.is_file() else b''
+    n_played = 0
+    for i in range(16, len(played) - ANS_REC + 1, ANS_REC):
+        r = played[i:i + ANS_REC]
+        h, packed = r[4:36], r[68:215]
+        if h in known and (h, packed) not in seen:
+            seen.add((h, packed))
+            recs.append((0, r[:4] + h + bytes(32) + packed + bytes(1)))
+            n_played += 1
     recs.sort(key=lambda r: r[0])   # stable: list order within a priority
     out = a.build.resolve()
     with open(out / 'seed-programs.bin', 'wb') as f:
-        f.write(b'XCXSPRG' + struct.pack('<II', 1, 0))
+        f.write(b'XC3SPRG\0' + struct.pack('<II', 1, 0))
         for _, body in progs.values():
             f.write(body)
     with open(out / 'seed-answers.bin', 'wb') as f:
-        f.write(b'XCXSANS' + struct.pack('<II', 1, ANS_REC))
+        f.write(b'XC3SANS\0' + struct.pack('<II', 1, ANS_REC))
         for _, rec in recs:
             f.write(rec)
     by = [sum(1 for p, _ in recs if p == i) for i in range(3)]
-    print(f'{listed} listed variants and {len(shaders)} default ones: {len(recs)} of {len(progs)} shaders in {a.version} '
-          f'(priority t {by[0]}, warm {by[1]}, rest {by[2]}), skipped {skipped}; inventory {t1 - t0:.1f} s, '
+    print(f'{listed} listed variants and {len(shaders)} default ones: {len(recs)} of {len(progs)} shaders '
+          f'(priority t {by[0]}, warm {by[1]}, rest {by[2]}), {n_played} met in play, skipped {skipped}; inventory {t1 - t0:.1f} s, '
           f'seed written in {time.monotonic() - t0:.1f} s', flush=True)
     if a.no_run:
         return 0
-    exe = out / ('xcx.exe' if os.name == 'nt' else 'xcx')
+    exe = out / ('xc3.exe' if os.name == 'nt' else 'xc3')
     r = subprocess.run([str(exe), '--prepare-shaders'], cwd=str(out))
-    print(f'xcx.exe --prepare-shaders: rc={r.returncode}; total {time.monotonic() - t0:.1f} s')
+    print(f'xc3.exe --prepare-shaders: rc={r.returncode}; total {time.monotonic() - t0:.1f} s')
+    if not r.returncode:
+        (out / 'seed-programs.bin').unlink()
+        (out / 'seed-answers.bin').unlink()
     return r.returncode
 
 

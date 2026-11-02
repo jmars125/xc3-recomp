@@ -1,11 +1,11 @@
 // Adapted from MacNativeGames games/totk/runtime/input.c and hid_feedback.c @ b75be8cf (MIT, Copyright (c) 2026
 // MacNativeGames contributors).
 // nn::hid overrides: one connected controller fed by input_poll (gamepad and keyboard,
-// runtime/input_win.c; nothing pressed with XCX_INPUT=none). Docked (default) it is a full-key controller as player 1 (id 0, style bit 0); with
-// XCX_OPERATION_MODE=handheld it is the handheld controller (id 0x20, style bit 1) and player 1 is not connected,
+// runtime/input_win.c; nothing pressed with XC3_INPUT=none). Docked (default) it is a full-key controller as player 1 (id 0, style bit 0); with
+// XC3_OPERATION_MODE=handheld it is the handheld controller (id 0x20, style bit 1) and player 1 is not connected,
 // which is the controller the game reads in that mode. Mouse and keyboard report no input. The controller has two
-// vibration devices (left, right) played on the gamepad's motors (XCX_RUMBLE=0: none) and a six-axis sensor fed by
-// the gamepad's gyro and accelerometer (XCX_MOTION=0, live: reads at rest). State layouts follow libnx HID.
+// vibration devices (left, right) played on the gamepad's motors (XC3_RUMBLE=0: none) and a six-axis sensor fed by
+// the gamepad's gyro and accelerometer (XC3_MOTION=0, live: reads at rest). State layouts follow libnx HID.
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -101,7 +101,7 @@ static void ov_states_full_key(Cpu *c) { npad_states(c, STYLE_FULL_KEY); }
 static void ov_states_handheld(Cpu *c) { npad_states(c, STYLE_HANDHELD); }
 static void ov_states_joycon(Cpu *c) { npad_states(c, 0); }
 
-// XCX. void GetNpadState(<State> *out, const NpadIdType &id): GetNpadStates with a count of one.
+// XC3. void GetNpadState(<State> *out, const NpadIdType &id): GetNpadStates with a count of one.
 static void npad_state(Cpu *c, uint32_t want) {
     Cpu one = *c;
     one.x[2] = c->x[1];
@@ -112,7 +112,7 @@ static void ov_state_full_key(Cpu *c) { npad_state(c, STYLE_FULL_KEY); }
 static void ov_state_handheld(Cpu *c) { npad_state(c, STYLE_HANDHELD); }
 static void ov_state_joycon(Cpu *c) { npad_state(c, 0); }
 
-// XCX: the touch screen. The host has none, so every sample holds no touches.
+// XC3: the touch screen. The host has none, so every sample holds no touches.
 // void InitializeTouchScreen()
 static void ov_initialize_touch(Cpu *c) { (void)c; }
 // int GetTouchScreenStates<16>(TouchScreenState<16> *out, int count): the newest sample only. A state is the
@@ -213,7 +213,7 @@ static void once(volatile int32_t *flag, const char *fmt, uint32_t v) {
     if (!plat_xchg32(flag, 1)) rt_log(fmt, v);
 }
 
-// XCX_RUMBLE_STRENGTH (percent, 0..300, default 130; 0 = off) and XCX_RUMBLE_CURVE (exponent on the amplitude, 0.2..1.5,
+// XC3_RUMBLE_STRENGTH (percent, 0..300, default 130; 0 = off) and XC3_RUMBLE_CURVE (exponent on the amplitude, 0.2..1.5,
 // default 0.6). HD rumble is strong at low amplitude, an ERM motor hardly turns there, so weak values are lifted by the
 // curve (0.1 -> 0.25) and the strength scales the result (saturating at 65535; 0.66 and up reach full drive at 130 %).
 // Both are live settings (the menu): read again whenever cfg_version changes.
@@ -228,8 +228,8 @@ static void rumble_cfg(void) {
     unsigned v = cfg_version();
     if (v == rumble_cfg_seen) return;
     rumble_cfg_seen = v;
-    rumble_strength = cfg_float("XCX_RUMBLE_STRENGTH", 0, 300) / 100;
-    rumble_curve = cfg_float("XCX_RUMBLE_CURVE", 0.2f, 1.5f);
+    rumble_strength = cfg_float("XC3_RUMBLE_STRENGTH", 0, 300) / 100;
+    rumble_curve = cfg_float("XC3_RUMBLE_CURVE", 0.2f, 1.5f);
     int trig = input_rumble_triggers_enabled();
     if (!plat_xchg32(&rumble_cfg_logged, 1))
         rt_log("hid: rumble strength %.0f%%, curve %.2f, triggers %s", rumble_strength * 100, rumble_curve, trig ? "on" : "off");
@@ -247,7 +247,7 @@ static uint32_t handle_id(Cpu *c, const char *fn) {
 }
 
 // int GetVibrationDeviceHandles(VibrationDeviceHandle *out, int count, const NpadIdType &id, NpadStyleSet style):
-// utility::GetVibrationDeviceHandles' table, the first style bit in its order; none with XCX_RUMBLE=0.
+// utility::GetVibrationDeviceHandles' table, the first style bit in its order; none with XC3_RUMBLE=0.
 static void ov_vibration_handles(Cpu *c) {
     uint32_t *out = arg_p(c, 0), style = (uint32_t)arg_x(c, 3);
     int max = (int)arg_x(c, 1);
@@ -257,7 +257,7 @@ static void ov_vibration_handles(Cpu *c) {
     static volatile int32_t asked;
     rumble_cfg();
     // strength 0 keeps the devices (silent), so the menu can turn rumble up again
-    if (env_zero("XCX_RUMBLE")) { once(&asked, "hid: no vibration devices (XCX_RUMBLE=%u)", 0); ret_x(c, 0); return; }
+    if (env_zero("XC3_RUMBLE")) { once(&asked, "hid: no vibration devices (XC3_RUMBLE=%u)", 0); ret_x(c, 0); return; }
     static const struct { uint8_t bit, n; uint32_t base; } t[] = {
         {0, 2, 0x3}, {1, 2, 0x4}, {2, 2, 0x5}, {3, 1, 0x6}, {4, 1, 0x10007}, {5, 1, 0x8}, {10, 1, 0xd}, {8, 2, 0x4},
         {30, 2, 0x21}, {29, 2, 0x20}};
@@ -272,7 +272,7 @@ static void ov_vibration_handles(Cpu *c) {
 }
 
 // int GetSixAxisSensorHandles(SixAxisSensorHandle *out, int count, const NpadIdType &id, NpadStyleSet style):
-// utility::GetSixAxisSensorHandle's order (one sensor per style, two for the Joy-Con pair). Also with XCX_MOTION=0: the
+// utility::GetSixAxisSensorHandle's order (one sensor per style, two for the Joy-Con pair). Also with XC3_MOTION=0: the
 // sensor then reads at rest (six_fill), so the menu can turn motion on while the game runs.
 static void ov_six_axis_handles(Cpu *c) {
     uint32_t *out = arg_p(c, 0), style = (uint32_t)arg_x(c, 3);
@@ -470,7 +470,7 @@ static void ov_six_stop(Cpu *c) {
 }
 
 // All max entries, newest first: the game reads all 16 it asks for and ignores the count (main+0x2a268e0). A short
-// history repeats its oldest sample. No motion (sensor not started, no gamepad, one without a gyro, XCX_MOTION=0):
+// history repeats its oldest sample. No motion (sensor not started, no gamepad, one without a gyro, XC3_MOTION=0):
 // a controller lying still, not marked connected.
 static int six_fill(MotionState *s, int max, const uint32_t *h, const char *fn) {
     if (max <= 0) return 0;

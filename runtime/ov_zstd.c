@@ -1,4 +1,4 @@
-// The game's zstd decoder on the host's libzstd. Most RomFS files of XCX 1.4.3 are zstd frames, many with a
+// The game's zstd decoder on the host's libzstd. Most RomFS files of XC3 1.4.3 are zstd frames, many with a
 // dictionary from Pack/ZsDic.pack.zs; the decoder is BSD zstd linked into main. The patch set "zstd"
 // (recomp/patches-v143.txt) sends every call of ZSTD_decompressMultiFrame (main+0x3a1f0) and of ZSTD_decompress_usingDDict
 // (main+0x3a1e0) to the two host functions below, on the patch page. Lifted, the decoder ran its literal and match
@@ -9,7 +9,7 @@
 // - A guest ZSTD_DDict (zstd's struct: dictBuffer, dictContent, dictSize first) becomes a host ZSTD_DDict made from a
 //   copy of its content, cached by guest address, content address, size and a fingerprint of the content.
 // - Inputs of at least AWAY_BYTES give the virtual core up while they decode (other guest threads run on it).
-// XCX_ZSTD_NATIVE=0 keeps the guest decoder (the patch set switch); XCX_ZSTD_CHECK=1 decodes each call both ways,
+// XC3_ZSTD_NATIVE=0 keeps the guest decoder (the patch set switch); XC3_ZSTD_CHECK=1 decodes each call both ways,
 // keeps the guest's result and logs every call where the two differ.
 #include <stdint.h>
 #include <stdlib.h>
@@ -52,7 +52,7 @@ static struct {
 
 static int check_mode(void) {
     static int v = -1;
-    if (v < 0) v = cfg_bool("XCX_ZSTD_CHECK");
+    if (v < 0) v = cfg_bool("XC3_ZSTD_CHECK");
     return v;
 }
 

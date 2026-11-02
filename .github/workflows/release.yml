@@ -33,7 +33,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     env:
-      PACKAGE: XCX-Setup-${{ needs.version.outputs.version }}-windows.zip
+      PACKAGE: XC3-Setup-${{ needs.version.outputs.version }}-windows.zip
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -53,7 +53,7 @@ jobs:
         run: C:\msys64\usr\bin\bash.exe -lc "pacman -Sy --noconfirm --needed make mingw-w64-ucrt-x86_64-gcc"
       - run: python tools/build_hactool.py
       - run: python tools/build_xlate.py
-      - run: python tools/make_release.py --out build/release/XCX-Setup --zip build/release/${{ env.PACKAGE }}
+      - run: python tools/make_release.py --out build/release/XC3-Setup --zip build/release/${{ env.PACKAGE }}
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PACKAGE }}
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      PACKAGE: XCX-Setup-${{ needs.version.outputs.version }}-linux.AppImage
+      PACKAGE: XC3-Setup-${{ needs.version.outputs.version }}-linux.AppImage
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -84,7 +84,7 @@ jobs:
       - uses: ./.github/actions/software-vulkan
       - run: sudo apt-get install -y make pkg-config
       - run: >-
-          xvfb-run -a python tools/make_release_linux.py --out build/release/XCX-Setup-linux
+          xvfb-run -a python tools/make_release_linux.py --out build/release/XC3-Setup-linux
           --appimage build/release/${{ env.PACKAGE }}
       - uses: actions/upload-artifact@v7
         with:
@@ -101,10 +101,10 @@ jobs:
       matrix:
         include:
           - runner: windows-2025
-            package: XCX-Setup-${{ needs.version.outputs.version }}-windows.zip
+            package: XC3-Setup-${{ needs.version.outputs.version }}-windows.zip
             wrapper: ""
           - runner: ubuntu-24.04
-            package: XCX-Setup-${{ needs.version.outputs.version }}-linux.AppImage
+            package: XC3-Setup-${{ needs.version.outputs.version }}-linux.AppImage
             wrapper: xvfb-run -a
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -136,4 +136,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: >-
           gh release create "$GITHUB_REF_NAME" dist/* --draft --verify-tag --generate-notes
-          --title "XCX Recomp ${{ needs.version.outputs.version }}"
+          --title "XC3 Recomp ${{ needs.version.outputs.version }}"

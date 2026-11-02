@@ -1,15 +1,17 @@
-// XCX Vulkan adaptation of MacNativeGames games/totk/tools/xcx_xlate/Program.cs (MIT, see LICENSE; MNG commit b75be8cf).
+// XC3 Vulkan adaptation of MacNativeGames games/totk/tools/xc3_xlate/Program.cs (MIT, see LICENSE; MNG commit b75be8cf).
 // Provenance: that file is based on D2R Mobile dm/gfx/tools/dmsh_xlate/Program.cs. Changes here: SPIR-V for Vulkan is the final
 // output (no MSL service, no VertexCounterLowering, no NEAR_IS_MINUS_W rewrite), depth clip control reported as supported,
 // non-constant texture offsets reported as unsupported, --disasm dropped.
 // Protocol (stdout carries replies only; diagnostics go to stderr):
-//   xcx_xlate --serve              one request per stdin line: {"job": {...}, "out": "<dir>"}; one reply line per request:
+//   xc3_xlate --serve              one request per stdin line: {"job": {...}, "out": "<dir>"}; one reply line per request:
 //                                   "ok <key>" or "fail <key> <message>"; a malformed line gets "fail ? <message>" and the loop continues.
-//   xcx_xlate <jobs.json> <outdir> batch mode: a JSON array of jobs, prints a summary, exit 1 if any failed.
-//   job: { "key", "stage": "vs|ps|cs", "code": path (graphics = 0x50-byte SPH + instructions, compute = instructions), "c1": hex,
+//   xc3_xlate <jobs.json> <outdir> batch mode: a JSON array of jobs, prints a summary, exit 1 if any failed.
+//   job: { "key", "stage": "vs|gs|ps|cs", "code": path (graphics = 0x50-byte SPH + instructions, compute = instructions), "c1": hex,
 //          "tex": {slot: type}, "img": {slot: {type, fmt}}, "attr": {loc: float|sint|uint}, "fout": {idx: float|sint|uint},
 //          "local": [x, y, z], "shared": bytes, "debug": bool, "reduced": bool, "softfloat64": bool,
-//          "sbuf_align": int, "subgroup": int }
+//          "sbuf_align": int, "subgroup": int,
+//          "topology": "points|lines|lines_adjacency|triangles|triangles_adjacency" (gs: what the draws feed it),
+//          "tf": [{"stride": bytes, "words": [attribute word offset, one per captured word]} per feedback buffer] }
 //   Output: <out>/<key>.spv and <out>/<key>.res.json (bindings, queried slots, notes).
 using Ryujinx.Common.Memory;
 using Ryujinx.Graphics.Shader;
@@ -92,11 +94,25 @@ static class SwshXlate
             // "early_fragment_tests": the fragment shader's NVN control byte +0x718 (the driver's early-Z-force, Ryujinx's
             // EarlyZForce); the SPIR-V then declares EarlyFragmentTests (MacNativeGames ae8f4f4).
             bool earlyZ = _job["early_fragment_tests"] is JsonValue ez && ez.TryGetValue<bool>(out bool eb) && eb;
-            return new GpuGraphicsState(earlyZ, InputTopology.Triangles, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
+            InputTopology topology = (string)_job["topology"] switch
+            {
+                "points" => InputTopology.Points, "lines" => InputTopology.Lines, "lines_adjacency" => InputTopology.LinesAdjacency,
+                "triangles_adjacency" => InputTopology.TrianglesAdjacency, _ => InputTopology.Triangles,
+            };
+            return new GpuGraphicsState(earlyZ, topology, false, TessPatchType.Triangles, TessSpacing.EqualSpacing,
                 false, false, false, depthMinusW, false, 1f, AlphaTestOp.Always, 0f, attr, false, fout, false,
                 false /* 不做 Y 取反 | no Y flip */, true /* 原点左上 | origin upper-left */, false);
         }
         public bool QueryHostSupportsDepthClipControl() => true;
+        // Passthrough and viewport mask outputs are NVIDIA extensions. Without them a passthrough geometry shader is written
+        // out as an ordinary one (EmitterContext.PrepareForReturn).
+        public bool QueryHostSupportsGeometryShaderPassthrough() => false;
+        public bool QueryHostSupportsViewportMask() => false;
+        JsonObject Feedback(int buffer) => _job["tf"] is JsonArray a && buffer < a.Count ? a[buffer] as JsonObject : null;
+        public bool QueryTransformFeedbackEnabled() => _job["tf"] is JsonArray;
+        public int QueryTransformFeedbackStride(int bufferIndex) => Feedback(bufferIndex) is JsonObject o ? (int)o["stride"] : 0;
+        public ReadOnlySpan<byte> QueryTransformFeedbackVaryingLocations(int bufferIndex) =>
+            Feedback(bufferIndex) is JsonObject o ? o["words"].AsArray().Select(w => (byte)(int)w).ToArray() : Array.Empty<byte>();
         // Vulkan: the ConstOffset / ConstOffsets image operands Ryujinx emits must be constants. A TLD4.PTP whose offsets
         // come from registers (agl_technique_pfx compute b940aa86, dfe7662f) otherwise becomes an OpConstantComposite over
         // computed ids, which spirv-val rejects; false makes TexturePass emulate only non-constant offsets.

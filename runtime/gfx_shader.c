@@ -1,7 +1,7 @@
 // Shader service client: turns an NVN program (control section, code, c1 constants and the
-// translator's answers) into SPIR-V plus reflection through `xcx_xlate.exe --serve` children, started lazily with
-// pipes and kept for the life of the process (a pool: XCX_XLATE_PROCS at run time, more for the boot prewarm).
-// Results are cached in memory and on disk (shader-cache/<key>.spv and <key>.res.json next to xcx.exe), so a shader
+// translator's answers) into SPIR-V plus reflection through `xc3_xlate.exe --serve` children, started lazily with
+// pipes and kept for the life of the process (a pool: XC3_XLATE_PROCS at run time, more for the boot prewarm).
+// Results are cached in memory and on disk (shader-cache/<key>.spv and <key>.res.json next to xc3.exe), so a shader
 // is translated once per machine and translator.
 //
 // Keys. The code hash is sha256 over stage (u32), the 0x880-byte control section, code_size (u64), the code, the c1
@@ -13,8 +13,8 @@
 // key is sha256 over "TKSK", KEY_VERSION, the translator identity and the input id. A code hash without a known mask is
 // translated under a provisional key ("TKSP", full answers); its files are renamed to the cache key and the mask stored.
 //
-// Translator identity: build/xlate/xcx_xlate.id, sha256 hex that tools/build_xlate.py writes over the sources it
-// builds from (Program.cs, the csproj, the patches, the vendor tree); without it the sha256 of the exe. XCX_XLATE_ID
+// Translator identity: build/xlate/xc3_xlate.id, sha256 hex that tools/build_xlate.py writes over the sources it
+// builds from (Program.cs, the csproj, the patches, the vendor tree); without it the sha256 of the exe. XC3_XLATE_ID
 // (64 hex digits) overrides it. A translator change therefore changes every cache key without a hand-made KEY_VERSION
 // bump; KEY_VERSION is for changes on this side (key layout, how the output is used).
 //
@@ -28,7 +28,7 @@
 //
 // Provenance: the c2 handle ranges of handle_slot are those of MacNativeGames' totk_xlate Service.cs (MIT).
 // The code layout the translator sees (graphics: code[0x30..], compute: code[0..]; c1 = code[c1..length]
-// with c1 and length at control+0x700) follows tools/shader_census.py, itself MacNativeGames' xcx shader tooling (MIT).
+// with c1 and length at control+0x700) follows tools/shader_census.py, itself MacNativeGames' xc3 shader tooling (MIT).
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,12 +158,12 @@ static int hex32(const char *h, uint8_t out[32]) {        // 64 hex digits, then
     return 1;
 }
 
-// XCX_XLATE_ID (64 hex digits, or any other text, which is hashed), else <translator>.id next to the exe
+// XC3_XLATE_ID (64 hex digits, or any other text, which is hashed), else <translator>.id next to the exe
 // (tools/build_xlate.py), else the sha256 of the exe.
 static void xlate_identity(void) {
     char text[256] = "";
-    const char *how = "XCX_XLATE_ID";
-    const char *id_env = cfg_get("XCX_XLATE_ID");
+    const char *how = "XC3_XLATE_ID";
+    const char *id_env = cfg_get("XC3_XLATE_ID");
     if (id_env && *id_env && strlen(id_env) < sizeof text) {
         strcpy(text, id_env);
         if (!hex32(text, xlate_id)) rt_sha256(text, strlen(text), xlate_id);
@@ -175,10 +175,10 @@ static void xlate_identity(void) {
         strcat(p, ".id");
         uint64_t size = 0;
         char *f = (char *)read_file(p, &size);
-        how = "xcx_xlate.id";
+        how = "xc3_xlate.id";
         if (!f || !hex32(f, xlate_id)) {
             uint8_t *exe = read_file(xlate_exe, &size);
-            how = exe ? "sha256 of the exe; tools/build_xlate.py writes xcx_xlate.id" : "none: no translator";
+            how = exe ? "sha256 of the exe; tools/build_xlate.py writes xc3_xlate.id" : "none: no translator";
             if (exe) rt_sha256(exe, (size_t)size, xlate_id);
             free(exe);
         }
@@ -188,8 +188,8 @@ static void xlate_identity(void) {
            xlate_id[3], xlate_id[4], xlate_id[5], xlate_id[6], xlate_id[7], how);
 }
 
-// The repository root is the nearest parent of xcx.exe that holds build/xlate/xcx_xlate.exe. The shader cache lives
-// next to xcx.exe, so every build dir has its own (as the pipeline cache, vk_pipeline.c cache_path_init).
+// The repository root is the nearest parent of xc3.exe that holds build/xlate/xc3_xlate.exe. The shader cache lives
+// next to xc3.exe, so every build dir has its own (as the pipeline cache, vk_pipeline.c cache_path_init).
 static void use_preload_start(void);
 
 static void init_paths(void *param) {
@@ -201,19 +201,19 @@ static void init_paths(void *param) {
         for (char *cut = plat_last_sep(exe); cut; cut = plat_last_sep(exe)) {
             *cut = 0;
             char probe[PATH_CAP + 32];
-            snprintf(probe, sizeof probe, "%s/build/xlate/xcx_xlate" PLAT_EXE_SUFFIX, exe);
+            snprintf(probe, sizeof probe, "%s/build/xlate/xc3_xlate" PLAT_EXE_SUFFIX, exe);
             if (file_exists(probe)) {
                 strcpy(root, exe);
                 break;
             }
         }
     }
-    const char *xlate_cfg = cfg_get("XCX_XLATE"), *cache_cfg = cfg_get("XCX_SHADER_CACHE");
-    char beside[PATH_CAP + 32];   // a packaged folder (tools/package_build.py) keeps the translator next to xcx.exe
-    if (exe_dir[0]) snprintf(beside, sizeof beside, "%s/xcx_xlate" PLAT_EXE_SUFFIX, exe_dir);
+    const char *xlate_cfg = cfg_get("XC3_XLATE"), *cache_cfg = cfg_get("XC3_SHADER_CACHE");
+    char beside[PATH_CAP + 32];   // a packaged folder (tools/package_build.py) keeps the translator next to xc3.exe
+    if (exe_dir[0]) snprintf(beside, sizeof beside, "%s/xc3_xlate" PLAT_EXE_SUFFIX, exe_dir);
     if (xlate_cfg && *xlate_cfg && strlen(xlate_cfg) < sizeof xlate_exe) strcpy(xlate_exe, xlate_cfg);
     else if (exe_dir[0] && file_exists(beside)) strcpy(xlate_exe, beside);
-    else if (root[0]) snprintf(xlate_exe, sizeof xlate_exe, "%s/build/xlate/xcx_xlate" PLAT_EXE_SUFFIX, root);
+    else if (root[0]) snprintf(xlate_exe, sizeof xlate_exe, "%s/build/xlate/xc3_xlate" PLAT_EXE_SUFFIX, root);
     if (cache_cfg && *cache_cfg && strlen(cache_cfg) < sizeof cache_dir) strcpy(cache_dir, cache_cfg);
     else if (exe_dir[0]) snprintf(cache_dir, sizeof cache_dir, "%s/shader-cache", exe_dir);
     xlate_identity();
@@ -252,7 +252,7 @@ static void child_stop(Svc *v) {
 static int child_start(Svc *v) {
     paths();
     if (!xlate_exe[0] || !file_exists(xlate_exe)) {
-        rt_log("gfx_shader: translator not found (%s); set XCX_XLATE", xlate_exe[0] ? xlate_exe : "<none>");
+        rt_log("gfx_shader: translator not found (%s); set XC3_XLATE", xlate_exe[0] ? xlate_exe : "<none>");
         return 0;
     }
     uint32_t err = 0;
@@ -291,17 +291,17 @@ static int child_exchange_raw(Svc *v, const char *line, char *reply, size_t repl
 }
 
 static int child_exchange(Svc *v, const char *line, char *reply, size_t reply_size) {
-    uint64_t p0 = perf_begin();   // XCX_TRACE=perf: render-thread time spent translating
+    uint64_t p0 = perf_begin();   // XC3_TRACE=perf: render-thread time spent translating
     int ok = child_exchange_raw(v, line, reply, reply_size);
     perf_end(PERF_XLATE, p0);
     return ok;
 }
 
-// Children allowed at run time: XCX_XLATE_PROCS, default 2.
+// Children allowed at run time: XC3_XLATE_PROCS, default 2.
 static int svc_runtime_limit(void) {
     static volatile int32_t n;
     if (!n) {
-        const char *e = cfg_get("XCX_XLATE_PROCS");
+        const char *e = cfg_get("XC3_XLATE_PROCS");
         int v = e && *e ? atoi(e) : 2;
         plat_xchg32(&n, v < 1 ? 1 : v > MAX_SVC ? MAX_SVC : v);
     }
@@ -454,7 +454,8 @@ static int reflection_valid(const char *res, uint64_t size) {
     const char *st = strstr(b, "\"stage\"");
     if (!st) return 0;
     st = strchr(st + 7, '"');
-    return st && (!strncmp(st, "\"vs\"", 4) || !strncmp(st, "\"ps\"", 4) || !strncmp(st, "\"cs\"", 4));
+    return st && (!strncmp(st, "\"vs\"", 4) || !strncmp(st, "\"gs\"", 4) || !strncmp(st, "\"ps\"", 4) ||
+                  !strncmp(st, "\"cs\"", 4));
 }
 
 // Every instruction after the header has a word count and the last one ends at the module's end: a module with
@@ -571,7 +572,7 @@ static int fmt_code(const char *name) {
     return 0;
 }
 
-// c2 slot of a texture or image handle (Service.cs of MNG's xcx_xlate: combined handles at 0x20, 32 slots; images at
+// c2 slot of a texture or image handle (Service.cs of MNG's xc3_xlate: combined handles at 0x20, 32 slots; images at
 // 0x120; separate textures at 0x168), -1 outside those ranges or for a handle in another constant buffer.
 static int handle_slot(int kind, int cbuf_slot, int handle, int separate) {
     if (cbuf_slot >= 0 && cbuf_slot != 2) return -1;
@@ -663,18 +664,148 @@ out:
     free(loc), free(packed), free(ttype), free(tcomps), free(pointee);
 }
 
+// The translator declares every sampled image float, and a guest shader that reads an integer texture (the stencil plane
+// of a depth texture, R32Uint) takes the raw bits of the register: floatBitsToInt(texelFetch(...).x). On Maxwell that is
+// the integer; through a float sampler in Vulkan it is undefined, and NVIDIA's driver gives no stencil bits, which leaves
+// XC3's lighting masks empty and the scene black. So a sampler with a texel that reaches a bitcast to an integer type is
+// declared uint here, and each of its texels is cast back to the float vector the shader expects. Done in memory on
+// every module, translated or read from the cache, so the disk cache and its keys stay as they are.
+enum { SPV_OP_VECTOR_SHUFFLE = 79, SPV_OP_COMPOSITE_EXTRACT = 81, SPV_OP_COPY_OBJECT = 83, SPV_OP_LOAD = 61, SPV_OP_STORE = 62,
+       SPV_OP_TYPE_IMAGE = 25, SPV_OP_TYPE_SAMPLED_IMAGE = 27, SPV_OP_SAMPLE_IMPLICIT = 87, SPV_OP_SAMPLE_EXPLICIT = 88,
+       SPV_OP_FETCH = 95, SPV_OP_GATHER = 96, SPV_OP_IMAGE = 100, SPV_OP_BITCAST = 124, SPV_SC_UNIFORM_CONSTANT = 0 };
+enum { INT_SAMPLER_TYPES = 16 };
+
+static int spv_is_texel_op(uint32_t op) {
+    return op == SPV_OP_SAMPLE_IMPLICIT || op == SPV_OP_SAMPLE_EXPLICIT || op == SPV_OP_FETCH || op == SPV_OP_GATHER;
+}
+
+static void integer_samplers(GfxShader *s) {
+    const uint32_t *w = s->spirv;
+    uint64_t n = s->words;
+    if (n < 5 || w[3] >= (1u << 20)) return;
+    uint32_t bound = w[3], u32_type = 0, f32_type = 0, vec4f = 0, vec4u = 0, texels = 0, nused = 0;
+    uint32_t *src = calloc(bound, sizeof *src);          // the sampler variable an image, texel or local derives from
+    uint32_t *ptr_si = calloc(bound, sizeof *ptr_si);    // pointer type -> its sampled image type
+    uint32_t *si_img = calloc(bound, sizeof *si_img);    // sampled image type -> its image type
+    uint32_t *mark = calloc(bound, sizeof *mark);        // load or OpImage result -> table row + 1
+    uint8_t *is_int = calloc(bound, 1), *float_img = calloc(bound, 1), *cand = calloc(bound, 1), *used = calloc(bound, 1);
+    uint32_t *out = NULL;
+    if (!src || !ptr_si || !si_img || !mark || !is_int || !float_img || !cand || !used) goto done;
+    for (uint64_t i = 5; i < n;) {   // types and candidate variables
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (!len || i + len > n) goto done;
+        const uint32_t *a = w + i + 1;
+        if (op == OP_TYPE_INT && len >= 4 && a[0] < bound) {
+            is_int[a[0]] = 1;
+            if (a[1] == 32 && !a[2]) u32_type = a[0];
+        } else if (op == OP_TYPE_FLOAT && len >= 3 && a[1] == 32) {
+            f32_type = a[0];
+        } else if (op == OP_TYPE_VECTOR && len >= 4 && a[0] < bound && a[1] < bound) {
+            is_int[a[0]] = is_int[a[1]];
+            if (a[2] == 4 && a[1] == f32_type) vec4f = a[0];
+            if (a[2] == 4 && a[1] == u32_type) vec4u = a[0];
+        } else if (op == SPV_OP_TYPE_IMAGE && len >= 9 && a[0] < bound) {
+            float_img[a[0]] = a[1] == f32_type && a[3] == 0;   // not a depth (shadow) image
+        } else if (op == SPV_OP_TYPE_SAMPLED_IMAGE && len >= 3 && a[0] < bound) {
+            si_img[a[0]] = a[1];
+        } else if (op == OP_TYPE_POINTER && len >= 4 && a[0] < bound && a[1] == SPV_SC_UNIFORM_CONSTANT) {
+            ptr_si[a[0]] = a[2];
+        } else if (op == OP_VARIABLE && len >= 4 && a[1] < bound && a[0] < bound) {
+            uint32_t si = ptr_si[a[0]];
+            if (a[2] == SPV_SC_UNIFORM_CONSTANT && si < bound && si_img[si] < bound && float_img[si_img[si]]) cand[a[1]] = 1;
+        }
+        i += len;
+    }
+    if (!u32_type || !vec4f) goto done;
+    for (int pass = 0; pass < 2; pass++)   // twice: a value stored in a loop body can be loaded above the store
+        for (uint64_t i = 5; i < n;) {
+            uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+            const uint32_t *a = w + i + 1;
+            if (op == SPV_OP_LOAD && len >= 4 && a[2] < bound) src[a[1]] = cand[a[2]] ? a[2] : src[a[2]] ? src[a[2]] : src[a[1]];
+            else if (op == SPV_OP_STORE && len >= 3 && a[0] < bound && a[1] < bound && src[a[1]]) src[a[0]] = src[a[1]];
+            else if ((op == SPV_OP_IMAGE || op == SPV_OP_COMPOSITE_EXTRACT || op == SPV_OP_COPY_OBJECT) && len >= 4 && a[2] < bound && src[a[2]])
+                src[a[1]] = src[a[2]];
+            else if (op == SPV_OP_VECTOR_SHUFFLE && len >= 5 && a[2] < bound && a[3] < bound && (src[a[2]] || src[a[3]]))
+                src[a[1]] = src[a[2]] ? src[a[2]] : src[a[3]];
+            else if (spv_is_texel_op(op) && len >= 5 && a[2] < bound && src[a[2]] && a[0] == vec4f) src[a[1]] = src[a[2]];
+            else if (op == SPV_OP_BITCAST && len >= 4 && a[0] < bound && a[2] < bound && src[a[2]] && is_int[a[0]]) used[src[a[2]]] = 1;
+            i += len;
+        }
+    for (uint32_t id = 0; id < bound; id++) nused += used[id];
+    if (!nused) goto done;
+    for (uint64_t i = 5; i < n; i += w[i] >> 16) texels += spv_is_texel_op(w[i] & 0xffff);
+    out = malloc((n + 4 * (uint64_t)texels + 16 * (uint64_t)nused + 8) * sizeof *out);
+    if (!out) goto done;
+    struct { uint32_t ptr, ptr2, si2, img2; } row[INT_SAMPLER_TYPES];
+    int nrow = 0, u32_seen = 0;
+    uint64_t o = 5;
+    memcpy(out, w, 5 * sizeof *out);
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        const uint32_t *a = w + i + 1;
+        uint64_t at = o;
+        if (op == OP_TYPE_INT && len >= 4 && a[0] == u32_type) u32_seen = 1;
+        if (op == OP_VARIABLE && len >= 4 && a[1] < bound && used[a[1]]) {
+            if (!u32_seen) goto drop;
+            int r = 0;
+            while (r < nrow && row[r].ptr != a[0]) r++;
+            if (r == nrow) {
+                if (nrow == INT_SAMPLER_TYPES) goto drop;
+                uint32_t img = si_img[ptr_si[a[0]]];
+                for (uint64_t j = 5; j < n; j += w[j] >> 16)
+                    if ((w[j] & 0xffff) == SPV_OP_TYPE_IMAGE && w[j + 1] == img) {
+                        memcpy(out + o, w + j, (w[j] >> 16) * sizeof *out);
+                        out[o + 1] = row[r].img2 = bound++, out[o + 2] = u32_type;
+                        o += w[j] >> 16;
+                        break;
+                    }
+                row[r].ptr = a[0], row[r].si2 = bound++, row[r].ptr2 = bound++;
+                out[o++] = 3u << 16 | SPV_OP_TYPE_SAMPLED_IMAGE, out[o++] = row[r].si2, out[o++] = row[r].img2;
+                out[o++] = 4u << 16 | OP_TYPE_POINTER, out[o++] = row[r].ptr2, out[o++] = SPV_SC_UNIFORM_CONSTANT, out[o++] = row[r].si2;
+                nrow++;
+            }
+            if (!vec4u) vec4u = bound++, out[o++] = 4u << 16 | OP_TYPE_VECTOR, out[o++] = vec4u, out[o++] = u32_type, out[o++] = 4;
+            mark[a[1]] = (uint32_t)r + 1;
+            at = o;
+            memcpy(out + o, w + i, len * sizeof *out), o += len;
+            out[at + 1] = row[r].ptr2;
+        } else if ((op == SPV_OP_LOAD || op == SPV_OP_IMAGE) && len >= 4 && a[2] < bound && mark[a[2]]) {
+            uint32_t r = mark[a[2]] - 1;
+            memcpy(out + o, w + i, len * sizeof *out), o += len;
+            out[at + 1] = op == SPV_OP_LOAD ? row[r].si2 : row[r].img2;
+            mark[a[1]] = r + 1;
+        } else if (spv_is_texel_op(op) && len >= 5 && a[2] < bound && mark[a[2]]) {
+            uint32_t texel = bound++;
+            memcpy(out + o, w + i, len * sizeof *out), o += len;
+            out[at + 1] = vec4u, out[at + 2] = texel;
+            out[o++] = 4u << 16 | SPV_OP_BITCAST, out[o++] = a[0], out[o++] = a[1], out[o++] = texel;
+        } else {
+            memcpy(out + o, w + i, len * sizeof *out), o += len;
+        }
+        i += len;
+    }
+    out[3] = bound;
+    free(s->spirv);
+    s->spirv = out, s->words = o, out = NULL;
+drop:
+    free(out);
+done:
+    free(src), free(ptr_si), free(si_img), free(mark), free(is_int), free(float_img), free(cand), free(used);
+}
+
 static void reflect(GfxShader *s) {
     static const char *const kinds[GFX_RES_KINDS] = {"cbufs", "sbufs", "textures", "images"};
     const char *js = s->reflection;
     char stage[8];
     json_str(js, js + strlen(js), "stage", stage, sizeof stage);
-    s->stage = !strcmp(stage, "cs") ? GFX_STAGE_CS : !strcmp(stage, "ps") ? GFX_STAGE_FS : GFX_STAGE_VS;
+    s->stage = !strcmp(stage, "cs") ? GFX_STAGE_CS : !strcmp(stage, "ps") ? GFX_STAGE_FS : !strcmp(stage, "gs") ? GFX_STAGE_GS : GFX_STAGE_VS;
     for (int k = 0; k < GFX_RES_KINDS; k++) {
         int count = json_objects(js, kinds[k], NULL, s, k);
         s->res[k] = calloc(count ? count : 1, sizeof *s->res[k]);
         json_objects(js, kinds[k], add_res, s, k);
     }
     reflect_spirv(s);
+    integer_samplers(s);
 }
 
 // ---- use masks (see the cache key at the top)
@@ -929,6 +1060,33 @@ static void build_key(const uint8_t code_hash[32], const GfxShaderAnswers *a, co
     rt_sha256(buf, (size_t)(p - buf), key);
 }
 
+// A geometry shader's input primitive is state of the draw on Maxwell and part of the shader in SPIR-V, so it is an answer:
+// GfxShaderAnswers.local[0], the GFX_TOPOLOGY_* of the draws (gfx.h), which graphics stages leave zero otherwise.
+static char *put_topology(char *o, unsigned topology) {
+    static const char *const names[] = {"triangles", "points", "lines", "lines_adjacency", "triangles", "triangles_adjacency"};
+    return o + sprintf(o, ",\"topology\":\"%s\"", names[topology < 6 ? topology : 0]);
+}
+
+// The transform feedback layout of a control section: +0x6dc the u16 strides of four buffers, +0x6e8 their output counts;
+// buffer b's outputs at +0xdc + 0x80 b (0x20 + attribute) and their component counts at +0x4dc + 0x80 b, each output
+// captured from x on, in that order. Every captured word is named by its attribute word offset for the translator.
+static char *put_feedback(char *o, const uint8_t *control) {
+    uint16_t strides[4];
+    memcpy(strides, control + 0x6dc, sizeof strides);
+    if (!(strides[0] | strides[1] | strides[2] | strides[3])) return o;
+    o += sprintf(o, ",\"tf\":[");
+    for (int b = 0; b < 4; b++) {
+        const uint8_t *out = control + 0xdc + 0x80 * b, *comps = control + 0x4dc + 0x80 * b;
+        const char *sep = "";
+        o += sprintf(o, "%s{\"stride\":%u,\"words\":[", b ? "," : "", strides[b]);
+        for (int i = 0; strides[b] && i < control[0x6e8 + b] && i < 128; i++)
+            for (int c = 0; c < comps[i] && c < 4; c++)
+                o += sprintf(o, "%s%d", sep, (out[i] - 0x20) * 4 + 0x20 + c), sep = ",";
+        o += sprintf(o, "]}");
+    }
+    return o + sprintf(o, "]");
+}
+
 static size_t build_request(char *o0, const char *hex, const char *stage, const char *code_path, const uint8_t *c1,
                             uint32_t c1_len, const GfxShaderAnswers *a, const uint8_t *control) {
     char *o = o0;
@@ -971,7 +1129,9 @@ static size_t build_request(char *o0, const char *hex, const char *stage, const 
        ae8f4f4). Without it a shader that stores to memory is depth-tested late, and the G-buffer draws' EQUAL test
        after the depth prepass fails along contour lines. Already part of the code hash (the whole control section). */
     if (!strcmp(stage, "ps") && (control[0x718] & 1)) o += sprintf(o, ",\"early_fragment_tests\":true");
-    int si = !strcmp(stage, "vs") ? 0 : !strcmp(stage, "cs") ? 2 : 1;   // gfx_shader_set_host answers
+    if (!strcmp(stage, "gs")) o = put_topology(o, a ? a->local[0] : 0);
+    if (!strcmp(stage, "vs") || !strcmp(stage, "gs")) o = put_feedback(o, control);
+    int si = !strcmp(stage, "vs") || !strcmp(stage, "gs") ? 0 : !strcmp(stage, "cs") ? 2 : 1;   // gfx_shader_set_host answers
     if (!host_f64) o += sprintf(o, ",\"softfloat64\":true");
     if (host_sbuf) o += sprintf(o, ",\"sbuf_align\":%u", host_sbuf);
     if (host_sg[si] != 32) o += sprintf(o, ",\"subgroup\":%u", host_sg[si]);
@@ -1040,7 +1200,8 @@ typedef struct {
 
 static int req_init(Req *r, int stage, const uint8_t *control, const uint8_t *code, uint64_t code_size, const uint8_t *c1,
                     const GfxShaderAnswers *a) {
-    r->stage_name = stage == GFX_STAGE_VS ? "vs" : stage == GFX_STAGE_FS ? "ps" : stage == GFX_STAGE_CS ? "cs" : NULL;
+    r->stage_name = stage == GFX_STAGE_VS ? "vs" : stage == GFX_STAGE_GS ? "gs" : stage == GFX_STAGE_FS ? "ps" :
+                    stage == GFX_STAGE_CS ? "cs" : NULL;
     if (!r->stage_name) return fail("stage is not translated", NULL), 0;
     uint32_t c1_off;
     memcpy(&c1_off, control + 0x700, 4), memcpy(&r->length, control + 0x704, 4);
@@ -1169,7 +1330,7 @@ static const GfxShader *translate_one(const Req *r, int stage, const uint8_t *co
     snprintf(spv_path, PATH_CAP + 80, "%s/%s.spv", cache_dir, hex);
     snprintf(res_path, PATH_CAP + 80, "%s/%s.res.json", cache_dir, hex);
     if (!write_file(code_path, code + skip, (size_t)(r->length - skip))) return fail("cannot write the code file", hex);
-    size_t cap = 2 * PATH_CAP * 6 + 2 * r->c1_len + 8192;
+    size_t cap = 2 * PATH_CAP * 6 + 2 * r->c1_len + 32768;
     char *req = malloc(cap), reply[LINE_MAX_LEN];
     if (!req) return plat_file_delete(code_path), fail("out of memory", hex);
     build_request(req, hex, r->stage_name, code_path, r->c1, r->c1_len, a, control);
@@ -1308,7 +1469,7 @@ static const GfxShader *get_async_one(Req r, int stage, const uint8_t *control, 
             if (plat_thread_spawn(xlate_worker, NULL, "xlate", 0)) n++;
         }
         X.started = n ? 1 : -1;
-        if (n) rt_log("gfx_shader: graphics shaders are translated by %d background workers (XCX_XLATE_PROCS)", n);
+        if (n) rt_log("gfx_shader: graphics shaders are translated by %d background workers (XC3_XLATE_PROCS)", n);
         else rt_log("gfx_shader: cannot start the translation workers; translating synchronously");
     }
     XWait **slot = wait_slot(r.key);
@@ -1533,15 +1694,15 @@ void gfx_shader_local_size(const GfxShader *s, uint32_t local[3]) { memcpy(local
 // ---- answers met in play
 // The translated-shader key includes the answers a draw's state implies, so a translation made without play (the
 // census) does not match the keys play asks for. Every (program, answers) that a gfx_shader_get* call resolves is
-// recorded next to pipeline-keys.bin, so the first-start preparation (Task 2.6, here the XCX_TEST_PREPARE_SHADERS hook)
+// recorded next to pipeline-keys.bin, so the first-start preparation (Task 2.6, here the XC3_TEST_PREPARE_SHADERS hook)
 // translates exactly the variants play needs, from these files alone:
-//   shader-answers.bin  "XCXSANS", version, record size; records: stage (u32), code hash, input id, pack_answers bytes
+//   shader-answers.bin  "XC3SANS", version, record size; records: stage (u32), code hash, input id, pack_answers bytes
 //                       of the full answers, zero padding. One record per input id: answers outside the shader's use
 //                       mask do not change its SPIR-V, are out of its input id and cache key (mask_answers) and so do
 //                       not make records of their own (a fight run meets 4126 full pairs, 1238 input ids). The full
 //                       answers are kept so a translator with a wider mask still gets them. Under a new translator
 //                       the masks, hence the input ids, are new, and play appends records for them.
-//   shader-programs.bin "XCXSPRG", version, 0; records: stage, length, c1 length (u32 each), code hash, control section,
+//   shader-programs.bin "XC3SPRG", version, 0; records: stage, length, c1 length (u32 each), code hash, control section,
 //                       code[length], c1. One per code hash; written before the answers that name it. Game content:
 //                       it stays in the ignored pipeline cache directory.
 // A file with another header is rewritten; a torn tail (killed process) is cut off at open.
@@ -1669,12 +1830,12 @@ void gfx_shader_record_at(const char *keys_path) {
     snprintf(RC.prg_path, sizeof RC.prg_path, "%.*sshader-programs.bin", dir, keys_path);
     uint8_t *b;
     size_t n;
-    if (rec_read(RC.ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &b, &n)) {
+    if (rec_read(RC.ans_path, "XC3SANS", ANS_VERSION, ANS_REC, &b, &n)) {
         for (size_t o = 0; o + ANS_REC <= n; o += ANS_REC) set_add(&RC.pairs, hash8(b + o + 36));
         if (n % ANS_REC) truncate_to(RC.ans_path, sizeof(RecHeader) + n / ANS_REC * ANS_REC);
     }
     free(b);
-    if (rec_read(RC.prg_path, "XCXSPRG", PRG_VERSION, 0, &b, &n)) {
+    if (rec_read(RC.prg_path, "XC3SPRG", PRG_VERSION, 0, &b, &n)) {
         size_t whole = prg_walk(b, n, prg_seen, &RC.progs);
         if (whole != n) truncate_to(RC.prg_path, sizeof(RecHeader) + whole);
     }
@@ -1736,16 +1897,16 @@ void gfx_shader_record_flush(int force) {
     RC.ans = (Bytes){0}, RC.prg = (Bytes){0};
     uint64_t total = RC.pairs.n, added = RC.pairs_new;
     plat_mutex_unlock(&RC.lock);
-    if (prg.n && !rec_append(RC.prg_path, "XCXSPRG", PRG_VERSION, 0, &prg)) rt_log("gfx_shader: cannot write %s", RC.prg_path);
-    if (ans.n && !rec_append(RC.ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &ans)) rt_log("gfx_shader: cannot write %s", RC.ans_path);
+    if (prg.n && !rec_append(RC.prg_path, "XC3SPRG", PRG_VERSION, 0, &prg)) rt_log("gfx_shader: cannot write %s", RC.prg_path);
+    if (ans.n && !rec_append(RC.ans_path, "XC3SANS", ANS_VERSION, ANS_REC, &ans)) rt_log("gfx_shader: cannot write %s", RC.ans_path);
     plat_mutex_unlock(&rec_io);
     if (ans.n) rt_log("gfx_shader: answers: %zu new records appended (%llu new this run, %llu recorded)", ans.n / ANS_REC,
                       (unsigned long long)added, (unsigned long long)total);
     free(ans.p), free(prg.p);
 }
 
-// ---- preparation from record files: the answers met in play (XCX_TEST_PREPARE_SHADERS=1) or the seed that
-// tools/prepare_shaders.py writes from the MacNativeGames shader list (xcx.exe --prepare-shaders). Both use the record
+// ---- preparation from record files: the answers met in play (XC3_TEST_PREPARE_SHADERS=1) or the seed that
+// tools/prepare_shaders.py writes from the MacNativeGames shader list (xc3.exe --prepare-shaders). Both use the record
 // layouts above; a seed record has a zero input id (the use mask, hence the id, is the translator's to find) and its
 // pad byte holds the list priority (0 title, 1 warm-up, 2 rest).
 typedef struct { const uint8_t *rec; } PrgIdx;
@@ -1756,6 +1917,9 @@ typedef struct {
     size_t n_ans;
     uint8_t (*iid)[32];                                    // per answers record: the resolved input id, zero on failure
     volatile int64_t next, done, missing, failed;
+    int derive;                                            // collect derive_variants records in `more`
+    PlatMutex lock;
+    Bytes more;
 } Prep;
 
 static int prg_cmp(const void *x, const void *y) { return memcmp(((const PrgIdx *)x)->rec + 12, ((const PrgIdx *)y)->rec + 12, 32); }
@@ -1763,6 +1927,52 @@ static int prg_cmp(const void *x, const void *y) { return memcmp(((const PrgIdx 
 static void prg_collect(const uint8_t *rec, void *ctx) {
     PrgList *l = ctx;
     l->idx[l->n++].rec = rec;
+}
+
+static uint8_t tex_type_of_res(uint16_t type) {   // GfxShaderRes.type as GFX_TEX_*
+    int arr = (type & 0x100) != 0, ms = (type & 0x200) != 0;
+    switch (type & 0xff) {
+    case 1: return arr ? GFX_TEX_1D_ARRAY : GFX_TEX_1D;
+    case 2: return GFX_TEX_BUFFER;
+    case 3: return ms ? (arr ? GFX_TEX_2D_MS_ARRAY : GFX_TEX_2D_MS) : arr ? GFX_TEX_2D_ARRAY : GFX_TEX_2D;
+    case 4: return GFX_TEX_3D;
+    case 5: return arr ? GFX_TEX_CUBE_ARRAY : GFX_TEX_CUBE;
+    default: return 0;
+    }
+}
+
+// The variants of a translated seed record that play is known to meet besides the default: its use mask says which
+// answers change the translation, and the shader itself says what its slots hold. Texture and image slots take the kind
+// the translation declared. A vertex shader also gets each of its first two inputs as
+// uint: of 618 vertex shaders met in the opening and first battle, 173 have a uint input at location 0 or 1.
+static void derive_variants(Prep *p, const uint8_t *r, const GfxShader *s, const GfxShaderAnswers *a) {
+    UseMask m = use_of(s);
+    GfxShaderAnswers v[3];
+    int nv = 0, base = 0;
+    v[0] = *a;
+    for (int kind = GFX_RES_TEX; kind <= GFX_RES_IMG; kind++)
+        for (int i = 0; i < s->nres[kind]; i++) {
+            const GfxShaderRes *e = &s->res[kind][i];
+            uint8_t ty = tex_type_of_res(e->type);
+            if (e->slot < 0 || e->slot >= 32 || !(m.slots >> e->slot & 1) || !ty) continue;
+            uint8_t *to = kind == GFX_RES_TEX ? &v[0].tex_type[e->slot] : &v[0].img_type[e->slot];
+            if (*to != ty) *to = ty, base = 1;
+        }
+    if (base) nv = 1;
+    for (int loc = 0; loc < 2; loc++)
+        if (s->stage == GFX_STAGE_VS && (m.attrs >> loc & 1)) {
+            v[nv] = v[0];
+            v[nv++].attr_type[loc] = 2;
+        }
+    if (!nv) return;
+    plat_mutex_lock(&p->lock);
+    for (int i = 0; i < nv; i++) {
+        uint8_t rec[ANS_REC];
+        memcpy(rec, r, ANS_REC);
+        pack_answers(rec + 68, &v[i]);
+        bytes_put(&p->more, rec, ANS_REC);
+    }
+    plat_mutex_unlock(&p->lock);
 }
 
 static void prep_worker(void *arg) {
@@ -1786,6 +1996,7 @@ static void prep_worker(void *arg) {
         const GfxShader *s = gfx_shader_get((int)st, control, code, len, c1, &a);
         if (!s) plat_inc64(&p->failed);
         else if (p->iid) memcpy(p->iid[i], s->iid, 32);
+        if (s && p->derive) derive_variants(p, r, s, &a);
         plat_inc64(&p->done);
     }
 }
@@ -1794,18 +2005,19 @@ static void prep_worker(void *arg) {
 // *ans_out, *iid_out (optional; free them): the answers records and the input id each resolved to (zero: failed).
 // Returns the record count, -1 without the files.
 static long long prepare_files(const char *ans_path, const char *prg_path, int threads, int procs, const char *what,
-                               uint8_t **ans_out, uint8_t (**iid_out)[32]) {
+                               uint8_t **ans_out, uint8_t (**iid_out)[32], Bytes *more) {
     paths();
     double t0 = (double)plat_now_ms();
     uint8_t *ab = NULL, *pb = NULL;
     size_t an = 0, pn = 0;
-    if (!rec_read(ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &ab, &an) ||
-        !rec_read(prg_path, "XCXSPRG", PRG_VERSION, 0, &pb, &pn)) {
+    if (!rec_read(ans_path, "XC3SANS", ANS_VERSION, ANS_REC, &ab, &an) ||
+        !rec_read(prg_path, "XC3SPRG", PRG_VERSION, 0, &pb, &pn)) {
         rt_log("gfx_shader: prepare: no %s (%s)", what, ans_path);
         free(ab), free(pb);
         return -1;
     }
-    Prep p = {.progs = {calloc(pn / PRG_HEAD + 1, sizeof(PrgIdx)), 0}, .ans = ab, .n_ans = an / ANS_REC};
+    Prep p = {.progs = {calloc(pn / PRG_HEAD + 1, sizeof(PrgIdx)), 0}, .ans = ab, .n_ans = an / ANS_REC,
+              .derive = more != NULL, .lock = PLAT_MUTEX_INIT};
     if (iid_out) p.iid = calloc(p.n_ans + 1, 32);
     if (!p.progs.idx || (iid_out && !p.iid)) return free(p.progs.idx), free(p.iid), free(ab), free(pb), -1;
     prg_walk(pb, pn, prg_collect, &p.progs);
@@ -1830,6 +2042,7 @@ static long long prepare_files(const char *ans_path, const char *prg_path, int t
     if (ans_out) *ans_out = ab;
     else free(ab);
     if (iid_out) *iid_out = p.iid;
+    if (more) *more = p.more;
     return (long long)p.n_ans;
 }
 
@@ -1838,13 +2051,13 @@ void gfx_shader_prepare_recorded(int threads, int procs) {
         rt_log("gfx_shader: prepare: no recorded answers (not recording)");
         return;
     }
-    prepare_files(RC.ans_path, RC.prg_path, threads, procs, "recorded pairs", NULL, NULL);
+    prepare_files(RC.ans_path, RC.prg_path, threads, procs, "recorded pairs", NULL, NULL, NULL);
 }
 
 // ---- prepared variants (shader-prepared.bin next to pipeline-keys.bin)
-// "XCXSPRP", version, record size; records: stage, priority, 2 zero bytes, input id. gfx_shader_prepare_seed writes
+// "XC3SPRP", version, record size; records: stage, priority, 2 zero bytes, input id. gfx_shader_prepare_seed writes
 // them in priority order, one per input id; gfx_shader_warm_list reads them at boot.
-#define PRP_MAGIC "XCXSPRP"   // 8 bytes with its NUL: the writer and the reader use this one spelling
+#define PRP_MAGIC "XC3SPRP"   // 8 bytes with its NUL: the writer and the reader use this one spelling
 #define PRP_VERSION 1
 #define PRP_REC 36
 
@@ -1856,8 +2069,31 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
     double t0 = (double)plat_now_ms();
     uint64_t fail0 = (uint64_t)n_failures;
     uint8_t *ab = NULL, (*iid)[32] = NULL;
-    long long n = prepare_files(ans, prg, threads, procs, "seed variants", &ab, &iid);
+    Bytes more = {0};
+    long long n = prepare_files(ans, prg, threads, procs, "seed variants", &ab, &iid, &more);
     if (n < 0) return 1;
+    // Second pass: the variants derive_variants found, after the seed's in priority order.
+    if (more.n) {
+        char der[PATH_CAP + 32];
+        snprintf(der, sizeof der, "%s/seed-derived.bin", dir);
+        RecHeader dh = {"XC3SANS", ANS_VERSION, ANS_REC};
+        uint8_t *file = malloc(sizeof dh + more.n + 1);
+        if (!file) rt_fatal("gfx_shader: out of memory for derived variants");
+        memcpy(file, &dh, sizeof dh), memcpy(file + sizeof dh, more.p, more.n);
+        int wrote = plat_file_write_atomic(der, file, sizeof dh + more.n);
+        free(file), free(more.p);
+        uint8_t *ab2 = NULL, (*iid2)[32] = NULL;
+        long long n2 = wrote ? prepare_files(der, prg, threads, procs, "derived variants", &ab2, &iid2, NULL) : -1;
+        remove(der);
+        if (n2 > 0) {
+            uint8_t *a3 = realloc(ab, (size_t)(n + n2) * ANS_REC + 1);
+            uint8_t (*i3)[32] = realloc(iid, (size_t)(n + n2 + 1) * 32);
+            if (!a3 || !i3) rt_fatal("gfx_shader: out of memory for derived variants");
+            memcpy(a3 + (size_t)n * ANS_REC, ab2, (size_t)n2 * ANS_REC), memcpy(i3[n], iid2, (size_t)n2 * 32);
+            ab = a3, iid = i3, n += n2;
+        }
+        free(ab2), free(iid2);
+    }
     uint8_t *recs = calloc((size_t)n + 1, PRP_REC);
     static const uint8_t zero[32];
     size_t u = 0, by[3] = {0}, stages[6] = {0};
@@ -1879,9 +2115,9 @@ int gfx_shader_prepare_seed(const char *dir, int threads, int procs) {
         ok = plat_file_write_atomic(out, file, sizeof h + u * PRP_REC);
     }
     char msg[640];
-    snprintf(msg, sizeof msg, "gfx_shader: prepared %zu shader variants (vertex %zu, fragment %zu, compute %zu; title %zu, "
+    snprintf(msg, sizeof msg, "gfx_shader: prepared %zu shader variants (vertex %zu, geometry %zu, fragment %zu, compute %zu; title %zu, "
              "warm-up %zu, other %zu) from %lld seed records, %llu translations failed, in %.0f ms; %s %s", u,
-             stages[GFX_STAGE_VS], stages[GFX_STAGE_FS], stages[GFX_STAGE_CS], by[0], by[1], by[2], n,
+             stages[GFX_STAGE_VS], stages[GFX_STAGE_GS], stages[GFX_STAGE_FS], stages[GFX_STAGE_CS], by[0], by[1], by[2], n,
              (unsigned long long)((uint64_t)n_failures - fail0), (double)plat_now_ms() - t0,
              ok ? "wrote" : "cannot write", out);
     rt_log("%s", msg);
@@ -1901,7 +2137,7 @@ size_t gfx_shader_warm_list(GfxWarmEnt **out) {
     uint8_t *ab = NULL, *pb = NULL;
     size_t an = 0, pn = 0;
     plat_mutex_lock(&rec_io);                      // no append meanwhile
-    rec_read(RC.ans_path, "XCXSANS", ANS_VERSION, ANS_REC, &ab, &an);
+    rec_read(RC.ans_path, "XC3SANS", ANS_VERSION, ANS_REC, &ab, &an);
     plat_mutex_unlock(&rec_io);
     rec_read(prp, PRP_MAGIC, PRP_VERSION, PRP_REC, &pb, &pn);
     size_t na = an / ANS_REC, np = pn / PRP_REC, n = 0;

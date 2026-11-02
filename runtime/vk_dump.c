@@ -1,29 +1,31 @@
-// XCX_DUMP=<frame>: a frame dump for the Vulkan back end, which RenderDoc cannot capture (it hides
+// XC3_DUMP=<frame>: a frame dump for the Vulkan back end, which RenderDoc cannot capture (it hides
 // VK_EXT_external_memory_host). Between presents frame-1 and frame, the replay's command buffers also copy, after each
 // render pass, its colour and depth targets and, after each dispatch, the storage images it writes into host buffers;
 // the completion thread turns them into 8-bit PNGs once the submission is done. 3D textures (LUTs, volumes) sampled or
-// written in the frame are copied once each, slices side by side. Files in XCX_DUMP_DIR (default "dump"):
+// written in the frame are copied once each, slices side by side. Files in XC3_DUMP_DIR (default "dump"):
 //   pass_<seq>_t<i>_<w>x<h>_<vkformat>_<name>.png   colour target i (td: depth; img<slot>: storage image; lut<id>: 3D;
 //                                                    a BC target drawn through a block view: its blocks as that view)
 //   ..._tm.png                                       float formats: x/(1+x) of the same image (the plain one clamps)
+//   ..._blocks.bin                                   BC textures: level 0's raw blocks, to decode offline
 //   passes.txt   per pass or dispatch: targets, draws, each distinct pipeline + texture set with its shaders' SPIR-V
 //                hashes (sh_<hash>.spv written once) and the bound textures with their samplers
 //   images.txt   per image: channel min/max, distinct texel values over the image and over its top quarter
 // Sampled 8-bit 2D textures up to TEX2D_CAP texels are copied once each as pass_<seq>_tex<id>_... at the end of the pass
 // that samples them; texture lines carry the storage address, mirror state, upload count and the image's and slot's
-// swizzle. Copies and texture clears are logged as "copy/clear after pass N". XCX_DUMP_LOG=<from> also logs the
-// frames from..frame-1 to passes.txt, with PNGs only of targets up to 64K texels. XCX_DUMP_BUF=<addr>:<size>[:...]
+// swizzle. Copies and texture clears are logged as "copy/clear after pass N". XC3_DUMP_LOG=<from> also logs the
+// frames from..frame-1 to passes.txt, with PNGs only of targets up to 64K texels. XC3_DUMP_BUF=<addr>:<size>[:...]
 // snapshots one GPU buffer range after every logged pass (buf_<pass>.bin and bufs.txt, see buf_snap).
+// A depth target with stencil also gets pass_<seq>_ts_<w>x<h>_stencil.png, the plane scaled by its maximum.
 // PNGs are opaque (alpha dropped). Integer formats are scaled by the image maximum, depth by its min..max range, SNORM
 // as x/2+1/2, UNORM and sRGB bytes written as stored. Caps: MAX_PASSES passes copied, PNG_CAP bytes of PNGs.
-// XCX_DUMP_TEX=<id>|<w>x<h>[,...]: those texture slots, or 2D textures of that size, are copied where first sampled,
+// XC3_DUMP_TEX=<id>|<w>x<h>[,...]: those texture slots, or 2D textures of that size, are copied where first sampled,
 // whatever their format.
-// XCX_DUMP_UBO=1: each listed pipeline also prints the first 16 vec4 of its user uniform blocks (c3 and up), read from
+// XC3_DUMP_UBO=1: each listed pipeline also prints the first 16 vec4 of its user uniform blocks (c3 and up), read from
 // guest memory when the entry is listed. A block the submission rewrites with UpdateUniformBuffer shows its value from
 // before the submission (vk_exec_draw.c upd_note).
-// XCX_DUMP_ONLY=<w>x<h>: only images of that size are copied (the others still count as logged), so passes late in
+// XC3_DUMP_ONLY=<w>x<h>: only images of that size are copied (the others still count as logged), so passes late in
 // the frame are reached before the PNG cap.
-// XCX_DUMP_SKIP_RUNS=1: a render pass with the same targets as the render pass before it is logged but not copied
+// XC3_DUMP_SKIP_RUNS=1: a render pass with the same targets as the render pass before it is logged but not copied
 // (the terrain decals draw one pass each into the G-buffer and would use up both caps).
 #include <math.h>
 #include <stdarg.h>
@@ -46,17 +48,17 @@
 #define TEX2D_CAP (1u << 20)        // texels of a sampled 2D texture that is dumped
 
 int vk_dump_armed;
-static uint64_t dump_frame, log_from;   // log_from: XCX_DUMP_LOG, first frame logged to passes.txt without images
+static uint64_t dump_frame, log_from;   // log_from: XC3_DUMP_LOG, first frame logged to passes.txt without images
 static char dir[400];
 static FILE *passes_f, *images_f;
 static int seq, finished, copied;      // copied: passes and dispatches of the dump frame whose images were copied
-static int skip_runs, dump_ubo;        // XCX_DUMP_SKIP_RUNS, XCX_DUMP_UBO
-static uint32_t want_tex[16][2];       // XCX_DUMP_TEX: slot id and 0, or width and height
+static int skip_runs, dump_ubo;        // XC3_DUMP_SKIP_RUNS, XC3_DUMP_UBO
+static uint32_t want_tex[16][2];       // XC3_DUMP_TEX: slot id and 0, or width and height
 static int nwant_tex;
 static uint64_t last_targets;          // targets_sig of the last render pass; 0 after a dispatch
 static const char *pass_skip;          // why the current pass copies nothing, or NULL
 static volatile int64_t png_bytes, inflight;
-static uint32_t only_w, only_h;   // XCX_DUMP_ONLY=<w>x<h>: copy images of that size only
+static uint32_t only_w, only_h;   // XC3_DUMP_ONLY=<w>x<h>: copy images of that size only
 static PlatMutex rec_lock = PLAT_MUTEX_INIT, img_lock = PLAT_MUTEX_INIT;
 
 // ---- formats
@@ -223,6 +225,12 @@ static void write_images(const Job *j) {
     float *px = malloc(n * 16);
     uint8_t *out = malloc(n * 4);
     if (!px || !out) rt_fatal("vk_dump: out of memory for %s", j->name);
+    if (strstr(j->name, "_blocks")) {   // raw BC blocks beside the PNG, to decode offline
+        char bin[600];
+        snprintf(bin, sizeof bin, "%s/%s.bin", dir, j->name);
+        FILE *rb = fopen(bin, "wb");
+        if (rb) fwrite(j->map, 1, j->bytes, rb), fclose(rb);
+    }
     float mn[4] = {INFINITY, INFINITY, INFINITY, INFINITY}, mx[4] = {-INFINITY, -INFINITY, -INFINITY, -INFINITY};
     uint64_t nans = 0;
     for (uint32_t z = 0; z < j->d; z++)
@@ -296,10 +304,10 @@ static const char *copy_region(VkExec *ex, VkImage image, VkFormat vf, VkImageAs
     if (__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED) + 1 != dump_frame && (uint64_t)w * h * d > 65536)
         return "logged frame, large image";
     if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-    else if (aspect != VK_IMAGE_ASPECT_COLOR_BIT) return "stencil only";
+    else if (aspect != VK_IMAGE_ASPECT_COLOR_BIT && aspect != VK_IMAGE_ASPECT_STENCIL_BIT) return "aspect not decoded";
     uint64_t bytes = (uint64_t)w * h * d * f->bytes;
     uint64_t est = ((uint64_t)h * (1 + 4ull * w * d) + 128) * (mode_of(f) == M_FLOAT ? 2 : 1);
-    if (only_w && (w != only_w || h != only_h)) return "not the XCX_DUMP_ONLY size";
+    if (only_w && (w != only_w || h != only_h)) return "not the XC3_DUMP_ONLY size";
     if ((uint64_t)png_bytes + est > PNG_CAP) return "PNG cap reached";
     if ((uint64_t)inflight + bytes > INFLIGHT_CAP) return "too many copies in flight";
     Job *j = calloc(1, sizeof *j);
@@ -344,7 +352,7 @@ static const char *copy_out(VkExec *ex, VkImage image, VkFormat vf, VkImageAspec
     return copy_region(ex, image, vf, aspect, level, layer, 0, (VkExtent3D){w, h, d}, w, h, d, name);
 }
 
-// ---- XCX_DUMP_BUF=<addr>:<size>[:<off>:<stride>:<w>:<h>]: after every pass and dispatch that is logged, the GPU
+// ---- XC3_DUMP_BUF=<addr>:<size>[:<off>:<stride>:<w>:<h>]: after every pass and dispatch that is logged, the GPU
 // buffer range is copied to a host buffer; when it differs from the previous copy it goes to buf_<pass>.bin, and
 // bufs.txt gets the changed bytes' extent plus, with the grid arguments, one map per dword of the w x h records of
 // `stride` bytes at `off` (each record a letter: its value's index in the table under the map).
@@ -639,6 +647,8 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
             sp(b, " | swz image %u%u%u%u slot %u%u%u%u", t->swz[0], t->swz[1], t->swz[2], t->swz[3], ssw[0], ssw[1], ssw[2],
                ssw[3]);
             if (hv && v.set_swizzle) sp(b, " view %u%u%u%u", v.swz[0], v.swz[1], v.swz[2], v.swz[3]);
+            if (t->aspect & VK_IMAGE_ASPECT_STENCIL_BIT)
+                sp(b, " | plane %s", vk_exec_view_aspect(t, &v, hv) == VK_IMAGE_ASPECT_STENCIL_BIT ? "stencil" : "depth");
             sp(b, "\n");
             int wanted = 0;
             for (int k = 0; k < nwant_tex; k++)
@@ -688,6 +698,11 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
     Str b = {0};
     sp(&b, "vs %016llx fs %016llx prog %llu prim %d\n", (unsigned long long)shader_hash(s->vs),
        (unsigned long long)shader_hash(s->fs), (unsigned long long)(ex->prog ? ex->prog->serial : 0), s->prim);
+    sp(&b, "    blend_en %#x src %d/%d dst %d/%d eq %d/%d chmask %#x alpha_func %d logic %d ds ",
+       s->color.blend_en, s->blend[0].src_rgb, s->blend[0].src_a, s->blend[0].dst_rgb, s->blend[0].dst_a, s->blend[0].eq_rgb,
+       s->blend[0].eq_a, s->chmask.mask, s->color.alpha_func, s->color.logic_op);
+    for (size_t k = 0; k < sizeof s->ds; k++) sp(&b, "%02x", ((const uint8_t *)&s->ds)[k]);
+    sp(&b, "\n");
     describe_bindings(&b, ex, info);
     ents[nents++] = (Ent){p, th, 1, b.s};
 out:
@@ -752,6 +767,13 @@ void vk_dump_pass_end(VkExec *ex) {
         target_line(ex, &ex->color[i], tag, n);
     }
     if (ex->depth.tex) target_line(ex, &ex->depth, "td", n);
+    if (ex->depth.tex && ex->depth.image && (ex->depth.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) && !pass_skip) {
+        char name[160];
+        snprintf(name, sizeof name, "pass_%04d_ts_%ux%u_stencil", n, ex->depth.width, ex->depth.height);
+        const char *why = copy_out(ex, ex->depth.image, VK_FORMAT_R8_UINT, VK_IMAGE_ASPECT_STENCIL_BIT, ex->depth.level,
+                                   ex->depth.base_layer, ex->depth.width, ex->depth.height, 1, name);
+        fprintf(passes_f, "  ts: stencil plane %s\n", why ? why : name);
+    }
     for (int i = 0; i < nents; i++) {
         fprintf(passes_f, "  pipe %d (draws %d): %s", i, ents[i].draws, ents[i].text);
         free(ents[i].text);
@@ -867,23 +889,23 @@ out:
 static void make_dirs(char *path) { plat_file_mkdir_p(path); }
 
 void vk_dump_init(void) {
-    const char *e = cfg_get("XCX_DUMP");
+    const char *e = cfg_get("XC3_DUMP");
     if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
-    const char *lf = cfg_get("XCX_DUMP_LOG");
+    const char *lf = cfg_get("XC3_DUMP_LOG");
     if (lf && *lf) log_from = strtoull(lf, NULL, 10);
-    const char *sr = cfg_get("XCX_DUMP_SKIP_RUNS");
+    const char *sr = cfg_get("XC3_DUMP_SKIP_RUNS");
     skip_runs = sr && *sr && *sr != '0';
-    const char *du = cfg_get("XCX_DUMP_UBO");
+    const char *du = cfg_get("XC3_DUMP_UBO");
     dump_ubo = du && *du && *du != '0';
-    const char *only = cfg_get("XCX_DUMP_ONLY");
+    const char *only = cfg_get("XC3_DUMP_ONLY");
     if (only && sscanf(only, "%ux%u", &only_w, &only_h) != 2) only_w = only_h = 0;
-    const char *wt = cfg_get("XCX_DUMP_TEX");
+    const char *wt = cfg_get("XC3_DUMP_TEX");
     for (char *q = (char *)wt; q && *q && nwant_tex < 16; q += *q == ',') {
         uint32_t *w = want_tex[nwant_tex++];
         w[0] = (uint32_t)strtoul(q, &q, 10);
         w[1] = *q == 'x' ? (uint32_t)strtoul(q + 1, &q, 10) : 0;
     }
-    const char *d = cfg_get("XCX_DUMP_DIR");
+    const char *d = cfg_get("XC3_DUMP_DIR");
     snprintf(dir, sizeof dir, "%s", d && *d ? d : "dump");
     make_dirs(dir);
     char path[600];
@@ -892,7 +914,7 @@ void vk_dump_init(void) {
     snprintf(path, sizeof path, "%s/images.txt", dir);
     images_f = fopen(path, "w");
     if (!passes_f || !images_f) rt_fatal("vk_dump: cannot write to %s", dir);
-    const char *bf = cfg_get("XCX_DUMP_BUF");
+    const char *bf = cfg_get("XC3_DUMP_BUF");
     if (bf && *bf) {
         char *q;
         bd_addr = strtoull(bf, &q, 0);

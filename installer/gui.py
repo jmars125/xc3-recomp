@@ -58,8 +58,8 @@ class App:
         self.fitted = None               # the (width, height) fit last gave the window
 
         root.title(self.cat('ui.title'))
-        icon = layout.runtime / 'xcx.ico'
-        png = layout.runtime / 'xcx.png'   # Tk loads no .ico off Windows; the Linux release converts it
+        icon = layout.runtime / 'xc3.ico'
+        png = layout.runtime / 'xc3.png'   # Tk loads no .ico off Windows; the Linux release converts it
         if os.name == 'nt' and icon.is_file():
             root.iconbitmap(default=str(icon))
         elif png.is_file():
@@ -284,6 +284,11 @@ class App:
             types = [(self.cat('ui.type_nsp'), '*.nsp'), (self.cat('ui.type_all'), '*.*')]
         if name == 'keys':
             types = [(self.cat('ui.type_keys'), '*.keys'), (self.cat('ui.type_all'), '*.*')]
+        if name == 'dlc':   # every add-on is a file of its own: the dialog takes several, the field lists them
+            paths = filedialog.askopenfilenames(title=self.cat(pick_id), filetypes=types)
+            if paths:
+                self.vars[name].set(';'.join(os.path.normpath(p) for p in paths))
+            return
         path = filedialog.askopenfilename(title=self.cat(pick_id), filetypes=types)
         if path:
             self.vars[name].set(os.path.normpath(path))
@@ -492,14 +497,14 @@ class App:
 
 # ---- self test ---------------------------------------------------------------------------------------------------
 
-SAMPLE_START = {'type': 'start', 'release': 'selftest', 'mode': 'install', 'dest': 'Z:/selftest/XCX', 'log': 'D:\\log.txt',
+SAMPLE_START = {'type': 'start', 'release': 'selftest', 'mode': 'install', 'dest': 'Z:/selftest/XC3', 'log': 'D:\\log.txt',
                 'steps': ['check', 'extract', 'lift', 'compile', 'prepare', 'cleanup']}
 SAMPLE_RUN = [
     SAMPLE_START,
     {'type': 'plan', 'run': ['check', 'extract'], 'skip': {}},
     {'type': 'step', 'step': 'check', 'state': 'started'},
     {'type': 'progress', 'step': 'check', 'phase': 'inputs'},
-    {'type': 'space', 'dest': 'Z:/selftest/XCX', 'need': 36_400_000_000, 'free': 210_000_000_000, 'temp': 'C:\\t',
+    {'type': 'space', 'dest': 'Z:/selftest/XC3', 'need': 36_400_000_000, 'free': 210_000_000_000, 'temp': 'C:\\t',
      'temp_need': 0, 'temp_free': 0, 'same_disk': True},
     {'type': 'warning', 'id': 'warn.lang_needs_fonts', 'params': {'lang': 'ko'}},
     {'type': 'step', 'step': 'check', 'state': 'done', 'seconds': 12.0},
@@ -550,9 +555,9 @@ def selftest(layout, shots=None):
             app.ui_var.set(lang)
             app.switch_language()
             tag = lang
-            app.vars['dest'].set('Z:/selftest/XCX')
-            app.vars['base'].set('Z:/selftest/xcx.nsp')
-            app.vars['update'].set('Z:/selftest/xcx-2.0.0.nsp')
+            app.vars['dest'].set('Z:/selftest/XC3')
+            app.vars['base'].set('Z:/selftest/xc3.nsp')
+            app.vars['update'].set('Z:/selftest/xc3-2.2.1.nsp')
             app.vars['keys'].set('Z:/selftest/prod.keys')
             app.show('form')
             app.start()   # missing files: shows the problems
@@ -578,14 +583,14 @@ def selftest(layout, shots=None):
             app.model = Model()
             for e in SAMPLE_OK:
                 app.model.apply(e)
-            app.model.dest = 'Z:/selftest/XCX'
+            app.model.dest = 'Z:/selftest/XC3'
             app.model.finish(0)
             app.refresh_finish()
             app.show('finish')
             shot(f'finish-ok-{tag}')
             app.model = Model()
             for e in SAMPLE_RUN[:3] + [{'type': 'error', 'id': 'check.disk_space', 'step': 'check',
-                                        'params': {'path': 'Z:/selftest/XCX', 'need_gb': 36.4, 'free_gb': 20.1}},
+                                        'params': {'path': 'Z:/selftest/XC3', 'need_gb': 36.4, 'free_gb': 20.1}},
                                        {'type': 'end', 'result': 'failed', 'seconds': 3}]:
                 app.model.apply(e)
             app.model.finish(1)

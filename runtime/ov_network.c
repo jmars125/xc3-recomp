@@ -1,4 +1,4 @@
-// XCX's online layer (NPLN, gRPC/WebRTC over nn::socket and nn::ssl, nn::friends) on a host that is always offline.
+// XC3's online layer (NPLN, gRPC/WebRTC over nn::socket and nn::ssl, nn::friends) on a host that is always offline.
 // The libraries initialize; every socket fails with ENETDOWN, name lookups fail, SSL contexts and friend queries
 // return errors. nifm already reports no network (ov_system.c), so the game should not try, and when it does the
 // failures look like a console without a connection. The byte-order and address-text helpers stay lifted.

@@ -1,6 +1,6 @@
 // NVN entry points beyond the core implementation that only report stored object state, attach debugging metadata,
 // convert timestamps or take hardware hints. None of them changes rendering
-// results. Ported from MacNativeGames games/totk/third_party/d2r_gfx/gfx/nvn/xcx_nvn_ext.c @ b75be8cf (MIT,
+// results. Ported from MacNativeGames games/totk/third_party/d2r_gfx/gfx/nvn/xc3_nvn_ext.c @ b75be8cf (MIT,
 // Copyright (c) 2026 jhaizhou; origin d2r-mobile); mach timing and Metal wording dropped. Its *Deferred binds and
 // memory-callback switches live with the command buffer in nvn_api_cmd.c.
 #include <stdint.h>
@@ -12,7 +12,7 @@
 #include "nvn_tex.h"
 
 // The CPU is about to read what the GPU wrote into pool storage: the back end writes its host-side copies (the Vulkan
-// back end's images) back first. XCX invalidates its 260x260 R16 grass maps and 1x1 pick targets this way. A
+// back end's images) back first. XC3 invalidates its 260x260 R16 grass maps and 1x1 pick targets this way. A
 // CPU-invisible pool has no storage to read.
 void nvn_pool_invalidate(const pool_t *p, uint64_t off, uint64_t size) {
     if (!p->mem || nvn_gpu_only((uintptr_t)p->mem) || off >= p->size || !size) return;

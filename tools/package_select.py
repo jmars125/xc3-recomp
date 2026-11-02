@@ -8,7 +8,7 @@ import runpy
 from pathlib import Path
 
 VENDOR = Path(__file__).resolve().parent / 'vendor' / 'macnativegames'
-BASE_TITLE = '0100453019AA8000'
+BASE_TITLE = '010074F013262000'
 
 
 def is_bktr(hdr):

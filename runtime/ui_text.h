@@ -5,7 +5,7 @@
 typedef enum {
     // Software keyboard
     UI_SWKBD_TITLE,          // caption of the text-entry window
-    UI_SWKBD_PROMPT,         // prompt when the game gives no header, guide or sub text (XCX names a horse)
+    UI_SWKBD_PROMPT,         // prompt when the game gives no header, guide or sub text (XC3 names a horse)
     UI_SWKBD_DEFAULT_NAME,   // text the entry starts with when the game gives none, so a controller can confirm it
     UI_SWKBD_OK,
     UI_SWKBD_CANCEL,
@@ -21,7 +21,7 @@ typedef enum {
     UI_MENU_AFTER_RESTART,    // note on a setting that is read at start
     UI_MENU_SET_BY_ENV,       // note on a setting an environment variable fixes
     UI_MENU_SAVE_FAILED,
-    UI_MENU_VERSION,          // "XCX Recomp %s, game %s": the port version and the game update, beside the title
+    UI_MENU_VERSION,          // "XC3 Recomp %s, game %s": the port version and the game update, beside the title
 
     // Screen
     UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC,
@@ -170,6 +170,6 @@ int ui_text_defined(const char *lang, UiTextId id);
 // The catalog language for a Switch language code ("en-GB" -> "en", "zh-CN" -> "zh-Hans", ...).
 const char *ui_text_lang(const char *switch_code);
 
-// Menu text: ui_text_in(menu language, id). The menu language is XCX_MENU_LANG ("en" / "ru"); unset, Russian when the
+// Menu text: ui_text_in(menu language, id). The menu language is XC3_MENU_LANG ("en" / "ru"); unset, Russian when the
 // system UI language is Russian, else English. Follows a live change of the setting.
 const char *menu_text(UiTextId id);

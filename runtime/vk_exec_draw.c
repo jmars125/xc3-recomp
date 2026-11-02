@@ -36,10 +36,11 @@
 #define SUPPORT_BYTES 1408u   // Ryujinx SupportBuffer (std140): alpha_test, is_bgra[8], viewport_inverse, viewport_size, ...
 #define NVN_STAGE_VS 0
 #define NVN_STAGE_FS 1
+#define NVN_STAGE_GS 2
 #define NVN_STAGE_CS 5
 #define ONESHOT_WAIT_MS 30000u   // prepare_draw: how long a one-shot draw waits for its pipeline before it is skipped
 
-enum { W_PROGRAM, W_SHADER, W_PIPELINE, W_NO_VS, W_INDEX, W_UB, W_BIND, W_SSBO_ALIGN, W_SSBO_SLOT, W_RESTART, W_INDIRECT, W_COUNT };
+enum { W_PROGRAM, W_SHADER, W_PIPELINE, W_NO_VS, W_FEEDBACK, W_INDEX, W_UB, W_BIND, W_SSBO_ALIGN, W_SSBO_SLOT, W_RESTART, W_INDIRECT, W_COUNT };
 
 static void warn_once(int key, const char *fmt, ...) {
     static volatile int32_t seen[W_COUNT];
@@ -109,11 +110,11 @@ static struct {
     VkBuffer sup_buf;
     VkDeviceSize sup_off;
     int sup_valid;
-    uint8_t c0[3][VK_C0_BYTES];          // last c0 bank per stage (vertex, fragment, compute) and where it lives
-    VkBuffer c0_buf[3];
-    VkDeviceSize c0_off[3];
-    int c0_valid[3];
-    struct { p_bind_buf ssbo[16], ubo[16]; uint32_t dim[3], binst; } c0_in[3];   // what vk_c0_fill read for c0[k]
+    uint8_t c0[4][VK_C0_BYTES];          // last c0 bank per stage (vertex, fragment, compute, geometry) and where it lives
+    VkBuffer c0_buf[4];
+    VkDeviceSize c0_off[4];
+    int c0_valid[4];
+    struct { p_bind_buf ssbo[16], ubo[16]; uint32_t dim[3], binst; } c0_in[4];   // what vk_c0_fill read for c0[k]
     VkPipelineLayout ds_layout;          // graphics layout the sets below were last pushed or bound with
     VkDescriptorSet ds_bound[2];         // allocated set bound per set number (0: none or pushed since)
     VkDescriptorSet ds_last[2];          // last allocated and written set per set number, contents in DS
@@ -129,7 +130,7 @@ static struct {
 #define DS_SIG_BYTES (MAX_DESC * sizeof(VkDescSlot))
 static struct { uint32_t n[2], pn[2]; uint8_t sig[2][DS_SIG_BYTES], psig[2][DS_SIG_BYTES]; } DS;
 
-// XCX_BIND_STATS counters (bind_stats).
+// XC3_BIND_STATS counters (bind_stats).
 static struct {
     int on;
     uint64_t draws, bind[2], desc[2], push, push_skip, set_new, set_reuse, ac_miss, same_prog, same_all, bind_skip;
@@ -141,7 +142,7 @@ static struct {
 #define RS_BYTES (MAX_BINDINGS * sizeof(((VkExec *)0)->ssbo[0]) + MAX_DESC * sizeof(p_bind_buf))
 typedef struct { int cls, use; uint64_t bytes; } RsCount;
 static struct {
-    int on;                              // XCX_BIND_SKIP: 1 skip (default), 2 check, 0 off
+    int on;                              // XC3_BIND_SKIP: 1 skip (default), 2 check, 0 off
     uint32_t hn;                         // words of h the last signature filled; 0: none
     uint64_t h[24];                      // generations, feedback images, support inputs, base instance
     const VkPipeInfo *info;              // the pipeline whose RsList ranges body holds, as of bind op generation gen
@@ -445,8 +446,8 @@ static VkComponentSwizzle swz_of(uint8_t s) {
 }
 
 // A view in STENCIL mode samples the stencil plane (TextureViewSetDepthStencilMode); otherwise depth wins. The
-// translator declares every sampled image float and the shader takes the raw bits, as for integer formats (nxnative
-// nvn_mtl.m).
+// translator declares every sampled image float and the shader takes the raw bits, as for integer formats; gfx_shader.c
+// integer_samplers declares such a sampler uint.
 VkImageAspectFlags vk_exec_view_aspect(const VkTexImage *img, const view_t *v, int hv) {
     if (hv && v->set_dsmode && v->dsmode == NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL && (img->aspect & VK_IMAGE_ASPECT_STENCIL_BIT))
         return VK_IMAGE_ASPECT_STENCIL_BIT;
@@ -622,6 +623,8 @@ static int find_stage(const prog_t *p, int nvn_stage, const uint8_t **ctl, const
     return 1;
 }
 
+static uint64_t prog_serial(const VkExec *ex, int st) { return ex->bound[st] ? ex->bound[st]->serial : 0; }
+
 // Texture and image types of a stage's first 32 slots, each kept with the handle and the generation and slot token it
 // was looked up under: a slot is looked up again, a hash probe, only when the handle changed or its slot may resolve
 // otherwise (slot_still).
@@ -672,6 +675,7 @@ static void answers_for(VkExec *ex, int st, const uint8_t *ctl, uint32_t mask, G
     memset(a, 0, sizeof *a);
     if (st == NVN_STAGE_VS) vk_pipeline_answers(&ex->pipe, a, NULL);
     else if (st == NVN_STAGE_FS) vk_pipeline_answers(&ex->pipe, NULL, a);
+    else if (st == NVN_STAGE_GS) a->local[0] = ex->gs_topology;
     else
         for (int k = 0; k < 3; k++) {
             uint32_t l;
@@ -693,7 +697,7 @@ static void answers_for(VkExec *ex, int st, const uint8_t *ctl, uint32_t mask, G
         if ((tmiss || imiss || check) && !locked) vk_texture_lock(), locked = 1, BS.ac_miss++;
         if (tmiss) c->tt[slot] = type_of_handle(h), c->tex[slot] = h, c->ttok[slot] = tt, c->tgen[slot] = gen;
         if (imiss) c->it[slot] = type_of_handle(hi), c->img[slot] = hi, c->itok[slot] = it, c->igen[slot] = gen;
-        if (check && (type_of_handle(h) != c->tt[slot] || type_of_handle(hi) != c->it[slot]))   // XCX_SHADER_MEMO=check
+        if (check && (type_of_handle(h) != c->tt[slot] || type_of_handle(hi) != c->it[slot]))   // XC3_SHADER_MEMO=check
             rt_fatal("vk_exec: kept texture types of stage %d slot %d differ from a lookup", st, slot);
         a->tex_type[slot] = c->tt[slot], a->img_type[slot] = c->it[slot];
     }
@@ -708,10 +712,11 @@ static const GfxShader *shader_for(VkExec *ex, int st, int *present, int *pendin
     uint32_t len;
     *present = 0;
     if (pending) *pending = 0;
-    if (!ex->prog || !find_stage(ex->prog, st, &ctl, &code, &len)) return NULL;
+    const prog_t *p = ex->bound[st];
+    if (!p || !find_stage(p, st, &ctl, &code, &len)) return NULL;
     *present = 1;
     GfxShaderAnswers a;
-    uint64_t serial = ex->prog->serial;
+    uint64_t serial = p->serial;
     answers_for(ex, st, ctl, slot_mask_of(serial, st), &a);
     ShaderEnt *set = NULL;
     if (serial) {
@@ -728,10 +733,10 @@ static const GfxShader *shader_for(VkExec *ex, int st, int *present, int *pendin
             return set[0].s;
         }
     }
-    int gs = st == NVN_STAGE_VS ? GFX_STAGE_VS : st == NVN_STAGE_FS ? GFX_STAGE_FS : GFX_STAGE_CS;
-    const GfxShader *s = await ? gfx_shader_await(gs, ctl, code, len, &a)
-                       : pending && vk_pipeline_async_on() ? gfx_shader_get_async(gs, ctl, code, len, &a, pending)
-                                                           : gfx_shader_get(gs, ctl, code, len, NULL, &a);
+    int gfx = st == NVN_STAGE_VS ? GFX_STAGE_VS : st == NVN_STAGE_FS ? GFX_STAGE_FS : st == NVN_STAGE_GS ? GFX_STAGE_GS : GFX_STAGE_CS;
+    const GfxShader *s = await ? gfx_shader_await(gfx, ctl, code, len, &a)
+                       : pending && vk_pipeline_async_on() ? gfx_shader_get_async(gfx, ctl, code, len, &a, pending)
+                                                           : gfx_shader_get(gfx, ctl, code, len, NULL, &a);
     if (pending && *pending) return NULL;
     if (s) slot_mask_learn(serial, st, s);
     if (!s) warn_once(W_SHADER, "a stage %d shader of program %llu failed to translate: draws with it are skipped", st,
@@ -746,7 +751,8 @@ static const GfxShader *shader_for(VkExec *ex, int st, int *present, int *pendin
 // ---- descriptors
 
 static int nvn_stage_of(int gfx_stage) {
-    return gfx_stage == GFX_STAGE_VS ? NVN_STAGE_VS : gfx_stage == GFX_STAGE_FS ? NVN_STAGE_FS : NVN_STAGE_CS;
+    return gfx_stage == GFX_STAGE_VS ? NVN_STAGE_VS : gfx_stage == GFX_STAGE_FS ? NVN_STAGE_FS :
+           gfx_stage == GFX_STAGE_GS ? NVN_STAGE_GS : NVN_STAGE_CS;
 }
 
 static VkDescriptorBufferInfo zero_info(uint64_t max) {
@@ -805,7 +811,7 @@ static void c0_table(uint8_t *at, const p_bind_buf b[16]) {
 }
 
 // The driver constant bank c0 as GLSLC-compiled shaders read it. Storage-buffer tables {u64 address, u32 size} every
-// 16 bytes at 0x110 (vertex), 0x510 (fragment), 0x310 (compute): Ryujinx's GlobalToStorage fallback loads each
+// 16 bytes at 0x110 (vertex), 0x410 (geometry), 0x510 (fragment), 0x310 (compute): Ryujinx's GlobalToStorage fallback loads each
 // candidate base from here and compares the global pointer against it. Compute: dispatch size at 0x200, the uniform
 // buffer table at 0x210 + 16 r. Graphics: the largest point size (Maxwell's limit, GLSLC clamps gl_PointSize to it) at
 // 0x610, the base instance at 0x644. Other stages: zeros. Unbound slots read zero, since the replay keeps them zero.
@@ -813,7 +819,8 @@ static void c0_table(uint8_t *at, const p_bind_buf b[16]) {
 void vk_c0_fill(uint8_t bank[VK_C0_BYTES], int stage, const p_bind_buf ssbo[16], const p_bind_buf ubo[16],
                 const uint32_t dispatch[3], uint32_t base_instance) {
     memset(bank, 0, VK_C0_BYTES);
-    int base = stage == NVN_STAGE_VS ? 0x110 : stage == NVN_STAGE_FS ? 0x510 : stage == NVN_STAGE_CS ? 0x310 : -1;
+    int base = stage == NVN_STAGE_VS ? 0x110 : stage == NVN_STAGE_FS ? 0x510 : stage == NVN_STAGE_CS ? 0x310 :
+               stage == NVN_STAGE_GS ? 0x410 : -1;
     if (base < 0) return;
     c0_table(bank + base, ssbo);
     if (stage == NVN_STAGE_CS) {
@@ -826,17 +833,17 @@ void vk_c0_fill(uint8_t bank[VK_C0_BYTES], int stage, const p_bind_buf ssbo[16],
     memcpy(bank + 0x644, &base_instance, 4);
 }
 
-static int c0_on(void) {   // XCX_FIX_C0=0: c0 reads zeros instead of the driver constants
+static int c0_on(void) {   // XC3_FIX_C0=0: c0 reads zeros instead of the driver constants
     static int on = -1;
     if (on < 0) {
-        on = cfg_bool("XCX_FIX_C0");
+        on = cfg_bool("XC3_FIX_C0");
     }
     return on;
 }
 
 // c0 from replay scratch; a bank equal to the stage's previous one reuses its range, so it costs no copy.
 static VkDescriptorBufferInfo c0_info(VkExec *ex, int st) {
-    int k = st == NVN_STAGE_VS ? 0 : st == NVN_STAGE_FS ? 1 : 2;
+    int k = st == NVN_STAGE_VS ? 0 : st == NVN_STAGE_FS ? 1 : st == NVN_STAGE_GS ? 3 : 2;
     // vk_c0_fill reads the storage slots, and the uniform slots and dispatch size for compute or the base instance for
     // graphics: equal inputs give the same bank, so neither the fill nor the 2 KiB compare is needed.
     typeof(B.c0_in[0]) in;
@@ -872,10 +879,10 @@ static VkDescriptorBufferInfo ubo_info(VkExec *ex, int st, int slot) {
     uint64_t max = LIM.ubo_max, align = LIM.ubo_align;
     VkDescriptorBufferInfo bi;
     if (slot == 0 && c0_on()) return c0_info(ex, st);
-    if (slot == 1 && ex->prog) {   // compiler constants stored after the shader code
+    if (slot == 1 && ex->bound[st]) {   // compiler constants stored after the shader code
         const uint8_t *ctl, *code;
         uint32_t len, c1;
-        if (find_stage(ex->prog, st, &ctl, &code, &len)) {
+        if (find_stage(ex->bound[st], st, &ctl, &code, &len)) {
             memcpy(&c1, ctl + 0x700, 4);
             if (c1 < len && bind_range(ex, (uint64_t)(uintptr_t)code + c1, len - c1, align, max, VK_MUSE_UBO, 0, &bi))
                 return bi;
@@ -900,7 +907,7 @@ static VkDescriptorBufferInfo ubo_info(VkExec *ex, int st, int slot) {
 static int ssbo_slot(const GfxShaderRes *r, int st, int *ubo) {
     *ubo = 0;
     if (r->cbuf_slot != 0) return -1;
-    int off = r->handle * 4, base = st == NVN_STAGE_VS ? 0x110 : st == NVN_STAGE_FS ? 0x510 : st == NVN_STAGE_CS ? 0x310 : -1;
+    int off = r->handle * 4, base = st == NVN_STAGE_VS ? 0x110 : st == NVN_STAGE_FS ? 0x510 : st == NVN_STAGE_GS ? 0x410 : st == NVN_STAGE_CS ? 0x310 : -1;
     if (st == NVN_STAGE_CS && off >= 0x210 && off < 0x310 && (off - 0x210) % 16 == 0) {
         *ubo = 1;
         return (off - 0x210) / 16;
@@ -983,7 +990,7 @@ static VkDescriptorBufferInfo ssbo_info(VkExec *ex, int st, const GfxShaderRes *
 }
 
 // ---- feedback loops (maxwell.md 1.9, vk.h VkCtx.feedback)
-// XCX's G-buffer and terrain shaders sample targets of the pass that renders them, at their own pixel, after earlier
+// XC3's G-buffer and terrain shaders sample targets of the pass that renders them, at their own pixel, after earlier
 // draws of the pass wrote them (albedo, normals, R32F linear depth). Maxwell reads see those writes; in Vulkan the read
 // is undefined without a barrier, and on the RX 9070 it showed as dark screen-aligned blocks on the island ground
 // and hid Tulin's sage spirit. Before a draw whose fragment shader samples an attachment of
@@ -1023,11 +1030,11 @@ static uint32_t attached_as(const VkExec *ex, const SubRange *r) {
     return m;
 }
 
-// XCX_TEX_MEMO (tex_info, feedback_scan): 0 off, 1 on, 2 (=check) computes every hit again and stops on a difference.
+// XC3_TEX_MEMO (tex_info, feedback_scan): 0 off, 1 on, 2 (=check) computes every hit again and stops on a difference.
 static int td_mode(void) {
     static int on = -1;
     if (on < 0) {
-        const char *e = cfg_value("XCX_TEX_MEMO");
+        const char *e = cfg_value("XC3_TEX_MEMO");
         on = !strcmp(e, "check") ? 2 : strcmp(e, "0") != 0;
     }
     return on;
@@ -1137,7 +1144,7 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
 // for its storage check; a re-upload writes the same image, so the descriptor stays. Draws bind the same textures
 // thousands of times a frame (15,000 lookups a frame in the monsters fight); a hit skips the slot lookup, the view key
 // with its hash probe and the sampler lookup. Storage images, which note their binding per submission, are
-// not kept. Direct-mapped; texture lock held. XCX_TEX_MEMO=0 turns it off; =check computes every hit again and stops
+// not kept. Direct-mapped; texture lock held. XC3_TEX_MEMO=0 turns it off; =check computes every hit again and stops
 // on a difference.
 #define TD_N 8192
 static struct {
@@ -1196,7 +1203,7 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
         if (!storage && !separate) {
             // A depth texture sampled without a compare reads one texel on the Switch, whatever the sampler's filter:
             // blending neighbouring depths puts reconstructed positions in mid-air at object edges (shadow masks).
-            int sid = (int)(h >> 20 & 0xfff);
+            int sid = NVN_HANDLE_SAMP(h);
             int point = img && (img->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) && !(r->type & 0x400) &&
                         vk_exec_view_aspect(img, &v, hv) != VK_IMAGE_ASPECT_STENCIL_BIT;
             samp = point ? vk_sampler_point_by_id_locked(sid) : vk_sampler_by_id_locked(sid);
@@ -1258,14 +1265,14 @@ static void support_fill(uint8_t *b, float w, float h, float point_size) {
     for (int i = 0; i < 73; i++) memcpy(b + 192 + 16 * i, &one, 4);   // render scale 1: the host renders at guest size
 }
 
-// XCX_BIND_STATS=1: bindings and descriptors per draw of each stage (Task 2.2's choice of the pushed stage), and how
+// XC3_BIND_STATS=1: bindings and descriptors per draw of each stage (Task 2.2's choice of the pushed stage), and how
 // often a draw repeats the previous one, logged every 20000 draws: pushes recorded and skipped, allocated sets written
 // and reused, stage texture-type recomputations (answers_for), draws with the previous draw's program, bound state
 // and textures (shaders and pipeline would be the same) and those that also have its buffers and viewport (all
 // descriptors would be the same). BS is declared beside DS.
 static int bind_stats_on(void) {
     if (BS.on < 0) {
-        const char *e = cfg_get("XCX_BIND_STATS");
+        const char *e = cfg_get("XC3_BIND_STATS");
         BS.on = e && *e && strcmp(e, "0");
     }
     return BS.on;
@@ -1289,10 +1296,10 @@ static void bind_stats(const VkPipeInfo *info) {
     }
 }
 
-// The bound state a draw reads, compared with the previous draw's (XCX_BIND_STATS only).
+// The bound state a draw reads, compared with the previous draw's (XC3_BIND_STATS only).
 static void repeat_stats(const VkExec *ex, const VkPipeInfo *info) {
     static struct {
-        const prog_t *prog;
+        const prog_t *prog[2];
         VkPipeState pipe;
         uint64_t tex[2][128], img[2][32];
         const VkPipeInfo *info;
@@ -1301,7 +1308,7 @@ static void repeat_stats(const VkExec *ex, const VkPipeInfo *info) {
     } last, cur;
     if (!bind_stats_on()) return;
     memset(&cur, 0, sizeof cur);
-    cur.prog = ex->prog, cur.pipe = ex->pipe, cur.info = info;
+    cur.prog[0] = ex->bound[NVN_STAGE_VS], cur.prog[1] = ex->bound[NVN_STAGE_FS], cur.pipe = ex->pipe, cur.info = info;
     const int st[2] = {NVN_STAGE_VS, NVN_STAGE_FS};
     for (int k = 0; k < 2; k++) {
         memcpy(cur.tex[k], ex->tex[st[k]], sizeof cur.tex[k]), memcpy(cur.img[k], ex->img[st[k]], sizeof cur.img[k]);
@@ -1316,17 +1323,17 @@ static void repeat_stats(const VkExec *ex, const VkPipeInfo *info) {
     last = cur;
 }
 
-static int push_skip_on(void) {   // XCX_PUSH_SKIP=0: every graphics draw pushes its set again
+static int push_skip_on(void) {   // XC3_PUSH_SKIP=0: every graphics draw pushes its set again
     static int on = -1;
     if (on < 0) {
-        on = cfg_bool("XCX_PUSH_SKIP");
+        on = cfg_bool("XC3_PUSH_SKIP");
     }
     return on;
 }
 
 // A graphics draw whose descriptor inputs equal the previous graphics draw's in this command buffer skips building its
 // sets: every write would be the same, the push would be skipped and the allocated set reused without a bind (about a
-// quarter of field and monsters2 draws, XCX_BIND_STATS). The inputs, compared and stored in place, are what
+// quarter of field and monsters2 draws, XC3_BIND_STATS). The inputs, compared and stored in place, are what
 // bind_resources and its helpers read beyond the pipeline info's fixed bindings and Z's stand-ins:
 // - the info (bindings, layouts), the program and its serial (the compiler-constant range of UBO slot 1);
 // - vk_texture_slots_gen, vk_texture_epoch (a slot's image, view and once-per-submit storage check), vk_sampler_gen;
@@ -1341,11 +1348,11 @@ static int push_skip_on(void) {   // XCX_PUSH_SKIP=0: every graphics draw pushes
 // the views cached per submission. The census counts are added again. A build that copied guest bytes into transient
 // memory (an unaligned host range) is never skipped after: the copy may differ. B.res_valid says the sets bound hold
 // the last build; vk_exec_draw_new_cb's memset clears it, and every build clears it until it ends.
-// XCX_BIND_SKIP=0 builds every draw; =check builds every draw and stops when a draw with equal inputs gets other
+// XC3_BIND_SKIP=0 builds every draw; =check builds every draw and stops when a draw with equal inputs gets other
 // writes, census counts or descriptor commands.
 static int bind_skip_on(void) {
     if (RS.on < 0) {
-        const char *e = cfg_value("XCX_BIND_SKIP");
+        const char *e = cfg_value("XC3_BIND_SKIP");
         RS.on = !strcmp(e, "check") ? 2 : strcmp(e, "0") != 0;
         if (RS.on != 1) rt_log("vk_exec: descriptor build skip %s", RS.on ? "check" : "off");
     }
@@ -1424,8 +1431,12 @@ static int bind_sig(const VkExec *ex, const VkPipeInfo *info) {
     uint32_t n = 0;
 #define PUT(v) do { uint64_t v_ = (uint64_t)(v); diff |= h[n] ^ v_; h[n++] = v_; } while (0)
     PUT((uintptr_t)info);
-    PUT((uintptr_t)ex->prog);
-    PUT(ex->prog->serial);
+    PUT((uintptr_t)ex->bound[NVN_STAGE_VS]);
+    PUT(prog_serial(ex, NVN_STAGE_VS));
+    PUT((uintptr_t)ex->bound[NVN_STAGE_FS]);
+    PUT(prog_serial(ex, NVN_STAGE_FS));
+    PUT((uintptr_t)ex->bound[NVN_STAGE_GS]);
+    PUT(prog_serial(ex, NVN_STAGE_GS));
     PUT((uint64_t)vk_texture_slots_gen() << 32 | vk_texture_epoch());
     PUT((uint64_t)vk_sampler_gen() << 32 | (uint32_t)ex->nfbl);
     PUT(vk_mem_gen() + vk_usnap_gen());   // both only grow
@@ -1639,7 +1650,7 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
     }
     if (skip) {
         RS.rec = 0;
-        // An equal next draw records nothing when every push set holds its push (XCX_PUSH_SKIP on) and nothing made
+        // An equal next draw records nothing when every push set holds its push (XC3_PUSH_SKIP on) and nothing made
         // the build unrepeatable; allocated sets are always bound to the one written last.
         int valid = !RS.volatile_ && !RS.cnt_over && RS.hn;
         for (uint32_t s = 0; s < n_sets; s++)
@@ -1650,7 +1661,7 @@ static void bind_resources(VkExec *ex, const VkPipeInfo *info) {
             int cn = RS.ncnt != RS.pncnt || memcmp(RS.cnt, RS.pcnt, sizeof RS.cnt[0] * (size_t)RS.ncnt);
             if (same && was_valid && (wr || cn || RS.cmds))
                 rt_fatal("vk_exec: descriptor build skip check: a draw of program %llu with the inputs of the previous one "
-                         "gets %s", (unsigned long long)ex->prog->serial,
+                         "gets %s", (unsigned long long)prog_serial(ex, NVN_STAGE_VS),
                          RS.cmds ? "descriptor commands" : wr ? "other writes" : "other census counts");
             if (same && was_valid) BS.bind_skip++;   // the draws a skip would have spared, compared instead
             RS.ckn = n;
@@ -1749,7 +1760,7 @@ static void bind_vertex_buffers(VkExec *ex) {
     B.vb_valid = 1;
 }
 
-// XCX_PIPE_SKIP: which draws are skipped, rather than waited for, while their shaders or pipeline build.
+// XC3_PIPE_SKIP: which draws are skipped, rather than waited for, while their shaders or pipeline build.
 // strict (0): only draws whose pass targets were all rendered in the previous presented frame; a pass with a target
 //   that was not counts as one-shot and waits.
 // any (1): also draws in a pass with at least one target rendered in the previous frame (a per-frame depth
@@ -1762,11 +1773,11 @@ static void bind_vertex_buffers(VkExec *ex) {
 static int pipe_skip_mode(void) {
     static int mode = -1;
     if (mode < 0) {
-        const char *e = cfg_value("XCX_PIPE_SKIP");
+        const char *e = cfg_value("XC3_PIPE_SKIP");
         mode = !strcmp(e, "strict") || !strcmp(e, "0") ? 0 : !strcmp(e, "fullscreen") || !strcmp(e, "2") ? 2 : 1;
-        static const char *const what[3] = {"only draws into per-frame passes (XCX_PIPE_SKIP=strict)",
+        static const char *const what[3] = {"only draws into per-frame passes (XC3_PIPE_SKIP=strict)",
                                             "draws into passes with a target the previous frame rendered",
-                                            "those and full-screen draws (XCX_PIPE_SKIP=fullscreen)"};
+                                            "those and full-screen draws (XC3_PIPE_SKIP=fullscreen)"};
         rt_log("vk_exec: draws skipped while their pipeline builds: %s", what[mode]);
     }
     return mode;
@@ -1776,13 +1787,13 @@ static int pipe_skip_mode(void) {
 // texture and image handles and every slot's resolution (vk_texture_slots_gen, read unlocked: a registration racing
 // with it is ordered after this draw, as answers_for's own check would order it) stay the same: answers_for reads
 // nothing else, so shader_for would return the same shaders. About 65% of field draws repeat them
-// (XCX_BIND_STATS). XCX_SHADER_MEMO=0 turns it off; =check looks the shaders up on every hit too, and every slot's
+// (XC3_BIND_STATS). XC3_SHADER_MEMO=0 turns it off; =check looks the shaders up on every hit too, and every slot's
 // texture type in answers_for, and stops on a difference.
 // tex_serial (bumped by every texture and image bind) equal to the key's means the handles were not rebound since
 // they were compared, so the 1 KiB compare is skipped; a rebind to the same handles still matches by the compare.
 typedef struct {
-    const prog_t *prog;
-    uint64_t serial;
+    const prog_t *prog[2];
+    uint64_t serial[2];
     uint32_t gen, tex_serial;
     uint64_t tex[2][32], img[2][32];
     VkPipeState pipe;
@@ -1790,14 +1801,18 @@ typedef struct {
 static struct { int on, valid, has_fs; MemoKey k; const GfxShader *vs, *fs; } SM = {-1};
 
 static void memo_key(const VkExec *ex, uint32_t gen, MemoKey *k) {
-    k->prog = ex->prog, k->serial = ex->prog->serial, k->gen = gen, k->tex_serial = ex->tex_serial;
+    k->prog[0] = ex->bound[NVN_STAGE_VS], k->serial[0] = prog_serial(ex, NVN_STAGE_VS);
+    k->prog[1] = ex->bound[NVN_STAGE_FS], k->serial[1] = prog_serial(ex, NVN_STAGE_FS);
+    k->gen = gen, k->tex_serial = ex->tex_serial;
     memcpy(k->tex[0], ex->tex[NVN_STAGE_VS], sizeof k->tex[0]), memcpy(k->tex[1], ex->tex[NVN_STAGE_FS], sizeof k->tex[1]);
     memcpy(k->img[0], ex->img[NVN_STAGE_VS], sizeof k->img[0]), memcpy(k->img[1], ex->img[NVN_STAGE_FS], sizeof k->img[1]);
     memcpy(&k->pipe, &ex->pipe, sizeof k->pipe);
 }
 
 static int memo_match(const VkExec *ex, uint32_t gen, MemoKey *k) {
-    if (k->prog != ex->prog || k->serial != ex->prog->serial || k->gen != gen || memcmp(&k->pipe, &ex->pipe, sizeof k->pipe))
+    if (k->prog[0] != ex->bound[NVN_STAGE_VS] || k->prog[1] != ex->bound[NVN_STAGE_FS] ||
+        k->serial[0] != prog_serial(ex, NVN_STAGE_VS) || k->serial[1] != prog_serial(ex, NVN_STAGE_FS) || k->gen != gen ||
+        memcmp(&k->pipe, &ex->pipe, sizeof k->pipe))
         return 0;
     if (k->tex_serial == ex->tex_serial) return 1;
     if (memcmp(k->tex[0], ex->tex[NVN_STAGE_VS], sizeof k->tex[0]) || memcmp(k->tex[1], ex->tex[NVN_STAGE_FS], sizeof k->tex[1]) ||
@@ -1809,7 +1824,7 @@ static int memo_match(const VkExec *ex, uint32_t gen, MemoKey *k) {
 
 static int shader_memo_on(void) {
     if (SM.on < 0) {
-        const char *e = cfg_value("XCX_SHADER_MEMO");
+        const char *e = cfg_value("XC3_SHADER_MEMO");
         SM.on = !strcmp(e, "check") ? 2 : strcmp(e, "0") != 0;
     }
     return SM.on;
@@ -1818,8 +1833,96 @@ static int shader_memo_on(void) {
 static struct { int on, valid; VkPipeState s; const VkPipeInfo *info; } PM = {-1};
 
 static int pipe_memo_on(void) {
-    if (PM.on < 0) PM.on = cfg_bool("XCX_PIPE_MEMO");
+    if (PM.on < 0) PM.on = cfg_bool("XC3_PIPE_MEMO");
     return PM.on;
+}
+
+static uint8_t gs_topology_of(int prim) {
+    switch (prim) {
+    case NVN_DRAW_PRIMITIVE_POINTS: return GFX_TOPOLOGY_POINTS;
+    case NVN_DRAW_PRIMITIVE_LINES: case NVN_DRAW_PRIMITIVE_LINE_LOOP: case NVN_DRAW_PRIMITIVE_LINE_STRIP: return GFX_TOPOLOGY_LINES;
+    case NVN_DRAW_PRIMITIVE_LINES_ADJACENCY: case NVN_DRAW_PRIMITIVE_LINE_STRIP_ADJACENCY: return GFX_TOPOLOGY_LINES_ADJACENCY;
+    case NVN_DRAW_PRIMITIVE_TRIANGLES_ADJACENCY: case NVN_DRAW_PRIMITIVE_TRIANGLE_STRIP_ADJACENCY: return GFX_TOPOLOGY_TRIANGLES_ADJACENCY;
+    default: return GFX_TOPOLOGY_TRIANGLES;
+    }
+}
+
+// ---- transform feedback
+// VK_EXT_transform_feedback in place of NVN's. The game's 32-byte control buffer holds the Vulkan counters, one u32 per
+// buffer every 8 bytes, written when a capture stops and read when one resumes or a draw takes its count. Vulkan's
+// capture lives inside a render pass and allows no pipeline bind, so a capture runs from the first draw after Begin or
+// Resume until the pass ends or the pipeline changes (vk_exec_xfb_pause) and picks up from the counters at the next draw.
+static struct {
+    PFN_vkCmdBindTransformFeedbackBuffersEXT bind;
+    PFN_vkCmdBeginTransformFeedbackEXT begin;
+    PFN_vkCmdEndTransformFeedbackEXT end;
+    PFN_vkCmdDrawIndirectByteCountEXT draw;
+    int tried;
+} XFB;
+
+static int xfb_load(void) {
+    if (!XFB.tried) {
+        XFB.tried = 1;
+        VkDevice d = vk_ctx()->device;
+        if (vk_ctx()->has_transform_feedback) {
+            XFB.bind = (PFN_vkCmdBindTransformFeedbackBuffersEXT)vkGetDeviceProcAddr(d, "vkCmdBindTransformFeedbackBuffersEXT");
+            XFB.begin = (PFN_vkCmdBeginTransformFeedbackEXT)vkGetDeviceProcAddr(d, "vkCmdBeginTransformFeedbackEXT");
+            XFB.end = (PFN_vkCmdEndTransformFeedbackEXT)vkGetDeviceProcAddr(d, "vkCmdEndTransformFeedbackEXT");
+            XFB.draw = (PFN_vkCmdDrawIndirectByteCountEXT)vkGetDeviceProcAddr(d, "vkCmdDrawIndirectByteCountEXT");
+        }
+    }
+    return XFB.bind && XFB.begin && XFB.end && XFB.draw;
+}
+
+static int xfb_counters(VkExec *ex, VkBuffer b[4], VkDeviceSize o[4]) {
+    VkDescriptorBufferInfo bi;
+    if (!bind_range(ex, ex->xfb.ctl, 32, 4, 32, VK_MUSE_SSBO, 1, &bi)) return 0;
+    for (int i = 0; i < 4; i++) b[i] = bi.buffer, o[i] = bi.offset + 8 * (VkDeviceSize)i;
+    return 1;
+}
+
+static void xfb_start(VkExec *ex) {
+    VkBuffer b[4], cb[4];
+    VkDeviceSize o[4], s[4], co[4];
+    uint32_t n = 0;
+    for (int i = 0; i < 4; i++) {
+        VkDescriptorBufferInfo bi;
+        if (!ex->xfb.size[i] || !bind_range(ex, ex->xfb.addr[i], ex->xfb.size[i], 4, ~0ull, VK_MUSE_SSBO, 1, &bi)) continue;
+        for (; n <= (uint32_t)i; n++) b[n] = bi.buffer, o[n] = bi.offset, s[n] = bi.range;   // a gap repeats the next buffer
+    }
+    int counters = xfb_counters(ex, cb, co);
+    if (!n || !counters) return warn_once(W_FEEDBACK, "a transform feedback capture without buffers or control is skipped");
+    rec_xfb_bind(XFB.bind, ex->cb, n, b, o, s);
+    rec_xfb_begin(XFB.begin, ex->cb, ex->xfb.resume ? n : 0, cb, co);
+    ex->recorded += 2;
+    ex->xfb.active = 1, ex->xfb.started = 1, ex->xfb.n = n;
+}
+
+void vk_exec_xfb_pause(VkExec *ex) {
+    VkBuffer cb[4];
+    VkDeviceSize co[4];
+    if (!ex->xfb.active) return;
+    if (xfb_counters(ex, cb, co)) rec_xfb_end(XFB.end, ex->cb, ex->xfb.n, cb, co);
+    else rec_xfb_end(XFB.end, ex->cb, 0, cb, co);
+    ex->recorded++;
+    ex->xfb.active = 0, ex->xfb.resume = 1;
+}
+
+// Stops the capture and leaves its counters in the control buffer at addr. A capture no draw reached (its pipeline was
+// still building) wrote nothing: its counters are zero. Later reads of the buffers and counters need the writes done, so
+// End also ends with a barrier.
+static void xfb_stop(VkExec *ex, uint64_t addr, int barrier) {
+    ex->xfb.ctl = addr;
+    vk_exec_pass_end(ex);
+    if (!ex->xfb.started) {
+        VkDescriptorBufferInfo bi;
+        if (bind_range(ex, addr, 32, 4, 32, VK_MUSE_SSBO, 1, &bi)) {
+            vkCmdFillBuffer(ex->cb, bi.buffer, bi.offset, 32, 0);
+            ex->recorded++;
+        }
+    }
+    ex->xfb.on = 0;
+    if (barrier) vk_exec_barrier(ex);
 }
 
 // Pass, shaders, pipeline, fixed state and resources for a draw. 0: the draw is skipped.
@@ -1837,9 +1940,11 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     vk_exec_pass_begin(ex);
     VkRect2D sc = vk_exec_scissor(ex);
     if (!sc.extent.width || !sc.extent.height) return 0;
-    if (!ex->prog) return warn_once(W_PROGRAM, "a draw without a bound program is skipped"), 0;
-    int has_vs, has_fs, vs_wait = 0, fs_wait = 0, memo = shader_memo_on();
-    const GfxShader *vs, *fs;
+    if (!ex->bound[NVN_STAGE_VS]) return warn_once(W_PROGRAM, "a draw without a bound vertex program is skipped"), 0;
+    int has_vs, has_fs, has_gs, vs_wait = 0, fs_wait = 0, gs_wait = 0;
+    ex->gs_topology = gs_topology_of(prim);
+    const GfxShader *vs, *fs, *gs = shader_for(ex, NVN_STAGE_GS, &has_gs, &gs_wait, 0);
+    int memo = has_gs ? 0 : shader_memo_on();
     uint32_t gen = memo ? vk_texture_slots_gen() : 0;   // before shader_for, whose lookups may bump it
     if (memo && SM.valid && memo_match(ex, gen, &SM.k)) {
         vs = SM.vs, fs = SM.fs, has_vs = 1, has_fs = SM.has_fs;
@@ -1847,7 +1952,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
             int hv, hf, wv, wf;
             const GfxShader *v2 = shader_for(ex, NVN_STAGE_VS, &hv, &wv, 0), *f2 = shader_for(ex, NVN_STAGE_FS, &hf, &wf, 0);
             if (v2 != vs || f2 != fs || hf != has_fs || wv || wf)
-                rt_fatal("vk_exec: shader memo of program %llu differs from the lookup", (unsigned long long)ex->prog->serial);
+                rt_fatal("vk_exec: shader memo of program %llu differs from the lookup", (unsigned long long)prog_serial(ex, NVN_STAGE_VS));
         }
     } else {
         SM.valid = 0;
@@ -1861,16 +1966,17 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     // one-shot draws (volumes and LUTs generated once, later only sampled) would leave their target empty for the
     // session. A draw into per-frame targets is skipped until they are ready and comes back next frame.
     int oneshot = -1, skip = pipe_skip_mode();   // -1: not looked up
-    if (vs_wait || fs_wait) {
+    if (vs_wait || fs_wait || gs_wait) {
         if (!(oneshot = !vk_exec_targets_recent(ex, skip >= 1))) return perf_count(PERF_CNT_SHADER_SKIP), 0;   // skipped until ready
         perf_count(PERF_CNT_ONESHOT_WAIT);
         if (vs_wait) vs = shader_for(ex, NVN_STAGE_VS, &has_vs, NULL, 1);
         if (fs_wait) fs = shader_for(ex, NVN_STAGE_FS, &has_fs, NULL, 1);
+        if (gs_wait) gs = shader_for(ex, NVN_STAGE_GS, &has_gs, NULL, 1);
     }
-    if (!vs || (has_fs && !fs)) return 0;
+    if (!vs || (has_fs && !fs) || (has_gs && !gs)) return 0;
     uint32_t fbl = feedback_prepare(ex, fs);
     VkPipeState s = ex->pipe;
-    s.vs = vs, s.fs = fs;
+    s.vs = vs, s.fs = fs, s.gs = gs;
     s.feedback = (uint8_t)((fbl & 0xff ? 1 : 0) | (fbl & 0x100 ? 2 : 0));
     s.prim = (uint8_t)prim;
     s.depth_minus_w = (uint8_t)(nvn_depth_minus_w() != 0);
@@ -1880,7 +1986,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     int pending;
     // A draw of at most 6 vertices over half the render area or more (a full-screen triangle or quad, a tile) waits for
     // its pipeline: skipping it can leave a black tile. The waits share 50 ms per presented frame
-    // (XCX_PIPE_SKIP=fullscreen skips them instead). A one-shot draw waits without that budget. Everything else is
+    // (XC3_PIPE_SKIP=fullscreen skips them instead). A one-shot draw waits without that budget. Everything else is
     // skipped while its pipeline is built.
     static uint64_t wait_frame;
     static uint64_t wait_left_ns;
@@ -1894,7 +2000,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         wait_ms = (uint32_t)(wait_left_ns / 1000000);
         if (wait_ms) t0 = kern_now_ns();
     }
-    // The previous draw's pipeline while its state repeats (PM, XCX_PIPE_MEMO=0 turns it off): the cache key is made
+    // The previous draw's pipeline while its state repeats (PM, XC3_PIPE_MEMO=0 turns it off): the cache key is made
     // from the state alone, and a pipeline once found only changes from its fast link to its optimised build, read
     // from the info the cache entry keeps.
     VkPipeline p;
@@ -1932,6 +2038,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     }
     if (pending) return 0;   // a background worker is building it: the draw is skipped until it is ready
     if (!p || !info) return warn_once(W_PIPELINE, "a graphics pipeline could not be created: draws with it are skipped"), 0;
+    if (ex->xfb.active && B.pipe[0] != p) vk_exec_xfb_pause(ex);   // Vulkan binds no pipeline while feedback is active
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     if (!B.st_valid || memcmp(&B.st, &s, sizeof s)) {
         vk_pipeline_set_dynamic(ex->cb, &s);
@@ -1946,7 +2053,22 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     bind_vertex_buffers(ex);
     if (vk_dump_armed) vk_dump_draw(ex, &s, p, info);
     vk_exec_oq_draw(ex);
+    if (ex->xfb.on && !ex->xfb.active) xfb_start(ex);
     return 1;
+}
+
+// DrawTransformFeedback: as many vertices as the capture saved in the control buffer. NVN takes the vertex size from the
+// bound stream, as Maxwell's draw-auto does from its stride register.
+static void op_xfb_draw(VkExec *ex, const p_xfb *d) {
+    c0_binst = 0;
+    VkDescriptorBufferInfo bi;
+    uint32_t stride = ex->pipe.vstream[0].stride;
+    if (!stride || !XFB.draw || !bind_range(ex, d->addr, 4, 4, 4, VK_MUSE_SSBO, 0, &bi))
+        return warn_once(W_FEEDBACK, "a transform feedback draw without stream stride or counter is skipped");
+    if (!prepare_draw(ex, d->prim, 1 << 16, 0)) return;
+    vk_exec_frame.draws++;
+    rec_xfb_draw(XFB.draw, ex->cb, bi.buffer, bi.offset, stride);
+    ex->recorded++;
 }
 
 static void bind_index(VkExec *ex, const void *data, uint64_t bytes, VkIndexType type) {
@@ -1990,7 +2112,7 @@ static void op_draw(VkExec *ex, const p_draw *d) {
 // Primitive restart of an indexed draw. NVN restarts strips wherever an index equals the SetPrimitiveRestart value;
 // Vulkan restarts only at the all-ones value of the bound index type, and only strips and fans without
 // primitiveTopologyListRestart. Byte indices are widened to 16 bits, so their restart value becomes 0xffff
-// (op_draw_idx). Without restart the 0xffff entries of XCX's terrain and cliff strips fetch vertex 65535 + base and
+// (op_draw_idx). Without restart the 0xffff entries of XC3's terrain and cliff strips fetch vertex 65535 + base and
 // the triangles around them drop out.
 static int restart_for(const VkExec *ex, int prim, int itype) {
     if (!ex->prim_restart.enable) return 0;
@@ -2016,7 +2138,7 @@ static void op_draw_idx(VkExec *ex, const p_draw_idx *d) {
     uint64_t bytes = (uint64_t)d->count * isize[d->itype];
     VkMemSpan sp;
     if (!vk_mem_resolve(d->ibuf, bytes, &sp)) return warn_once(W_INDEX, "index buffer %#llx is not backed: draws with it are skipped", (unsigned long long)d->ibuf);
-    if (d->prim == NVN_DRAW_PRIMITIVE_QUADS) {   // Vulkan has no quads: each 4 indices become two triangles (XCX text)
+    if (d->prim == NVN_DRAW_PRIMITIVE_QUADS) {   // Vulkan has no quads: each 4 indices become two triangles (XC3 text)
         if (sp.alloc) return warn_once(W_INDEX, "indexed quads with indices in device-local memory: draw skipped");
         uint32_t q = (uint32_t)d->count / 4;
         if (!q) return;
@@ -2095,7 +2217,7 @@ static void op_draw_idx_ind(VkExec *ex, const p_draw_idx_ind *d) {
 
 static void op_dispatch(VkExec *ex, const p_dispatch *d) {
     if (d->x <= 0 || d->y <= 0 || d->z <= 0) return;
-    if (!ex->prog) return warn_once(W_PROGRAM, "a dispatch without a bound program is skipped");
+    if (!ex->bound[NVN_STAGE_CS]) return warn_once(W_PROGRAM, "a dispatch without a bound compute program is skipped");
     cb_res(ex);
     dummies_init();
     int present;
@@ -2116,7 +2238,7 @@ static void op_dispatch(VkExec *ex, const p_dispatch *d) {
 // DispatchComputeIndirect: vkCmdDispatchIndirect from the pool buffer. The shader reads the group counts from c0 0x200,
 // so they are copied there on the GPU, into a c0 range no other dispatch uses, before the dispatch.
 static void op_dispatch_ind(VkExec *ex, const p_dispatch_ind *d) {
-    if (!ex->prog) return warn_once(W_PROGRAM, "a dispatch without a bound program is skipped");
+    if (!ex->bound[NVN_STAGE_CS]) return warn_once(W_PROGRAM, "a dispatch without a bound compute program is skipped");
     VkMemSpan ip;
     if (!vk_mem_resolve(d->ind, sizeof(VkDispatchIndirectCommand), &ip) || ip.offset % 4)
         return warn_once(W_INDIRECT, "indirect dispatch arguments at %#llx are not backed or not aligned: skipped", (unsigned long long)d->ind);
@@ -2170,19 +2292,44 @@ static void op_update_ub(VkExec *ex, const p_update_ub *u) {
 
 // ---- bind ops
 
-static void bind_handles(uint64_t *dst, int cap, const p_bind_handles *b) {
+// off: pool_offset of the bound pools. An empty handle stays empty.
+static void bind_handles(uint64_t *dst, int cap, const p_bind_handles *b, uint64_t off) {
     if (b->stage < 0 || b->stage >= 6 || b->first < 0 || b->n < 0 || b->n > 32 || b->first + b->n > cap) {
         warn_once(W_BIND, "a bind of %d handles at %d of stage %d is out of range: ignored", b->n, b->first, b->stage);
         return;
     }
-    memcpy(&dst[b->first], b->h, sizeof(uint64_t) * (size_t)b->n);
+    for (int i = 0; i < b->n; i++) dst[b->first + i] = b->h[i] ? b->h[i] + off : 0;
+}
+
+// What turns a handle's pool-relative ids into slots of the back end's tables (nvn_api_obj.c, descriptor pools).
+static uint64_t pool_offset(const dpool_t *tp, const dpool_t *sp) {
+    return (uint64_t)(tp ? tp->base : 0) + ((uint64_t)(sp ? sp->base : 0) << 20);
+}
+
+// Handles are resolved at the draw on hardware, so those already bound follow the pools that replace theirs.
+static void set_pools(VkExec *ex, const dpool_t *tp, const dpool_t *sp) {
+    uint64_t d = pool_offset(tp, sp) - pool_offset(ex->tex_pool, ex->samp_pool);
+    ex->tex_pool = tp, ex->samp_pool = sp;
+    for (int st = 0; d && st < 6; st++) {
+        for (int i = 0; i < 128; i++) {
+            if (ex->tex[st][i]) ex->tex[st][i] += d;
+            if (ex->samp[st][i]) ex->samp[st][i] += d;
+        }
+        for (int i = 0; i < 32; i++) if (ex->img[st][i]) ex->img[st][i] += d;
+    }
+    ex->tex_serial++;
+    bind_gen++;
 }
 
 void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     switch (op) {
     case OP_BIND_PROGRAM: {
         const p_bind_program *b = payload;
-        ex->prog = b->prog, ex->prog_stages = b->stages;
+        // A bind replaces the stages it names and leaves the others: XC3 binds fragment-only programs over a vertex program
+        // bound earlier, about 6% of its draws. A stage the program lacks, or a null program, ends up with no shader.
+        for (int i = 0; i < 6; i++)
+            if (b->stages >> i & 1) ex->bound[i] = b->prog;
+        if (b->prog) ex->prog = b->prog;
         bind_gen++;
         break;
     }
@@ -2235,21 +2382,23 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
         bind_gen++;
         break;
     }
+    case OP_SET_TEX_POOL: set_pools(ex, ((const p_set_pool *)payload)->pool, ex->samp_pool); break;
+    case OP_SET_SAMP_POOL: set_pools(ex, ex->tex_pool, ((const p_set_pool *)payload)->pool); break;
     case OP_BIND_TEX: {
         const p_bind_handles *b = payload;
-        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->tex[b->stage] : NULL, 128, b);
+        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->tex[b->stage] : NULL, 128, b, pool_offset(ex->tex_pool, ex->samp_pool));
         ex->tex_serial++;
         bind_gen++;
         break;
     }
     case OP_BIND_SAMP: {
         const p_bind_handles *b = payload;
-        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->samp[b->stage] : NULL, 128, b);
+        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->samp[b->stage] : NULL, 128, b, pool_offset(ex->tex_pool, ex->samp_pool));
         break;
     }
     case OP_BIND_IMG: {
         const p_bind_handles *b = payload;
-        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->img[b->stage] : NULL, 32, b);
+        bind_handles(b->stage >= 0 && b->stage < 6 ? ex->img[b->stage] : NULL, 32, b, pool_offset(ex->tex_pool, ex->samp_pool));
         ex->tex_serial++;   // the shader memo's handle check (feedback_scan reads only textures: a rescan at most)
         bind_gen++;
         break;
@@ -2259,6 +2408,24 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     case OP_DRAW_IDX: op_draw_idx(ex, payload); break;
     case OP_DISPATCH: op_dispatch(ex, payload); break;
     case OP_DRAW_IDX_IND: op_draw_idx_ind(ex, payload); break;
+    case OP_XFB_BUF: {
+        const p_xfb_buf *b = payload;
+        if (b->index >= 0 && b->index < 4) ex->xfb.addr[b->index] = b->addr, ex->xfb.size[b->index] = b->size;
+        break;
+    }
+    case OP_XFB_BEGIN: {
+        const p_xfb *b = payload;
+        if (!xfb_load()) { warn_once(W_FEEDBACK, "transform feedback is not available on this device"); break; }
+        ex->xfb.on = 1, ex->xfb.active = 0, ex->xfb.ctl = b->addr;
+        ex->xfb.started = ex->xfb.resume = b->prim;   // Resume: prim 1, the counters hold the capture so far
+        break;
+    }
+    case OP_XFB_END: {
+        const p_xfb *b = payload;
+        if (ex->xfb.on) xfb_stop(ex, b->addr, !b->prim);
+        break;
+    }
+    case OP_XFB_DRAW: if (xfb_load()) op_xfb_draw(ex, payload); break;
     case OP_DISPATCH_IND: op_dispatch_ind(ex, payload); break;
     default: rt_fatal("vk: op %s is not a draw op", nvn_op_name(op));
     }

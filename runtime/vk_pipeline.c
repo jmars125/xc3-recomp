@@ -33,7 +33,7 @@
 // binding strides only); and, where VK_EXT_extended_dynamic_state3 offers them, depth clamp, polygon mode, blend enables,
 // equations, write masks and alpha to coverage. The key holds the rest: shaders, target formats, sample count, topology
 // class, depth clip mode, logic op and what is not dynamic on the GPU. The VkPipelineCache persists to
-// pipeline-cache.bin next to xcx.exe (XCX_PIPELINE_CACHE overrides the path).
+// pipeline-cache.bin next to xc3.exe (XC3_PIPELINE_CACHE overrides the path).
 //
 // Provenance: the NVN -> Vulkan enum mappings (blend factors and equations, compare functions, stencil ops), the vertex
 // format table with its 3-component fallback and the pipeline cache file handling follow LAS Recomp
@@ -77,7 +77,7 @@ static struct {
     int push_stage;                    // GFX_STAGE_* whose set is pushed with independent layouts
     int gpl;                           // draws whose pipeline is building get a fast-linked one (vk_caps.gpl)
     struct { uint64_t links, wlinks, dlinks, requeued, link_fail, defer, lib_n[4], lib_fail, swaps, slow, pre_used[4]; double link_ms, link_max, lib_ms[4], lib_max[4], dlink_ms, dlink_max; } g;
-    int vs_outs_all;                   // XCX_VS_OUTS: 0 union of paired fragment inputs, 1 (all) all 32 output locations
+    int vs_outs_all;                   // XC3_VS_OUTS: 0 union of paired fragment inputs, 1 (all) all 32 output locations
     int dyn_vi, dyn_clamp, dyn_poly, dyn_blend_en, dyn_blend_eq, dyn_wmask, dyn_a2c;
     int f_logic_op, f_depth_clamp, f_fill_non_solid, f_dual_src;
     int pv_last;                       // provokingVertexLast enabled: NVN's default is the last vertex
@@ -144,10 +144,10 @@ static uint64_t fnv(uint64_t h, const void *p, size_t n) {
 // than the lookup. Only the in-memory table uses it; the key file keeps fnv.
 static uint64_t key_hash(const void *k, size_t n) { return nvn_hm_hash(k, (uint32_t)n); }
 
-// The cache file lives next to xcx.exe, so every build dir (the main build and each private fork) has its own:
+// The cache file lives next to xc3.exe, so every build dir (the main build and each private fork) has its own:
 // forks that shared build\v121's cache broke each other's runs (2026-10-22).
 static void cache_path_init(void) {
-    const char *cfg_path = cfg_get("XCX_PIPELINE_CACHE");
+    const char *cfg_path = cfg_get("XC3_PIPELINE_CACHE");
     if (cfg_path && *cfg_path && strlen(cfg_path) < sizeof P.cache_path) {
         strcpy(P.cache_path, cfg_path);
         return;
@@ -215,7 +215,7 @@ static int ensure_init(void) {
     rt_log(P.gpl ? "vk_pipeline: graphics pipeline library on: a draw whose pipeline is building gets a fast-linked one, "
                    "the optimised build replaces it when done"
                  : "vk_pipeline: graphics pipeline library off: draws wait for or skip pipelines that are building");
-    const char *ps = cfg_get("XCX_PUSH_STAGE"), *vo = cfg_get("XCX_VS_OUTS");
+    const char *ps = cfg_get("XC3_PUSH_STAGE"), *vo = cfg_get("XC3_VS_OUTS");
     P.push_stage = ps && !strcmp(ps, "fs") ? GFX_STAGE_FS : GFX_STAGE_VS;
     P.vs_outs_all = vo && !strcmp(vo, "all");
     if (P.indep) rt_log("vk_pipeline: stage-independent layouts: vertex set 0, fragment set 1, %s set pushed; vertex outputs: %s",
@@ -235,7 +235,7 @@ static int ensure_init(void) {
         VkPhysicalDeviceVulkan13Properties p13 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
         VkPhysicalDeviceProperties2 q2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &p13};
         vkGetPhysicalDeviceProperties2(c->phys, &q2);
-        P.sg32_stages = vk_caps.sg_pin_stages;   // vk_caps.c: 32 unless XCX_VK_SUBGROUP; 0 without the pin
+        P.sg32_stages = vk_caps.sg_pin_stages;   // vk_caps.c: 32 unless XC3_VK_SUBGROUP; 0 without the pin
         rt_log("vk_pipeline: subgroup size %u-%u, requiredSubgroupSizeStages %#x, pinning %u on %#x", p13.minSubgroupSize,
                p13.maxSubgroupSize, (unsigned)p13.requiredSubgroupSizeStages, vk_caps.sg_size, (unsigned)P.sg32_stages);
     }
@@ -247,9 +247,9 @@ static int ensure_init(void) {
     PROC(push, "vkCmdPushDescriptorSetKHR");
     // Descriptor update templates (core 1.1; the push variant comes with VK_KHR_push_descriptor on 1.1): the driver
     // walks a layout prepared when the layout is made instead of parsing write structs every draw (DXVK does so for the
-    // same reason). XCX_DESC_TEMPLATE=0 keeps the write structs.
-    if (!cfg_bool("XCX_DESC_TEMPLATE")) {
-        rt_log("vk_pipeline: descriptor update templates off (XCX_DESC_TEMPLATE=0)");
+    // same reason). XC3_DESC_TEMPLATE=0 keeps the write structs.
+    if (!cfg_bool("XC3_DESC_TEMPLATE")) {
+        rt_log("vk_pipeline: descriptor update templates off (XC3_DESC_TEMPLATE=0)");
     } else if (c->props.apiVersion >= VK_API_VERSION_1_1 && PROC(tpl_create, "vkCreateDescriptorUpdateTemplate") &&
                PROC(tpl_destroy, "vkDestroyDescriptorUpdateTemplate") && PROC(tpl_update, "vkUpdateDescriptorSetWithTemplate")) {
         P.tpl = 1;
@@ -258,15 +258,15 @@ static int ensure_init(void) {
     } else {
         rt_log("vk_pipeline: descriptor update templates unavailable: sets are written with write structs");
     }
-    // XCX_VK_DYN_VERTEX=0/1 forces dynamic vertex input off or on. Default off on Intel's frozen Windows driver for its
+    // XC3_VK_DYN_VERTEX=0/1 forces dynamic vertex input off or on. Default off on Intel's frozen Windows driver for its
     // older integrated GPUs (UHD 630, Ice Lake: Vulkan 1.3.215 and older), which draws nothing with it; LAS Recomp
     // turns it off there for the same reason.
-    const char *dv = cfg_get("XCX_VK_DYN_VERTEX");   // no fixed default: it depends on the GPU, see above
+    const char *dv = cfg_get("XC3_VK_DYN_VERTEX");   // no fixed default: it depends on the GPU, see above
     int intel_legacy = c->props.vendorID == 0x8086 && c->props.apiVersion <= VK_MAKE_API_VERSION(0, 1, 3, 215);
     int dv_on = dv && *dv ? strcmp(dv, "0") != 0 : !intel_legacy;
     P.dyn_vi = dv_on && c->has_vertex_input_dynamic_state && PROC(set_vi, "vkCmdSetVertexInputEXT");
     if (!dv_on && c->has_vertex_input_dynamic_state)
-        rt_log("vk_pipeline: dynamic vertex input off (%s)", dv && *dv ? "XCX_VK_DYN_VERTEX=0" : "Intel's older Windows driver draws nothing with it");
+        rt_log("vk_pipeline: dynamic vertex input off (%s)", dv && *dv ? "XC3_VK_DYN_VERTEX=0" : "Intel's older Windows driver draws nothing with it");
     if (c->has_eds3) {
         P.dyn_clamp = e3.extendedDynamicState3DepthClampEnable && P.f_depth_clamp && PROC(set_clamp, "vkCmdSetDepthClampEnableEXT");
         P.dyn_poly = e3.extendedDynamicState3PolygonMode && PROC(set_poly, "vkCmdSetPolygonModeEXT");
@@ -275,16 +275,16 @@ static int ensure_init(void) {
         P.dyn_wmask = e3.extendedDynamicState3ColorWriteMask && PROC(set_wmask, "vkCmdSetColorWriteMaskEXT");
         P.dyn_a2c = e3.extendedDynamicState3AlphaToCoverageEnable && PROC(set_a2c, "vkCmdSetAlphaToCoverageEnableEXT");
     }
-    // XCX_VK_DYN_A2C=0/1 forces dynamic alpha to coverage off or on. Default off on AMD's Windows driver branch for
+    // XC3_VK_DYN_A2C=0/1 forces dynamic alpha to coverage off or on. Default off on AMD's Windows driver branch for
     // RDNA 2 and older (vk_caps.amd_sc), which applies alpha to coverage while the dynamic state says off: on an RX 590
     // (24.9.1) TotK Recomp, whose game never turns it on, drew characters with depth but no colour (black silhouettes)
     // and dithered other surfaces into checkerboards (TotK Recomp issue #67, RX 470/570/580). Taken out of the dynamic
     // state, it goes into the pipeline key and the characters draw.
-    const char *da = cfg_get("XCX_VK_DYN_A2C");   // no fixed default: it depends on the driver, see above
+    const char *da = cfg_get("XC3_VK_DYN_A2C");   // no fixed default: it depends on the driver, see above
     int da_on = da && *da ? strcmp(da, "0") != 0 : !vk_caps.amd_sc;
     if (!da_on && P.dyn_a2c) {
         P.dyn_a2c = 0;
-        rt_log("vk_pipeline: dynamic alpha to coverage off (%s)", da && *da ? "XCX_VK_DYN_A2C=0" : "AMD's driver for RDNA 2 and older");
+        rt_log("vk_pipeline: dynamic alpha to coverage off (%s)", da && *da ? "XC3_VK_DYN_A2C=0" : "AMD's driver for RDNA 2 and older");
     }
 #undef PROC
     static const VkDynamicState core[] = {
@@ -441,7 +441,7 @@ static VkFormatFeatureFlags format_features(VkFormat f, int optimal) {
     return r;
 }
 
-// Vertex attribute formats by NVNformat (LAS Recomp exec.c vertex_format; MNG nvn_mtl.m vfmt for the XCX additions).
+// Vertex attribute formats by NVNformat (LAS Recomp exec.c vertex_format; MNG nvn_mtl.m vfmt for the XC3 additions).
 typedef struct { VkFormat vk; uint8_t type; } VtxFmt;
 #define F(v) {VK_FORMAT_##v, GFX_TYPE_FLOAT}
 #define U(v) {VK_FORMAT_##v, GFX_TYPE_UINT}
@@ -570,7 +570,7 @@ typedef struct {
 
 // An attribute the game left without a format is a fixed one on Maxwell, a single 32-bit component of 0 (deko3d
 // gpu_3d_vbo.cpp binds unused attributes as IsFixed 1x32 float): it reads (0, 0, 0, 1), as Vulkan expands a
-// one-component format. XCX's foliage shaders scale wind sway by 1 - colour.w; shapes without a vertex colour
+// one-component format. XC3's foliage shaders scale wind sway by 1 - colour.w; shapes without a vertex colour
 // (Brightbloom stem and leaves) must not sway, or they bend away from the parts that have one (the bulb).
 static VkFormat zero_format(int type) {
     return type == GFX_TYPE_UINT ? VK_FORMAT_R32_UINT : type == GFX_TYPE_SINT ? VK_FORMAT_R32_SINT : VK_FORMAT_R32_SFLOAT;
@@ -910,6 +910,7 @@ static VkDescriptorType descriptor_type(int kind, const GfxShaderRes *r) {
 }
 
 static VkShaderStageFlags stage_bit(int stage) {
+    if (stage == GFX_STAGE_GS) return VK_SHADER_STAGE_GEOMETRY_BIT;
     return stage == GFX_STAGE_VS ? VK_SHADER_STAGE_VERTEX_BIT : stage == GFX_STAGE_FS ? VK_SHADER_STAGE_FRAGMENT_BIT
                                                                                       : VK_SHADER_STAGE_COMPUTE_BIT;
 }
@@ -975,6 +976,7 @@ static int layout_covers(const VkPipeState *s, const Layout *l, uint32_t fs_off,
     uint32_t nv = l->set1 ? l->n0 : l->n;
     int m = module_binding_missing(s->vs, l->b, nv, 0);
     const char *stage = "vertex";
+    if (m < 0 && s->gs) m = module_binding_missing(s->gs, l->b, nv, binding_span(s->vs) - 1), stage = "geometry";
     if (m < 0 && s->fs) {
         m = l->set1 ? module_binding_missing(s->fs, l->b + l->n0, l->n - l->n0, 0) : module_binding_missing(s->fs, l->b, l->n, fs_off);
         stage = "fragment";
@@ -1127,7 +1129,7 @@ static Layout *layout_pair(Bindings *B, Bindings *F) {
 
 // Vertex outputs with independent layouts: each vertex shader declares the union of the inputs of every fragment
 // shader met with it (pipeline-keys.bin at the prewarm, then each pipeline built), so its module does not depend on the
-// fragment shader of one pipeline. Unwritten ones read (0, 0, 0, 1) as before. XCX_VS_OUTS=all declares all 32.
+// fragment shader of one pipeline. Unwritten ones read (0, 0, 0, 1) as before. XC3_VS_OUTS=all declares all 32.
 #define VS_OUTS_CAP 8192
 static struct {
     PlatMutex lock;
@@ -1201,7 +1203,7 @@ static Pipe *pipe_add(const void *key, size_t size, uint64_t h, VkPipeline pipel
 // ---- graphics pipelines
 
 typedef struct {                       // normalized: zero where the state is dynamic or unused
-    const GfxShader *vs, *fs;
+    const GfxShader *vs, *fs, *gs;
     uint32_t color[8], depth, stencil; // VkFormat
     uint8_t n_color, samples, topo_class, minus_w;
     uint8_t clamp, poly_mode, a2c, logic_op;   // logic_op: VkLogicOp + 1 when enabled
@@ -1230,7 +1232,7 @@ static int target_count(const VkPipeState *s) {
 // fragment module whose output 1 is Location 0, Index 1 (spirv_dual_source).
 static int is_src1(unsigned f) { return f >= NVN_BLEND_FUNC_SRC1_COLOR && f <= NVN_BLEND_FUNC_ONE_MINUS_SRC1_ALPHA; }
 // Runs per draw (gkey_fill, target_wmask): only the blend factors of blend-enabled targets are read until one is SRC1,
-// which XCX never sets (0 of 876 pipelines in the field and fight saves).
+// which XC3 never sets (0 of 876 pipelines in the field and fight saves).
 static int uses_src1(const VkPipeState *s) {
     for (uint32_t m = s->color.blend_en & 0xffu; m; m &= m - 1) {
         int i = __builtin_ctz(m);
@@ -1245,7 +1247,7 @@ static int uses_src1(const VkPipeState *s) {
 // Colour write mask of target i: NVN's channel mask, zero for a target outside the fragment shader's output map (SPH
 // omap). Maxwell leaves such a target untouched (nxnative 04-graphics.md, "Targets the fragment shader does not
 // write"); Vulkan writes undefined values, and on AMD they lit grass in front of Link as flat lime. Zeros are wrong
-// too: XCX's half-res transparency pass binds its linear depth (R32F) as target 7, samples it in the same draws and
+// too: XC3's half-res transparency pass binds its linear depth (R32F) as target 7, samples it in the same draws and
 // writes only targets 0-2, 4 and 5; zeroed, the depth that later passes rebuild from it was 0 in tiles, and the fog
 // over distant geometry showed rectangles of clear sky.
 static uint32_t target_wmask(const VkPipeState *s, int i) {
@@ -1259,7 +1261,7 @@ uint32_t vk_pipeline_target_wmask(const VkPipeState *s, int i) { return target_w
 
 static void gkey_fill(const VkPipeState *s, GKey *k) {
     memset(k, 0, sizeof *k);
-    k->vs = s->vs, k->fs = s->fs;
+    k->vs = s->vs, k->fs = s->fs, k->gs = s->gs;
     k->indep = (uint8_t)P.indep;
     k->n_color = (uint8_t)target_count(s);
     for (int i = 0; i < k->n_color; i++) k->color[i] = target_format(s->color_fmt[i], NULL, NULL);
@@ -1324,11 +1326,11 @@ static uint32_t vs_union_missing(const VkPipeState *s, GfxShaderIo fin[32]) {
 }
 
 static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Layout *l, uint32_t fs_off) {
-    VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE;
+    VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE, gm = VK_NULL_HANDLE;
     uint64_t vw, fw;
     const uint32_t *vcode = gfx_shader_spirv(s->vs, &vw);
     uint32_t *vpatched = NULL, *fpatched = NULL;
-    if (l->set1) {   // independent layouts: outputs from the vertex shader's union, not from this fragment shader
+    if (l->set1 && !s->gs) {   // independent layouts: outputs from the vertex shader's union, not from this fragment shader
         GfxShaderIo fin[32];
         uint32_t missing = vs_union_missing(s, fin);
         if (missing) {
@@ -1338,16 +1340,27 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
             else vcode = vpatched, vw = n2;
         }
     }
+    if (s->gs) {   // bindings after the vertex shader's in set 0; what the geometry shader reads is the shaders' own business
+        uint64_t gw;
+        const uint32_t *gcode = gfx_shader_spirv(s->gs, &gw);
+        uint32_t off = binding_span(s->vs) - 1, *r = off ? spirv_rebind(gcode, gw, off) : NULL;
+        if (!off || r) gm = make_module(off ? r : gcode, gw);
+        free(r);
+        if (!gm) goto out;
+    }
     if (s->fs) {
         GfxShaderIo fin[32], vout[32];
-        uint32_t need = gfx_shader_inputs(s->fs, fin), have = gfx_shader_outputs(s->vs, vout), missing = 0;
+        uint32_t need = gfx_shader_inputs(s->fs, fin), missing = 0;
+        uint32_t have = gfx_shader_outputs(s->gs ? s->gs : s->vs, vout);
         for (int i = 0; i < 32; i++) {
             if (!(need >> i & 1) || fin[i].packed) continue;
             if (!(have >> i & 1)) missing |= 1u << i;
             else if (vout[i].type != fin[i].type)
                 LOG_ONCE("vk_pipeline: varying %d is type %d in the vertex stage, %d in the fragment stage", i, vout[i].type, fin[i].type);
         }
-        if (missing && !l->set1) {
+        if (missing && s->gs) {
+            LOG_ONCE("vk_pipeline: the fragment shader reads varyings %#x its geometry shader does not write", missing);
+        } else if (missing && !l->set1) {
             uint64_t n2 = 0;
             vpatched = spirv_add_outputs(vcode, vw, missing, fin, &n2);
             if (!vpatched) LOG_ONCE("vk_pipeline: cannot add missing vertex outputs (mask %#x)", missing);
@@ -1373,14 +1386,17 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     VkPipeline pipe = VK_NULL_HANDLE;
     if (!vm || (s->fs && !fm)) goto out;
 
-    VkPipelineShaderStageCreateInfo stages[2] = {
+    VkPipelineShaderStageCreateInfo stages[3] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vm, .pName = "main"},
-        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fm, .pName = "main"}};
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fm, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_GEOMETRY_BIT, .module = gm, .pName = "main"}};
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo rqv, rqf;
     uint64_t sw;
     const uint32_t *scode = gfx_shader_spirv(s->vs, &sw);   // vcode may be a patched copy that is freed by now
     pin_subgroup32(&stages[0], &rqv, scode, sw);
     if (s->fs) pin_subgroup32(&stages[1], &rqf, gfx_shader_spirv(s->fs, &sw), sw);
+    if (!s->fs) stages[1] = stages[2];   // the geometry stage, or nothing
+    uint32_t n_stages = 1 + (s->fs != NULL) + (s->gs != NULL);
     VkVertexInputAttributeDescription va[32];
     VkVertexInputBindingDescription vb[17];
     uint32_t na = 0, nb = 0;
@@ -1433,7 +1449,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                                         .pColorAttachmentFormats = (const VkFormat *)k->color,
                                         .depthAttachmentFormat = (VkFormat)k->depth, .stencilAttachmentFormat = (VkFormat)k->stencil};
     VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri,
-                                       .stageCount = s->fs ? 2 : 1, .pStages = stages, .pVertexInputState = &vi,
+                                       .stageCount = n_stages, .pStages = stages, .pVertexInputState = &vi,
                                        .pInputAssemblyState = &ia, .pViewportState = &vp, .pRasterizationState = &rs,
                                        .pMultisampleState = &ms, .pDepthStencilState = &ds, .pColorBlendState = &cb,
                                        .pDynamicState = &dy, .layout = l->layout};
@@ -1451,6 +1467,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
 out:
     if (vm) vkDestroyShaderModule(P.device, vm, NULL);
     if (fm) vkDestroyShaderModule(P.device, fm, NULL);
+    if (gm) vkDestroyShaderModule(P.device, gm, NULL);
     return pipe;
 }
 
@@ -1635,7 +1652,7 @@ static struct {
     LibJob *head, *tail;
     int idle;                          // workers asleep on work_cv
     int running;                       // jobs workers are building
-    int on;                            // XCX_PIPE_WAIT: 1 workers (default), 0 the drawing thread builds them (draw);
+    int on;                            // XC3_PIPE_WAIT: 1 workers (default), 0 the drawing thread builds them (draw);
                                        // set by vk_pipeline_async_enable, before the replay runs
     uint64_t waits, queued, by_worker, stolen, timeouts;
 } U;
@@ -1839,7 +1856,7 @@ static struct {
 // Every graphics pipeline built in a game run appends a KeyRec: the VkPipeState it was built from with the shader
 // pointers zeroed and the shaders named by their gfx_shader input ids instead, which do not depend on the translator,
 // so the record rebuilds the pipeline without guest memory. At the next boot vk_pipeline_prewarm (rt_boot, before the
-// guest runs; XCX_PIPE_PREBUILD=0 skips it) loads each record's shaders, translating the ones not cached under the
+// guest runs; XC3_PIPE_PREBUILD=0 skips it) loads each record's shaders, translating the ones not cached under the
 // current translator from their stored inputs (gfx_shader_prewarm; a record whose shader has neither is dropped),
 // enters each Pipe as building under the key a draw would compute, queues it to the low queue and builds the queue on
 // every core. Records are deduplicated by a hash of their bytes; they are collected under P.lock by the worker that
@@ -1848,7 +1865,7 @@ static struct {
 // record changes meaning without changing size.
 #define KEYS_VERSION 3                 // 3: shaders named by input id (gfx_shader.c)
 typedef struct { char magic[8]; uint32_t version, rec_size; } KeysHeader;
-#define KEYS_MAGIC "XCXPKEY"            // 8 bytes with its NUL: the writer and the reader use this one spelling
+#define KEYS_MAGIC "XC3PKEY"            // 8 bytes with its NUL: the writer and the reader use this one spelling
 typedef struct {
     uint8_t vs[32], fs[32];            // gfx_shader_input_id of each stage; fs all zero with has_fs 0
     uint32_t has_fs, pad;
@@ -1913,6 +1930,7 @@ static void rec_fill(KeyRec *r, const VkPipeState *s) {
 
 // A pipeline was built for a draw: queue its record for the file. Caller holds P.lock.
 static void keys_note(const VkPipeState *s) {
+    if (s->gs) return;   // its record has no geometry shader; built on demand
     if (!A.on || !K.path[0]) return;
     KeyRec r;
     rec_fill(&r, s);
@@ -1998,7 +2016,7 @@ static void pipe_worker(void *arg) {
     plat_mutex_lock(&P.lock);
     for (;;) {
         // With 3 or more workers one never takes low-queue work, so a waiting draw's library starts at once
-        // (not with XCX_PIPE_WAIT=draw).
+        // (not with XC3_PIPE_WAIT=draw).
         while (!U.head && !A.head && !(A.low && (A.threads < 3 || !U.on || A.low_running < A.threads - 1))) {
             U.idle++;
             plat_cond_wait(&work_cv, &P.lock);
@@ -2033,7 +2051,7 @@ static void pipe_worker(void *arg) {
         }
         // Step 1 for a job a draw waits for: its stage libraries and the fast link. Step 2, the optimised build, goes to
         // the head of the low queue, so a burst of new pipelines gets every fast link before any optimised build.
-        if (P.gpl && (!j->prebuild || j->demanded) && !j->p->info.pipeline && !j->p->fast_tried && j->p->lay) {
+        if (P.gpl && !j->s.gs && (!j->prebuild || j->demanded) && !j->p->info.pipeline && !j->p->fast_tried && j->p->lay) {
             int final;
             VkPipeline f = gpl_link(&j->s, &j->k, j->p->lay, 1, &final);   // releases P.lock while building
             j->p->fast_tried = 1;
@@ -2117,8 +2135,8 @@ static void workers_drain(void) {
 }
 
 void vk_pipeline_async_enable(void) {
-    U.on = strcmp(cfg_value("XCX_PIPE_WAIT"), "draw") != 0;
-    const char *e = cfg_get("XCX_PIPE_SYNC");
+    U.on = strcmp(cfg_value("XC3_PIPE_WAIT"), "draw") != 0;
+    const char *e = cfg_get("XC3_PIPE_SYNC");
     if (e && *e && strcmp(e, "0")) return;
     A.on = 1;
 }
@@ -2154,15 +2172,18 @@ static Pipe *pipe_miss(const VkPipeState *s, const GKey *k, uint64_t h, int mode
     const char *why = NULL;
     Bindings B = {0};
     Layout *l = NULL;
-    uint32_t span = binding_span(s->vs);
+    uint32_t span = binding_span(s->vs), gs_off = span - 1;
+    if (s->gs) span += binding_span(s->gs) - 1;
     if (gfx_shader_stage(s->vs) != GFX_STAGE_VS || (s->fs && gfx_shader_stage(s->fs) != GFX_STAGE_FS)) why = "stage mismatch";
     else if (k->topo_class == 3) why = "patches need tessellation stages, which are not translated";
     else if (P.indep) {
         Bindings F = {0};
-        if (!add_stage(&B, s->vs, 0) || (s->fs && !add_stage(&F, s->fs, 0))) why = "too many bindings";
+        if (!add_stage(&B, s->vs, 0) || (s->gs && !add_stage(&B, s->gs, gs_off)) || (s->fs && !add_stage(&F, s->fs, 0)))
+            why = "too many bindings";
         else if (!(l = layout_pair(&B, &F))) why = "descriptor layout creation failed";
         span = 1;
-    } else if (!add_stage(&B, s->vs, 0) || (s->fs && !add_stage(&B, s->fs, span - 1))) why = "too many bindings";
+    } else if (!add_stage(&B, s->vs, 0) || (s->gs && !add_stage(&B, s->gs, gs_off)) ||
+               (s->fs && !add_stage(&B, s->fs, span - 1))) why = "too many bindings";
     else if (!(l = layout_get(&B))) why = "descriptor layout creation failed";
     char lack[128];
     if (!why && !layout_covers(s, l, span - 1, lack, sizeof lack)) why = lack, l = NULL;
@@ -2292,18 +2313,18 @@ static VkPipeline graphics(const VkPipeState *s, const VkPipeInfo **info, int as
     // parallel on idle workers (lib_wait; about 0.12 ms per library from the driver's disk cache, 5-180 ms cold), and
     // links them here: its own job may queue behind optimised builds of earlier pipelines. The job then only does the
     // optimised build, from the low queue. Other draws leave the libraries to the job and are skipped meanwhile.
-    // XCX_PIPE_WAIT=draw builds them on this thread one after the other instead, as before; XCX_GPL_DRAW_BUILD=0
+    // XC3_PIPE_WAIT=draw builds them on this thread one after the other instead, as before; XC3_GPL_DRAW_BUILD=0
     // leaves them to the job.
     static int draw_build = -1;
     if (draw_build < 0) {
-        const char *e = cfg_get("XCX_GPL_DRAW_BUILD");
+        const char *e = cfg_get("XC3_GPL_DRAW_BUILD");
         draw_build = !(e && !strcmp(e, "0"));
         rt_log("vk_pipeline: a draw that waits for its pipeline %s", !draw_build ? "leaves its libraries to its job"
                : U.on ? "has its libraries built in parallel on the workers, ahead of other jobs"
-                      : "builds its libraries itself (XCX_PIPE_WAIT=draw)");
+                      : "builds its libraries itself (XC3_PIPE_WAIT=draw)");
     }
     double end = wait_ms ? now_ms() + wait_ms : 0;
-    if (p && p->building && P.gpl && !p->info.pipeline && !p->fast_tried && p->lay) {
+    if (p && p->building && P.gpl && !s->gs && !p->info.pipeline && !p->fast_tried && p->lay) {
         int final = 0, build = wait_ms != 0 && draw_build;
         uint64_t p0 = perf_begin(), t0 = qpc();
         if (build && U.on) {
@@ -2405,7 +2426,7 @@ void vk_pipeline_prewarm(void) {
     const char *gpu = rt_config()->gpu;
     uint32_t pr_hist[16] = {0}, fs_hist[4] = {0};   // library state of the recorded pipelines (lb_start)
     if (!A.on || (gpu && !strcmp(gpu, "null"))) return;
-    if (!cfg_bool("XCX_PIPE_PREBUILD")) {   // prebuild_start logs the off case
+    if (!cfg_bool("XC3_PIPE_PREBUILD")) {   // prebuild_start logs the off case
         if (ensure_init()) lb_start(pr_hist, fs_hist);
         return;
     }
@@ -2433,7 +2454,7 @@ void vk_pipeline_prewarm(void) {
     for (size_t i = 0; i < m; i++)
         if (!u || memcmp(ids[u - 1], ids[i], 32)) memcpy(ids[u++], ids[i], 32);
     int cpus = (int)plat_cpu_count();
-    const char *pe = cfg_get("XCX_PREWARM_XLATE");   // no fixed default: half the CPUs, at most 16, when unset
+    const char *pe = cfg_get("XC3_PREWARM_XLATE");   // no fixed default: half the CPUs, at most 16, when unset
     int procs = pe && *pe ? atoi(pe) : cpus / 2 > 16 ? 16 : cpus / 2;
     gfx_shader_prewarm((const uint8_t(*)[32])ids, u, sh, cpus, procs < 1 ? 1 : procs);
     double t1 = now_ms();
@@ -2498,13 +2519,13 @@ void vk_pipeline_prewarm(void) {
     lb_start(pr_hist, fs_hist);
 }
 
-// ensure_init's hook: without a prewarm (XCX_PIPE_PREBUILD=0, or the device came up first elsewhere) the records
+// ensure_init's hook: without a prewarm (XC3_PIPE_PREBUILD=0, or the device came up first elsewhere) the records
 // are not built. Caller holds no lock.
 static void prebuild_start(void) {
     plat_mutex_lock(&P.lock);
     if (K.file && !K.warm) {
         rt_log("vk_pipeline: prebuild off%s; %zu records not built",
-               !cfg_bool("XCX_PIPE_PREBUILD") ? " (XCX_PIPE_PREBUILD=0)" : " (no boot prewarm)", K.file_n);
+               !cfg_bool("XC3_PIPE_PREBUILD") ? " (XC3_PIPE_PREBUILD=0)" : " (no boot prewarm)", K.file_n);
         free(K.file);
         K.file = NULL;
     }
@@ -2540,7 +2561,7 @@ static Layout *compute_layout(const GfxShader *cs, Bindings *B, const char **why
 
 // ---- stage library prebuild
 // Two places build what a draw would otherwise build while the game waits:
-// - xcx.exe --prepare-shaders (lb_warm_prepared), after the translation, on every core: for each prepared variant
+// - xc3.exe --prepare-shaders (lb_warm_prepared), after the translation, on every core: for each prepared variant
 //   (shader-prepared.bin) the pre-rasterization library of a vertex shader, the fragment-shader library of a fragment
 //   shader and the pipeline of a compute shader, each built from a private shader copy and destroyed at once. What
 //   stays is the driver's own disk cache: on AMD a library built again in a later process takes 0.1 ms instead of
@@ -2549,15 +2570,15 @@ static Layout *compute_layout(const GfxShader *cs, Bindings *B, const char **why
 // - boot (lb_worker), after the pipeline-key prewarm, on cpus/4 threads at PLAT_PRIO_IDLE (the short P.lock
 //   sections and shader loads at normal priority, so a preempted thread never holds the lock the replay needs):
 //   compute pipelines of every recorded and prepared compute shader, kept (vk_pipeline_compute builds compute
-//   synchronously on the replay thread; 163 prepared), and the libraries of the first XCX_LIB_PREBUILD_KEEP variants
+//   synchronously on the replay thread; 163 prepared), and the libraries of the first XC3_LIB_PREBUILD_KEEP variants
 //   play recorded (priority 0), kept in libs[] with their shaders. KEEP defaults to 0: a kept library costs 140-460 KB
 //   of process memory (10,000 kept took 9 GB in run 1) to save a rebuild the driver cache makes 0.1 ms.
 // Library state: the vertex output union known now (vs_union_peek; the prewarm fills it from pipeline-keys.bin, the
 // preparation has none), the clamp, polygon mode and depth mode most recorded pipelines use (defaults without a key
 // file: clamp 0, fill, -w..w), single-sampled, no dual source; the state dynamic on this GPU is 0 in every key.
 // A draw that meets such a variant in a new pipeline then gets its libraries from libs[] or the driver cache and
-// fast-links (gpl_link). XCX_LIB_PREBUILD=0 turns the boot part off, =N stops it after N variants;
-// XCX_LIB_PREBUILD_THREADS sets its thread count.
+// fast-links (gpl_link). XC3_LIB_PREBUILD=0 turns the boot part off, =N stops it after N variants;
+// XC3_LIB_PREBUILD_THREADS sets its thread count.
 #define LB_MAX_THREADS 16
 
 static struct {
@@ -2787,16 +2808,16 @@ static void lb_state(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
     uint32_t best = 0, bf = 0;
     for (uint32_t i = 1; i < 16; i++) best = pr_hist[i] > pr_hist[best] ? i : best;
     for (uint32_t i = 1; i < 4; i++) bf = fs_hist[i] > fs_hist[bf] ? i : bf;
-    if (!pr_hist[best]) best = 8;   // no key file: XCX clips -w..w (all 2706 records of a recorded key file)
+    if (!pr_hist[best]) best = 8;   // no key file: XC3 clips -w..w (all 2706 records of a recorded key file)
     LB.clamp = (uint8_t)(best & 1), LB.poly = (uint8_t)(best >> 1 & 3), LB.minus_w = (uint8_t)(best >> 3 & 1);
     LB.samples = (uint8_t)(1u << bf);
 }
 
 // Boot: compute shaders of the warm list (recorded and prepared), then the first KEEP recorded graphics variants.
 static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
-    const char *e = cfg_value("XCX_LIB_PREBUILD"), *ke = cfg_get("XCX_LIB_PREBUILD_KEEP");
-    const char *te = cfg_get("XCX_LIB_PREBUILD_THREADS");   // no fixed default: a quarter of the CPUs when unset
-    if (!A.on || !cfg_bool("XCX_LIB_PREBUILD")) return;
+    const char *e = cfg_value("XC3_LIB_PREBUILD"), *ke = cfg_get("XC3_LIB_PREBUILD_KEEP");
+    const char *te = cfg_get("XC3_LIB_PREBUILD_THREADS");   // no fixed default: a quarter of the CPUs when unset
+    if (!A.on || !cfg_bool("XC3_LIB_PREBUILD")) return;
     GfxWarmEnt *all = NULL;
     size_t total = gfx_shader_warm_list(&all), n = 0, n_cs = 0;
     LB.keep_n = ke && *ke ? atoi(ke) : 0;
@@ -2827,7 +2848,7 @@ static void lb_start(const uint32_t pr_hist[16], const uint32_t fs_hist[4]) {
     plat_add32(&LB.running, started - t);
     LB.threads = started;
     rt_log("vk_pipeline: stage library prebuild: %zu compute pipelines and %zu recorded variants' libraries "
-           "(XCX_LIB_PREBUILD_KEEP %d) on %d idle-priority threads; library state clamp %u, polygon mode %u, depth "
+           "(XC3_LIB_PREBUILD_KEEP %d) on %d idle-priority threads; library state clamp %u, polygon mode %u, depth "
            "-w..w %u, samples %u", n_cs < n ? n_cs : n, n > n_cs ? n - n_cs : 0, LB.keep_n, started, LB.clamp, LB.poly,
            LB.minus_w, LB.samples);
 }
@@ -2899,8 +2920,8 @@ static void lb_warm_prepared(const char *dir) {
     free(LB.e), LB.e = NULL, LB.n = 0, LB.next = 0, LB.done = 0;
 }
 
-// xcx.exe --prepare-shaders (tools/prepare_shaders.py): the device sets the translator's host answers (they are in every
-// cache key), the seed next to xcx.exe is translated on every core, then every prepared variant's stage library or
+// xc3.exe --prepare-shaders (tools/prepare_shaders.py): the device sets the translator's host answers (they are in every
+// cache key), the seed next to xc3.exe is translated on every core, then every prepared variant's stage library or
 // compute pipeline is built once into the driver's disk cache (lb_warm_prepared). No game runs.
 int vk_pipeline_prepare_shaders(void) {
     if (!ensure_init()) {
@@ -2913,14 +2934,14 @@ int vk_pipeline_prepare_shaders(void) {
     if (!cut) return 1;
     *cut = 0;
     int cpus = (int)plat_cpu_count();
-    const char *pe = cfg_get("XCX_PREWARM_XLATE");   // no fixed default: half the CPUs, at most 16, when unset
+    const char *pe = cfg_get("XC3_PREWARM_XLATE");   // no fixed default: half the CPUs, at most 16, when unset
     int procs = pe && *pe ? atoi(pe) : cpus / 2 > 16 ? 16 : cpus / 2;
     int rc = gfx_shader_prepare_seed(dir, cpus, procs < 1 ? 1 : procs);
     if (!rc) lb_warm_prepared(dir);
     return rc;
 }
 
-// xcx.exe --warm-shaders: every variant of shader-prepared.bin built into the driver's disk cache again from the shader
+// xc3.exe --warm-shaders: every variant of shader-prepared.bin built into the driver's disk cache again from the shader
 // cache, without translating the seed. The AMD cache is keyed to the exe path (a relink keeps it: 29,587 variants in
 // 1.8 s) and holds a limited amount: preparing another build dir evicted this one's libraries, and a library a draw
 // needed then took 40-220 ms in play instead of 0.2 ms. Seconds when the libraries are still there.
@@ -2950,7 +2971,7 @@ void vk_pipeline_set_dynamic(VkCommandBuffer cb, const VkPipeState *s) {
     if (!ensure_init()) return;
     const poly_st *pl = &s->poly;
     const ds_st *d = &s->ds;
-    // The front face maps unchanged: XCX sets the upper-left window origin, and the y-flipped viewport (y_flip) puts
+    // The front face maps unchanged: XC3 sets the upper-left window origin, and the y-flipped viewport (y_flip) puts
     // NDC +y at row 0 as NVN does, so the framebuffer winding Vulkan tests is the one NVN tests (MacNativeGames passes
     // it to Metal unchanged; LAS Recomp exec.c mirrors it only for the lower-left origin).
     int front_cw = pl->front == NVN_FRONT_FACE_CW;

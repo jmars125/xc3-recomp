@@ -1,10 +1,13 @@
 // Host input for nn::hid (runtime/ov_input.c): an SDL3 gamepad (no SDL window needed), the keyboard and the mouse,
 // merged into Switch npad button bits and stick axes. Button order follows libnx HidNpadButton (ISC). The key and pad
-// bindings are the tables in input_map.c (xcx.ini overrides them). The keyboard and the mouse come from the window
+// bindings are the tables in input_map.c (xc3.ini overrides them). The keyboard and the mouse come from the window
 // system's back end (input_wsys.h: input_win.c with Win32, input_sdl.c with SDL), which also owns the cursor capture.
 // Keys and their map: docs/controls.md.
 // The gamepad also rumbles (input_rumble) and, when it has a gyro and an accelerometer, feeds the six-axis sensor from a
-// thread of its own (input_motion_start). Every SDL call on the gamepad is made under `lock`.
+// thread of its own (input_motion_start). Every SDL call on the gamepad is made under `sdl_lock`, and only pad_main reads
+// it: SDL_UpdateGamepads reaches hid.dll and dinput8.dll, where one call took up to 156 ms on the test machine, with no
+// gamepad connected too. The game's poll reads pad_main's latest snapshot, so a slow device delays input by that long
+// and no frame waits for it.
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -26,17 +29,23 @@ enum { STICK_MAX = 32767, STICK_DEAD = 2500, STICK_DIR = 16384, TRIGGER_ON = 163
 
 static PlatMutex lock = PLAT_MUTEX_INIT;
 static int state;                    // 0 not started, 1 running, -1 disabled or SDL failed
+static PlatMutex sdl_lock = PLAT_MUTEX_INIT;   // every SDL gamepad call; never taken with `lock` held after start
+static PlatMutex snap_lock = PLAT_MUTEX_INIT;  // snap; taken inside `lock`, held for a copy
+typedef struct { uint8_t pd[PAD_COUNT]; int16_t axes[4]; int connected; unsigned gen; } PadSnap;
+static PadSnap snap;                 // pad_main's latest reading
+static PadSnap read_snap;            // under lock: the reading of this poll
+static unsigned pad_gen, pad_layout_gen;   // pad_gen counts gamepads opened; the layout is picked again when it moves
 static SDL_Gamepad *pad;
 static uint64_t next_scan;
 static int pad_rumble;               // the open gamepad has rumble motors
 static volatile int32_t pad_labels[4];  // ... and the labels of its south, east, west, north buttons (PAD_LABEL_*), any thread
-static int pad_east_a;               // ... and labels its east face button A (Nintendo layout under XCX_PAD_LAYOUT=auto)
+static int pad_east_a;               // ... and labels its east face button A (Nintendo layout under XC3_PAD_LAYOUT=auto)
 static int pad_layout = -1;          // PAD_LAYOUT_* in effect for the open gamepad, -1 to pick again; live (cfg_version)
 static unsigned pad_layout_seen;
 static volatile int32_t pad_layout_shown = -1;   // pad_layout for the menu (any thread), -1 without a gamepad
 static SDL_JoystickID sensor_pad;    // the gamepad whose sensors the motion thread set up, 0 none
 static int sensor_ok;                // ... and it has both sensors, enabled
-static int motion_thread;            // 0 not started, 1 running, -1 off (XCX_MOTION=0, no SDL)
+static int motion_thread;            // 0 not started, 1 running, -1 off (XC3_MOTION=0, no SDL)
 
 // SDL buttons of the gamepad inputs (input_map.h PAD_*), by position; PAD_ZL and PAD_ZR are the triggers (axes).
 static const SDL_GamepadButton pad_sdl[PAD_COUNT] = {
@@ -48,7 +57,7 @@ static const SDL_GamepadButton pad_sdl[PAD_COUNT] = {
     [PAD_DPAD_RIGHT] = SDL_GAMEPAD_BUTTON_DPAD_RIGHT, [PAD_DPAD_DOWN] = SDL_GAMEPAD_BUTTON_DPAD_DOWN,
 };
 
-// XCX_INPUT_SCRIPT=<file>: lines "<frame> <button> [hold]" or "<frame> LSTICK|RSTICK <x> <y> [hold]", ORed into the real input.
+// XC3_INPUT_SCRIPT=<file>: lines "<frame> <button> [hold]" or "<frame> LSTICK|RSTICK <x> <y> [hold]", ORed into the real input.
 // <frame> and its hold are 60 Hz ticks of game time since the first present (frame_step_ticks: presents at 60 fps), so
 // the title menus get the presses at the same game time at any frame limit. A line "@<ms> ..." is timed instead: <ms>
 // and its hold are milliseconds of the world clock (frame_step_world_us, game time since the loaded save's first
@@ -67,10 +76,10 @@ static int script_mixed;             // the script has timed lines: its untimed 
 
 static void script_load(void) {
     script_state = 1;
-    const char *path = cfg_get("XCX_INPUT_SCRIPT");
+    const char *path = cfg_get("XC3_INPUT_SCRIPT");
     if (!path || !*path) return;
     FILE *f = fopen(path, "r");
-    if (!f) { rt_log("input: cannot open XCX_INPUT_SCRIPT %s", path); return; }
+    if (!f) { rt_log("input: cannot open XC3_INPUT_SCRIPT %s", path); return; }
     char line[256];
     int cap = 0, ln = 0;
     while (fgets(line, sizeof line, f)) {
@@ -131,7 +140,7 @@ static void script_apply(uint64_t *b, int32_t sl[2], int32_t sr[2]) {
     }
 }
 
-// XCX_INPUT_RECORD=<file>: writes the merged input as XCX_INPUT_SCRIPT lines, one per button press and per stick
+// XC3_INPUT_RECORD=<file>: writes the merged input as XC3_INPUT_SCRIPT lines, one per button press and per stick
 // segment, so a played session replays as a script. A stick segment ends when an axis moves by more than REC_STICK_STEP.
 // An event that begins on the world clock is written timed ("@<ms>", hold in ms), one before it in ticks
 // (frame_step_ticks). When the world clock starts, held buttons and sticks are cut there and go on as timed events.
@@ -174,11 +183,11 @@ static void rec_flush_all(void) {
 
 static void rec_apply(uint64_t b, const int32_t sl[2], const int32_t sr[2]) {
     if (!rec_state) {
-        const char *path = cfg_get("XCX_INPUT_RECORD");   // no default: not recording when unset
+        const char *path = cfg_get("XC3_INPUT_RECORD");   // no default: not recording when unset
         rec = path && *path ? fopen(path, "w") : NULL;
         rec_state = rec ? 1 : -1;
-        if (path && *path && !rec) rt_log("input: cannot open XCX_INPUT_RECORD %s", path);
-        if (rec) { fprintf(rec, "# Recorded input (XCX_INPUT_RECORD); frame = 60 Hz ticks of game time, @ms = world clock.\n"); atexit(rec_flush_all);
+        if (path && *path && !rec) rt_log("input: cannot open XC3_INPUT_RECORD %s", path);
+        if (rec) { fprintf(rec, "# Recorded input (XC3_INPUT_RECORD); frame = 60 Hz ticks of game time, @ms = world clock.\n"); atexit(rec_flush_all);
                    rt_log("input: recording to %s", path); }
     }
     if (rec_state != 1) return;
@@ -221,14 +230,14 @@ static void rec_apply(uint64_t b, const int32_t sl[2], const int32_t sr[2]) {
     if (wrote) fflush(rec);
 }
 
-static float mouse_sens = -1;              // XCX_MOUSE_SENS, 0 = mouse camera off; live (cfg_version)
+static float mouse_sens = -1;              // XC3_MOUSE_SENS, 0 = mouse camera off; live (cfg_version)
 static unsigned mouse_sens_seen;
 
 static float mouse_sens_get(void) {
     unsigned ver = cfg_version();
     if (mouse_sens >= 0 && ver == mouse_sens_seen) return mouse_sens;
     mouse_sens_seen = ver;
-    double v = cfg_double("XCX_MOUSE_SENS");
+    double v = cfg_double("XC3_MOUSE_SENS");
     mouse_sens = (float)(v < 0 ? 0 : v > 10 ? 10 : v);
     return mouse_sens;
 }
@@ -294,7 +303,7 @@ static void scan_pads(void) {
                                             : lb == SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE ? PAD_LABEL_TRIANGLE
                                                                                       : PAD_LABEL_NONE);
     }
-    pad_layout = -1;
+    pad_gen++;
     int motion = SDL_GamepadHasSensor(pad, SDL_SENSOR_GYRO) && SDL_GamepadHasSensor(pad, SDL_SENSOR_ACCEL);
     rt_log("input: gamepad \"%s\" (%s, %s, east button %s)", SDL_GetGamepadName(pad), pad_rumble ? "rumble" : "no rumble",
            motion ? "gyro and accelerometer" : "no motion sensors", pad_east_a ? "labelled A" : "not labelled A");
@@ -303,10 +312,11 @@ static void scan_pads(void) {
 // Under lock: the layout of the open gamepad, picked again when a setting or the gamepad changed; logs each change.
 static int pad_layout_get(void) {
     unsigned ver = cfg_version();
-    if (pad_layout >= 0 && ver == pad_layout_seen) return pad_layout;
+    if (pad_layout >= 0 && ver == pad_layout_seen && read_snap.gen == pad_layout_gen) return pad_layout;
     pad_layout_seen = ver;
+    pad_layout_gen = read_snap.gen;
     int was = pad_layout;
-    const char *set = cfg_value("XCX_PAD_LAYOUT");
+    const char *set = cfg_value("XC3_PAD_LAYOUT");
     pad_layout = input_pad_layout_pick(set, pad_east_a);
     if (pad_layout != was)
         rt_log("input: gamepad layout %s (pad_layout = %s)", pad_layout == PAD_LAYOUT_XBOX ? "xbox" : "nintendo", set);
@@ -314,7 +324,7 @@ static int pad_layout_get(void) {
     return pad_layout;
 }
 
-// The XCX_BIND_* values last applied, one per line; the tables are built again when one changes (the menu's remapping rows write
+// The XC3_BIND_* values last applied, one per line; the tables are built again when one changes (the menu's remapping rows write
 // them while the game runs). Under lock.
 static unsigned binds_seen = ~0u;
 static char binds_applied[4096];
@@ -327,7 +337,7 @@ static void binds_refresh(void) {
     size_t len = 0;
     for (int a = 0; a < ACTION_COUNT; a++) {
         char var[32];
-        snprintf(var, sizeof var, "XCX_BIND_%s", input_action_name(a));
+        snprintf(var, sizeof var, "XC3_BIND_%s", input_action_name(a));
         const char *s = cfg_get(var);
         len += (size_t)snprintf(now + len, len < sizeof now ? sizeof now - len : 0, "%s\n", s ? s : "");
     }
@@ -336,15 +346,22 @@ static void binds_refresh(void) {
     input_map_configure();
 }
 
+static void pad_sample(PadSnap *s);
+static void pad_main(void *arg);
+
 static void start(void) {
     binds_refresh();
-    const char *e = cfg_get("XCX_INPUT");
-    if (e && !strcmp(e, "none")) { state = -1; rt_log("input: disabled (XCX_INPUT=none)"); return; }
+    const char *e = cfg_get("XC3_INPUT");
+    if (e && !strcmp(e, "none")) { state = -1; rt_log("input: disabled (XC3_INPUT=none)"); return; }
     if (!SDL_Init(SDL_INIT_GAMEPAD)) { state = -1; rt_log("input: SDL gamepad init failed (%s), keyboard only", SDL_GetError()); }
     else state = 1;
     if (state == 1) {
+        plat_mutex_lock(&sdl_lock);
         scan_pads();
+        pad_sample(&snap);
         if (!pad) rt_log("input: no gamepad (keyboard only until one is connected)");
+        plat_mutex_unlock(&sdl_lock);
+        if (!plat_thread_spawn(pad_main, NULL, "gamepad", 0)) rt_fatal("input: cannot start the gamepad thread");
     }
     if (state == -1) state = 2;   // keyboard only
 }
@@ -361,27 +378,42 @@ static void pick(int32_t *x, int32_t *y, int32_t kx, int32_t ky) {
     if (b > a) { *x = kx; *y = ky; }
 }
 
-// Under lock, state 1: the open gamepad's inputs by position (pd[PAD_*] != 0 held); 0 without a connected gamepad.
-static int pad_physical(uint8_t pd[PAD_COUNT]) {
+// Under sdl_lock: the gamepad's state now, the gamepad opened first when none is and a rescan is due.
+static void pad_sample(PadSnap *s) {
+    memset(s, 0, sizeof *s);
     if ((!pad || !SDL_GamepadConnected(pad)) && plat_now_ns() / 1000000u >= next_scan) { next_scan = plat_now_ns() / 1000000u + RESCAN_MS; scan_pads(); }
     SDL_UpdateGamepads();
-    if (!pad || !SDL_GamepadConnected(pad)) return 0;
-    for (int p = PAD_SOUTH; p < PAD_ZL; p++) pd[p] = SDL_GetGamepadButton(pad, pad_sdl[p]);
-    pd[PAD_ZL] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > TRIGGER_ON;
-    pd[PAD_ZR] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > TRIGGER_ON;
-    return 1;
+    s->gen = pad_gen;
+    if (!pad || !SDL_GamepadConnected(pad)) return;
+    s->connected = 1;
+    for (int p = PAD_SOUTH; p < PAD_ZL; p++) s->pd[p] = SDL_GetGamepadButton(pad, pad_sdl[p]);
+    s->pd[PAD_ZL] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > TRIGGER_ON;
+    s->pd[PAD_ZR] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > TRIGGER_ON;
+    s->axes[0] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
+    s->axes[1] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
+    s->axes[2] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX);
+    s->axes[3] = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
 }
 
-// Under lock, state 1: the open gamepad's buttons (Switch bits after XCX_PAD_LAYOUT and the XCX_BIND_* lines) and
+// Under lock, state 1: the open gamepad's inputs by position (pd[PAD_*] != 0 held); 0 without a connected gamepad.
+static int pad_physical(uint8_t pd[PAD_COUNT]) {
+    plat_mutex_lock(&snap_lock);
+    read_snap = snap;
+    plat_mutex_unlock(&snap_lock);
+    if (read_snap.connected) memcpy(pd, read_snap.pd, PAD_COUNT);
+    return read_snap.connected;
+}
+
+// Under lock, state 1: the open gamepad's buttons (Switch bits after XC3_PAD_LAYOUT and the XC3_BIND_* lines) and
 // sticks; 0 without a connected gamepad.
 static int pad_read(uint64_t *b, int32_t sl[2], int32_t sr[2]) {
     uint8_t pd[PAD_COUNT] = {0};
     if (!pad_physical(pd)) return 0;
     *b |= input_map_pad_buttons(pd, pad_layout_get());
-    sl[0] = axis(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX));
-    sl[1] = -axis(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY));
-    sr[0] = axis(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX));
-    sr[1] = -axis(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY));
+    sl[0] = axis(read_snap.axes[0]);
+    sl[1] = -axis(read_snap.axes[1]);
+    sr[0] = axis(read_snap.axes[2]);
+    sr[1] = -axis(read_snap.axes[3]);
     return 1;
 }
 
@@ -442,7 +474,7 @@ static volatile int32_t g_block;
 static volatile int32_t g_menu;   // the in-game menu, the same way (input_menu)
 
 int input_cursor_allowed(void) {
-    const char *in = cfg_get("XCX_INPUT");
+    const char *in = cfg_get("XC3_INPUT");
     return g_block != 1 && g_menu != 1 && mouse_sens_get() > 0 && !(in && !strcmp(in, "none"));
 }
 
@@ -539,7 +571,7 @@ int input_capture(int reset, int *id) {
 }
 
 int input_rumble_triggers_enabled(void) {
-    return cfg_bool("XCX_RUMBLE_TRIGGERS");
+    return cfg_bool("XC3_RUMBLE_TRIGGERS");
 }
 
 int input_rumble(uint16_t low, uint16_t high, uint32_t ms) {
@@ -547,12 +579,12 @@ int input_rumble(uint16_t low, uint16_t high, uint32_t ms) {
     static int triggers = -1;
     static unsigned seen;
     if (triggers < 0 || seen != cfg_version()) seen = cfg_version(), triggers = input_rumble_triggers_enabled();
-    plat_mutex_lock(&lock);
+    plat_mutex_lock(&sdl_lock);
     if (state == 1 && pad && pad_rumble) {
         ok = SDL_RumbleGamepad(pad, low, high, ms);
         if (triggers) SDL_RumbleGamepadTriggers(pad, high, high, ms);   // unsupported pads return false: ignored
     }
-    plat_mutex_unlock(&lock);
+    plat_mutex_unlock(&sdl_lock);
     return ok;
 }
 
@@ -572,7 +604,7 @@ void input_motion_axes(const float a[3], const float g[3], double acc[3], double
     gyro[2] = g[1];
 }
 
-// Under lock: (re)enable the sensors when the open gamepad changed; 1 if it has both and they are on.
+// Under sdl_lock: (re)enable the sensors when the open gamepad changed; 1 if it has both and they are on.
 static int sensors_ready(void) {
     SDL_JoystickID id = SDL_GetGamepadID(pad);
     if (id == sensor_pad) return sensor_ok;
@@ -596,27 +628,30 @@ int input_motion_enabled(void) {
     unsigned v = cfg_version();
     if (on < 0 || v != seen) {
         seen = v;
-        on = cfg_bool("XCX_MOTION");
+        on = cfg_bool("XC3_MOTION");
     }
     return on;
 }
 
-// 250 Hz: the gamepads update (reports read, rumble expiry) and the newest gyro and accelerometer sample goes into the
-// fusion. Without a gamepad with sensors, or with motion off (XCX_MOTION=0, live), nothing is fed and the six-axis
-// sensor reads at rest.
-static void motion_main(void *arg) {
+// 250 Hz: the gamepads update (reports read, rumble expiry), the snapshot the game reads is published and the newest
+// gyro and accelerometer sample goes into the fusion. Without a gamepad with sensors, or with motion off (XC3_MOTION=0,
+// live), nothing is fed and the six-axis sensor reads at rest.
+static void pad_main(void *arg) {
     (void)arg;
     for (;;) {
         plat_wait_ns(4000000);
         float a[3], g[3];
         int have = 0;
-        plat_mutex_lock(&lock);
-        if (pad && SDL_GamepadConnected(pad)) {
-            SDL_UpdateGamepads();
+        PadSnap s;
+        plat_mutex_lock(&sdl_lock);
+        pad_sample(&s);
+        if (s.connected)
             have = sensors_ready() && SDL_GetGamepadSensorData(pad, SDL_SENSOR_ACCEL, a, 3) &&
                    SDL_GetGamepadSensorData(pad, SDL_SENSOR_GYRO, g, 3);
-        }
-        plat_mutex_unlock(&lock);
+        plat_mutex_unlock(&sdl_lock);
+        plat_mutex_lock(&snap_lock);
+        snap = s;
+        plat_mutex_unlock(&snap_lock);
         if (!have || !input_motion_enabled()) continue;
         double acc[3], gyro[3];
         input_motion_axes(a, g, acc, gyro);
@@ -628,12 +663,8 @@ void input_motion_start(void) {
     plat_mutex_lock(&lock);
     if (!state) start();
     if (!motion_thread) {
-        if (!input_motion_enabled()) rt_log("input: motion off (XCX_MOTION=0); it can be turned on while the game runs");
-        if (state != 1) motion_thread = -1;
-        else {
-            if (!plat_thread_spawn(motion_main, NULL, "motion", 0)) rt_fatal("input: cannot start the motion thread");
-            motion_thread = 1;
-        }
+        if (!input_motion_enabled()) rt_log("input: motion off (XC3_MOTION=0); it can be turned on while the game runs");
+        motion_thread = 1;
     }
     plat_mutex_unlock(&lock);
 }

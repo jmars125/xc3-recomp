@@ -1,4 +1,4 @@
-"""Draw runtime/xcx.ico: an original mark for XCX Recomp (no game artwork), a cyan X on a dark rounded square.
+"""Draw runtime/xc3.ico: an original mark for XC3 Recomp (no game artwork), a gold 3 on a dark rounded square.
 
     .venv\\Scripts\\python tools\\make_icon.py
 
@@ -11,9 +11,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 SIZES = (16, 24, 32, 48, 64, 256)
-BG_TOP, BG_BOTTOM = np.array([18, 34, 48]), np.array([6, 12, 20])
-CYAN_HI, CYAN_LO = np.array([120, 245, 255]), np.array([20, 190, 215])
-EDGE = np.array([4, 60, 80])
+BG_TOP, BG_BOTTOM = np.array([30, 28, 62]), np.array([10, 9, 24])
+CYAN_HI, CYAN_LO = np.array([255, 232, 170]), np.array([240, 130, 50])
+EDGE = np.array([96, 40, 24])
+THREE = ((0.28, 0.22), (0.70, 0.22), (0.47, 0.47), (0.64, 0.50), (0.72, 0.62), (0.64, 0.75), (0.46, 0.80), (0.28, 0.72))
 
 
 def seg_dist(px, py, ax, ay, bx, by):
@@ -32,10 +33,10 @@ def draw(n):
     qx, qy = np.abs(x - 0.5) - (0.5 - r), np.abs(y - 0.5) - (0.5 - r)
     box = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
     inside = box <= -0.004
-    # the X: a heavy stroke falling to the right and a lighter one rising, both slightly slanted
-    heavy = seg_dist(x, y, 0.27, 0.20, 0.75, 0.80) < 0.105
-    light = seg_dist(x, y, 0.73, 0.20, 0.25, 0.80) < 0.075
-    edge = (seg_dist(x, y, 0.27, 0.20, 0.75, 0.80) < 0.105 + 0.03) | (seg_dist(x, y, 0.73, 0.20, 0.25, 0.80) < 0.075 + 0.03)
+    # the 3: one angular stroke, top bar, diagonal to the middle, then down around the bowl
+    d = np.min([seg_dist(x, y, *p, *q) for p, q in zip(THREE, THREE[1:])], axis=0)
+    heavy = light = d < 0.085
+    edge = d < 0.085 + 0.03
     t = y[..., None]
     rgb = BG_TOP * (1 - t) + BG_BOTTOM * t
     rgb = np.where(edge[..., None], EDGE, rgb)
@@ -65,8 +66,8 @@ def main():
         out += struct.pack('<BBBBHHII', n % 256, n % 256, 0, 0, 1, 32, len(e), offset)
         offset += len(e)
     out += b''.join(entries)
-    (ROOT / 'runtime' / 'xcx.ico').write_bytes(out)
-    print(f'runtime/xcx.ico: {len(SIZES)} sizes, {len(out)} bytes')
+    (ROOT / 'runtime' / 'xc3.ico').write_bytes(out)
+    print(f'runtime/xc3.ico: {len(SIZES)} sizes, {len(out)} bytes')
 
 
 if __name__ == '__main__':

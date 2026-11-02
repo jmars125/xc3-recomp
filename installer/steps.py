@@ -5,8 +5,8 @@ bundled hactool; lift and compile run the bundled Python on recomp/gen.py and to
 <temp>/logs/<step>-<tool>.log and is read for progress. No Win32 call here: the host check is a small C program built
 with the bundled clang (hostcheck.c).
 
-Install folder: exefs/, romfs/ (romfs.bin, index.json), aoc/<index>/ (the add-on content's RomFS), profile/, xcx.exe
-and its DLLs, romfs-index.bin, xcx_xlate.exe, xcx.ini, xcx-install.json.
+Install folder: exefs/, romfs/ (romfs.bin, index.json), aoc/<index>/ (the add-on content's RomFS), profile/, xc3.exe
+and its DLLs, romfs-index.bin, xc3_xlate.exe, shader-prepared.bin, shader-cache/, xc3.ini, xc3-install.json.
 Temp folder (<temp>/<dest name>-<hash>): check/ (ExeFS of both inputs, the host check), gen/ (C), build/ (objects),
 logs/ (kept by the cleanup).
 """
@@ -33,12 +33,12 @@ from package_select import program_nca  # noqa: E402
 from extract_update_romfs import copy_range, hactool_prod_keys  # noqa: E402
 
 GiB = 1 << 30
-DEST_EXTRA = 4 * GiB      # beside the RomFS: shader and pipeline caches (about 2 GB), exefs, xcx.exe
+DEST_EXTRA = 4 * GiB      # beside the RomFS: shader and pipeline caches (about 1.5 GB), exefs, xc3.exe
 TEMP_NEED = 3 * GiB       # generated C (about 0.9 GB) and objects
 HOSTCHECK = Path(__file__).resolve().parent / 'hostcheck.c'
 STAMP = '.install-key'
-PATCHES = 'patches-upd.txt'   # recomp/: code patch sets of 2.0.0 (recomp/patches.py)
-XLATE = 'xcx_xlate' + EXE   # the translator's name beside xcx.exe; runtime/gfx_shader.c starts it by this name
+PATCHES = 'patches-upd.txt'   # recomp/: code patch sets of 2.2.1 (recomp/patches.py)
+XLATE = 'xc3_xlate' + EXE   # the translator's name beside xc3.exe; runtime/gfx_shader.c starts it by this name
 
 
 # ---- helpers
@@ -174,7 +174,7 @@ def game_version(ctx):
 
 
 def expected_of(ctx, version):
-    """The expected hashes of the base game (BASE) or an update (tools/data/expected-xcx-<version>.json)."""
+    """The expected hashes of the base game (BASE) or an update (tools/data/expected-xc3-<version>.json)."""
     return json.loads(ctx.layout.expected(version).read_text(encoding='utf-8'))
 
 
@@ -366,6 +366,8 @@ class Check(Step):
         if ctx.will_run('extract'):
             # the update is identified after this estimate: the larger RomFS of the supported ones
             dest_need += max(expected_of(ctx, v)['romfs']['size'] for v in SUPPORTED) + ncas
+        if ctx.will_run('dlc'):
+            dest_need += sum(p.stat().st_size for p in dlc_inputs(ctx))
             romfs = ctx.dest / 'romfs' / 'romfs.bin'
             if romfs.is_file():   # a resumed extraction replaces it
                 dest_need -= romfs.stat().st_size
@@ -546,21 +548,23 @@ def dlc_inputs(ctx):
 
 
 def dlc_record(f, path, keys):
-    """(title id, NCA record) of the add-on content in an opened NSP. InstallError when it holds none of this game's."""
+    """(title id, NCA record, title keys) of the add-on content in an opened NSP, the keys from its own ticket.
+    InstallError when it holds none of this game's."""
     try:
         kind, entries = container_entries(f, path.stat().st_size)
+        tickets = common_tickets(f, entries)
         records = nca_inventory(f, entries, keys)
     except ValueError as e:
         raise_if_damaged(e, 'dlc', path)
         raise InstallError('check.file_unreadable', input='dlc', detail=str(e)) from None
     for record, _ in records:
         if record['content_type'] == AOC_DATA and aoc_index(record['title_id']) is not None:
-            return record['title_id'], record
+            return record['title_id'], record, tickets
     raise InstallError('check.dlc_not_game', path=str(path))
 
 
 class Dlc(Step):
-    """Extracts the RomFS of each add-on content file into aoc/<index>/, where xcx.exe mounts it (runtime/fs_host.c
+    """Extracts the RomFS of each add-on content file into aoc/<index>/, where xc3.exe mounts it (runtime/fs_host.c
     mount_aoc). Without --dlc it keeps what an earlier run extracted."""
     id = 'dlc'
 
@@ -582,21 +586,26 @@ class Dlc(Step):
         work = ctx.temp / 'dlc'
         remove(work)
         work.mkdir(parents=True)
-        hactool_keys = work / 'hactool.keys'
+        hactool_keys, title_keys = work / 'hactool.keys', work / 'title.keys'
         hactool_prod_keys(keys_path, hactool_keys)
         indices = []
         try:
             for n, path in enumerate(files):
                 rep.progress('dlc', 'extract', n, len(files), 'files')
                 with path.open('rb') as f:
-                    title_id, record = dlc_record(f, path, keys)
+                    title_id, record, tickets = dlc_record(f, path, keys)
                 index = aoc_index(title_id)
                 nca, out = work / f'{index}.nca', dest / 'aoc' / str(index)
-                copy_range(path, record['nca_offset'], record['size'], nca)
+                copy_range(path, extract.record_offset(record), record['size'], nca)
+                fd = os.open(title_keys, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, 'w') as keys_out:
+                    for rights, key in tickets.items():
+                        keys_out.write(f'{rights.hex()} = {key.hex()}\n')
                 remove(out)
                 out.parent.mkdir(parents=True, exist_ok=True)
                 code, log = extract.run_hactool([str(ctx.layout.hactool), '-y', '--disablekeywarns', '--suppresskeys',
-                                                 '-k', str(hactool_keys), f'--romfsdir={out}', str(nca)], dict(os.environ))
+                                                 '-k', str(hactool_keys), f'--romfsdir={out}', str(nca)],
+                                                dict(os.environ, MNG_TITLE_KEYS=str(title_keys)))
                 (ctx.temp / 'logs').mkdir(parents=True, exist_ok=True)
                 (ctx.temp / 'logs' / f'dlc-{index}.log').write_text(log, encoding='utf-8')
                 if code or not out.is_dir():
@@ -605,6 +614,7 @@ class Dlc(Step):
                 indices.append(index)
         finally:
             remove(hactool_keys)
+            remove(title_keys)
         rep.progress('dlc', 'extract', len(files), len(files), 'files')
         return {'indices': sorted(set(indices))}
 
@@ -639,7 +649,7 @@ class Lift(Step):
 
         args = ['--exefs', ctx.dest / 'exefs', '--out', gen]
         table = layout.recomp / PATCHES
-        if table.is_file():   # the 60 fps sites (XCX_FPS60 switches them at run time)
+        if table.is_file():   # the 60 fps sites (XC3_FPS60 switches them at run time)
             args += ['--patches', table]
         code, log = run_tool(ctx, 'lift', layout.recomp / 'gen.py', args, parse)
         if code:
@@ -659,8 +669,9 @@ class Compile(Step):
     def key(self, ctx):
         layout = ctx.layout
         clang = subprocess.run([str(layout.clang), '--version'], capture_output=True, text=True).stdout
-        tools = [layout.tools / n for n in ('build_game.py', 'build_shaders.py', 'romfs_index.py', 'check_content.py')]
-        return fingerprint('compile-1', ctx.keys['lift'], layout.runtime, layout.runtime_lib, layout.deps or 'system',
+        tools = [layout.tools / n for n in ('build_game.py', 'build_shaders.py', 'romfs_index.py', 'check_content.py',
+                                            'game_icon.py')]
+        return fingerprint('compile-2', ctx.keys['lift'], layout.runtime, layout.runtime_lib, layout.deps or 'system',
                            layout.sysroot or 'host', *tools, clang, *[d.name for d in layout.dlls])
 
     def current(self, ctx, record):
@@ -668,6 +679,8 @@ class Compile(Step):
         if not exe.is_file() or not (ctx.dest / 'romfs-index.bin').is_file():
             return False
         if not all((ctx.dest / d.name).is_file() for d in ctx.layout.dlls):
+            return False
+        if os.name == 'nt' and not record.get('game_icon'):   # an install that could not read the icon tries again
             return False
         return file_sha256(exe) == record.get('exe_sha256')
 
@@ -685,14 +698,16 @@ class Compile(Step):
                 rep.progress('compile', 'link', force=True)
 
         rep.progress('compile', 'compile', force=True)
+        icon = self.game_icon(ctx)
         code, log = run_tool(ctx, 'compile', layout.tools / 'build_game.py', [
+            *(['--icon', icon] if icon else []),
             '--gen', ctx.temp / 'gen', '--out', build, '--toolchain', layout.llvm,
             *(['--deps', layout.deps] if layout.deps else []), *(['--sysroot', layout.sysroot] if layout.sysroot else []),
             '--runtime', layout.runtime, '--runtime-lib', layout.runtime_lib, '--ninja', layout.ninja,
             '--version', version_tag(game_version(ctx)), '--expected', layout.expected(game_version(ctx)),
             '--exefs', dest / 'exefs', '--romfs', dest / 'romfs',
             '--profile', dest / 'profile'], parse)
-        exe = build / ('xcx' + EXE)
+        exe = build / ('xc3' + EXE)
         if code or not exe.is_file():
             raise InstallError('compile.failed', code=code, log=str(log))
         try:
@@ -702,27 +717,48 @@ class Compile(Step):
         replace_file(build / 'romfs-index.bin', dest / 'romfs-index.bin')
         for dll in layout.dlls:
             replace_file(dll, dest / dll.name)
-        return {'exe_sha256': file_sha256(dest / GAME_EXE)}
+        return {'exe_sha256': file_sha256(dest / GAME_EXE), 'game_icon': icon is not None}
+
+    @staticmethod
+    def game_icon(ctx):
+        """The game's own icon for xc3.exe, read from the player's files (tools/game_icon.py), or None: then xc3.exe
+        keeps the repository's mark, and the log says why."""
+        if os.name != 'nt':
+            return None
+        o = ctx.options
+        icon = ctx.temp / 'icon' / 'xc3-game.ico'
+        remove(icon)
+        code, _ = run_tool(ctx, 'compile', ctx.layout.tools / 'game_icon.py', [
+            '--base', o.base, *(['--update', o.update] if o.update else []), '--keys', o.keys, '--out', icon])
+        return icon if code == 0 and icon.is_file() else None
 
 
 # ---- 5. prepare
 
+PREPARE_LINE = re.compile(r'prepare: (\d+) of (\d+) pairs')
+WARM_START = 'prepare-shaders: '
+
+
 class Prepare(Step):
-    """Puts the shader translator beside xcx.exe. XCX has no shader list to translate ahead of play yet: shaders are
-    translated on first use and cached in shader-cache/."""
+    """Puts the shader translator beside xc3.exe, then translates every shader in the player's archives ahead of play
+    (tools/prepare_shaders.py). A failure there leaves the game playable, with shaders translated on first use, so it
+    is a warning, and the next run of the installer tries again."""
     id = 'prepare'
 
     def key(self, ctx):
         layout = ctx.layout
-        return fingerprint('prepare-2', ctx.keys['compile'], layout.xlate, layout.xlate.with_suffix('.id'))
+        return fingerprint('prepare-6', ctx.keys['compile'], ctx.keys['dlc'], layout.xlate,
+                           layout.xlate.with_suffix('.id'), layout.tools / 'prepare_shaders.py',
+                           layout.tools / 'ard_shaders.py', layout.tools / 'data' / 'shader-variants-xc3-2.2.1.bin')
 
     def current(self, ctx, record):
         xlate = ctx.dest / XLATE
-        return xlate.is_file() and file_sha256(xlate) == record.get('xlate_sha256')
+        return xlate.is_file() and file_sha256(xlate) == record.get('xlate_sha256') and \
+            (ctx.dest / 'shader-prepared.bin').is_file()
 
     def run(self, ctx):
-        layout, dest = ctx.layout, ctx.dest
-        ctx.reporter.progress('prepare', 'translator', force=True)
+        layout, dest, rep = ctx.layout, ctx.dest, ctx.reporter
+        rep.progress('prepare', 'translator', force=True)
         xlate = dest / XLATE
         if xlate.is_file() and file_sha256(xlate) != file_sha256(layout.xlate):
             remove(dest / 'shader-cache')   # another translator: its cache keys differ, the old ones only take space
@@ -732,6 +768,19 @@ class Prepare(Step):
             replace_file(xlate_id, xlate.with_suffix('.id'))
         else:
             remove(xlate.with_suffix('.id'))
+
+        def parse(line):
+            m = PREPARE_LINE.search(line)
+            if m:
+                rep.progress('prepare', 'shaders', int(m.group(1)), int(m.group(2)), 'shaders')
+            elif 'prepared' in line and line.startswith('gfx_shader:'):
+                rep.progress('prepare', 'pipelines', force=True)
+
+        rep.progress('prepare', 'scan', force=True)
+        code, log = run_tool(ctx, 'prepare', layout.tools / 'prepare_shaders.py', [dest, '--root', dest], parse)
+        if code:
+            rep.warning('warn.shaders_not_prepared', log=str(log))
+            remove(dest / 'shader-prepared.bin')
         return {'xlate_sha256': file_sha256(xlate)}
 
 
@@ -753,7 +802,7 @@ class Cleanup(Step):
         rep.progress('cleanup', 'temp', force=True)
         for stale in dest.glob('update-merge-*'):
             remove(stale)
-        for name in ('gen', 'build', 'check', 'dlc'):
+        for name in ('gen', 'build', 'check', 'dlc', 'icon'):   # icon: the game's artwork (Compile.game_icon)
             remove(ctx.temp / name)
         return {}
 

@@ -162,18 +162,18 @@ def program_nca(records, update=False):
         programs = [(r, h) for r, h in records if r["content_type"] == 0]
         require(len(programs) == 1, "Expected one update Program NCA; combined packages are unsupported")
         record, hdr = programs[0]
-        require(record["title_id"] == "0100453019AA8000", "Update belongs to another game")
+        require(record["title_id"] == "010074F013262000", "Update belongs to another game")
         require(any(hdr[0x400 + i*512 + 4] == 4 for i in range(4)), "Expected a BKTR update, not a base game")
-        require(all(r["title_id"] in ("0100453019AA8000", "0100453019AA8800") for r, _ in records), "Mixed-title update package")
+        require(all(r["title_id"] in ("010074F013262000", "010074F013262800") for r, _ in records), "Mixed-title update package")
         return record, hdr
     # Update Program NCAs can retain the base title ID; their Meta NCA carries the update ID.
     metadata = [r for r, _ in records if r['content_type'] == 1]
-    require(len(metadata) <= 1 and all(r['title_id'] == '0100453019AA8000' for r in metadata),
+    require(len(metadata) <= 1 and all(r['title_id'] == '010074F013262000' for r in metadata),
             'Expected base game metadata; updates, DLC and combined packages are unsupported')
     programs = [(r, h) for r, h in records if r['content_type'] == 0]
     require(len(programs) == 1, 'Expected one base Program NCA; updates, DLC and combined packages are unsupported')
     record, hdr = programs[0]
-    require(record['title_id'] == '0100453019AA8000',
+    require(record['title_id'] == '010074F013262000',
             'Expected Xenoblade Chronicles X: Definitive Edition base game; updates, DLC and other games are unsupported')
     return record, hdr
 

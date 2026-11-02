@@ -3,23 +3,24 @@
 // Read-only game RomFS backed by the player's extracted image.
 //
 // Input: <romfs>/romfs.bin (rt_config()->romfs), whose six IVFC levels and SHA-256 tools/extract.py verified, and
-// romfs-index.bin next to xcx.exe (XCX_ROMFS_INDEX overrides), which tools/romfs_index.py wrote together with
+// romfs-index.bin next to xc3.exe (XC3_ROMFS_INDEX overrides), which tools/romfs_index.py wrote together with
 // romfs_config.h. fs_init checks the index's SHA-256 and layout and the image size. The full 17 GB hash runs only with
-// XCX_ROMFS_VERIFY=full; a proof file (.romfs-verified-v1 next to the index, or in XCX_ROMFS_PROOF_DIR) keyed by
-// the file's volume, file id, size and times skips it on later starts, XCX_ROMFS_VERIFY=force ignores the proof.
+// XC3_ROMFS_VERIFY=full; a proof file (.romfs-verified-v1 next to the index, or in XC3_ROMFS_PROOF_DIR) keyed by
+// the file's volume, file id, size and times skips it on later starts, XC3_ROMFS_VERIFY=force ignores the proof.
 //
 // Reads are positional (platform.h plat_file_pread), so threads read the image in parallel without a file-pointer
-// lock. XCX_ROMFS_MMAP=1 maps the image instead.
+// lock. XC3_ROMFS_MMAP=1 maps the image instead.
 //
 // Overlays: files listed in a directory's manifest.tsv are served in place of the originals. Each line names a RomFS
 // path, the overlay's size and SHA-256 and the original's SHA-256 ("-" adds a file the RomFS lacks; it is numbered
-// after the RomFS's own files, file_count + k in path order). The directories, in this order: XCX_ROMFS_PATCHES and
-// XCX_ROMFS_MODS; unset or "0" = none. A missing path, a size or hash mismatch or a changed original stops the start.
+// after the RomFS's own files, file_count + k in path order). The directories, in this order: XC3_ROMFS_PATCHES and
+// XC3_ROMFS_MODS; unset or "0" = none. A missing path, a size or hash mismatch or a changed original stops the start.
 // An overlay file is opened when the game opens it; its identity (volume, file id, size, last write) is kept from the
 // start check, and an open that finds another file there stops the game.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "cfg.h"
 #include "fs.h"
@@ -119,12 +120,12 @@ static void sha_range(PlatFile *f, uint64_t offset, uint64_t size, char hex[65],
 typedef struct { char magic[16], sha256[65]; uint8_t pad[7]; Identity id; } RomfsProof;
 
 static void verify_image(const char *dir) {
-    const char *mode = cfg_get("XCX_ROMFS_VERIFY");
+    const char *mode = cfg_get("XC3_ROMFS_VERIFY");
     if (!mode || (strcmp(mode, "full") && strcmp(mode, "force"))) return;
-    const char *pdir = cfg_get("XCX_ROMFS_PROOF_DIR");
+    const char *pdir = cfg_get("XC3_ROMFS_PROOF_DIR");
     if (pdir && *pdir) dir = pdir;
     RomfsProof want = {0}, saved;
-    memcpy(want.magic, "XCXRFS-PROOF-1", 16);
+    memcpy(want.magic, "XC3RFS-PROOF-1", 16);
     memcpy(want.sha256, ROMFS_IMAGE_SHA256, sizeof ROMFS_IMAGE_SHA256 < 65 ? sizeof ROMFS_IMAGE_SHA256 : 65);
     want.id = identity_of(image);
     char path[2100];
@@ -357,18 +358,150 @@ static void heapdef_overlay(void) {
     res_heapdef_served();
 }
 
-static void overlay_init(void) {
-    // XCX_ROMFS_PATCHES unset: romfs-patches next to romfs-index.bin if it has a manifest (tools/make_romfs_patches.py)
+// ---- emulator-style mod folders
+// Every folder named romfs under the mods folder (XC3_MODS, default "mods" next to xc3.exe; "0" = off) is one mod, as
+// emulators unpack them: mods/<name>/romfs/..., or deeper (mods/contents/<title id>/<name>/romfs). Its files replace
+// or add RomFS files, with no manifest and no hash check. Mods apply in path order; a file a manifest overlay or an
+// earlier mod already serves is skipped. exefs folders patch ARM code, which this build does not run: skipped.
+typedef struct { char **paths; size_t n; } PathList;
+
+static void path_push(PathList *l, const char *p) {
+    l->paths = realloc(l->paths, (l->n + 1) * sizeof *l->paths);
+    need(l->paths != NULL && (l->paths[l->n] = strdup(p)) != NULL, "mod list");
+    l->n++;
+}
+
+static int path_order(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+typedef struct { const char *dir; PathList dirs, files; } Listing;
+
+static int listing_add(const char *name, int kind, uint64_t size, void *ctx) {
+    (void)size;
+    Listing *l = ctx;
+    char p[4200];
+    if (snprintf(p, sizeof p, "%s/%s", l->dir, name) >= (int)sizeof p) return 1;
+    if (kind == PLAT_FS_DIR) path_push(&l->dirs, p);
+    else if (kind == PLAT_FS_FILE) path_push(&l->files, p);
+    return 1;
+}
+
+// The folders and files directly in dir, each sorted.
+static Listing list_dir(const char *dir) {
+    Listing l = {dir, {0}, {0}};
+    plat_fs_list(dir, listing_add, &l);
+    if (l.dirs.n) qsort(l.dirs.paths, l.dirs.n, sizeof *l.dirs.paths, path_order);
+    if (l.files.n) qsort(l.files.paths, l.files.n, sizeof *l.files.paths, path_order);
+    return l;
+}
+
+static void list_free(PathList *l) {
+    for (size_t k = 0; k < l->n; k++) free(l->paths[k]);
+    free(l->paths);
+}
+
+static const char *base_name(const char *p) {
+    const char *s = strrchr(p, '/');
+    return s ? s + 1 : p;
+}
+
+static int served(uint64_t i, const char *name) {
+    for (size_t k = 0; k < noverlay; k++)
+        if (i == ADDED ? overlays[k].index == ADDED && !strcmp(overlays[k].name, name) : overlays[k].index == i)
+            return 1;
+    return 0;
+}
+
+// Adds the files under dir (romfs-relative prefix rel) of one mod; counts into *used and *skipped.
+static void mod_files(const char *dir, const char *rel, size_t *used, size_t *skipped) {
+    Listing l = list_dir(dir);
+    char name[4200];
+    for (size_t k = 0; k < l.files.n; k++) {
+        const char *file = l.files.paths[k];
+        if (snprintf(name, sizeof name, "%s%s", rel, base_name(file)) >= (int)sizeof name ||
+            !romfs_path_valid_relative(name))
+            continue;
+        uint64_t i = lower(name);
+        if (!(i < file_count && !strcmp(entry_name(entry(i)), name))) i = ADDED;
+        if (served(i, name)) {
+            rt_log("mods: %s skipped, an earlier overlay or mod already replaces %s", file, name);
+            ++*skipped;
+            continue;
+        }
+        PlatFile *f = open_read(file);
+        if (!f) {
+            rt_log("mods: cannot open %s", file);
+            continue;
+        }
+        Identity id = identity_of(f);
+        plat_file_close(f);
+        if (noverlay == overlay_cap) {
+            overlay_cap = overlay_cap ? overlay_cap * 2 : 16;
+            overlays = realloc(overlays, overlay_cap * sizeof *overlays);
+            need(overlays != NULL, "overlay table");
+        }
+        char *copy = strdup(file), *r = strdup(name);
+        need(copy && r, "overlay path copy");
+        overlays[noverlay++] = (Overlay){i, id.size, copy, r, id};
+        ++*used;
+    }
+    for (size_t k = 0; k < l.dirs.n; k++) {
+        if (snprintf(name, sizeof name, "%s%s/", rel, base_name(l.dirs.paths[k])) < (int)sizeof name)
+            mod_files(l.dirs.paths[k], name, used, skipped);
+    }
+    list_free(&l.dirs);
+    list_free(&l.files);
+}
+
+// Finds the romfs folders under dir, up to depth levels down.
+static void mods_find(const char *dir, int depth) {
+    Listing l = list_dir(dir);
+    for (size_t k = 0; k < l.dirs.n; k++) {
+        const char *d = l.dirs.paths[k], *b = base_name(d);
+        if (!strcasecmp(b, "romfs")) {
+            size_t used = 0, skipped = 0;
+            mod_files(d, "", &used, &skipped);
+            rt_log("mods: %s: %zu files%s", d, used, skipped ? ", some skipped" : "");
+        } else if (!strcasecmp(b, "exefs") || !strcasecmp(b, "cheats")) {
+            rt_log("mods: %s skipped: it patches the Switch code, which this build replaces", d);
+        } else if (depth > 0) {
+            mods_find(d, depth - 1);
+        }
+    }
+    list_free(&l.dirs);
+    list_free(&l.files);
+}
+
+static void mods_load(void) {
     char def[2100];
-    const char *patches = cfg_get("XCX_ROMFS_PATCHES");
+    const char *dir = cfg_get("XC3_MODS");
+    if (dir && !strcmp(dir, "0")) return;
+    if (!dir || !*dir) {
+        need(plat_exe_path(def, sizeof def), "executable path");
+        char *sep = plat_last_sep(def);
+        size_t k = sep ? (size_t)(sep - def) + 1 : 0;
+        need(k + 5 < sizeof def, "executable path");
+        strcpy(def + k, "mods");
+        dir = def;
+    }
+    if (!plat_dir_exists(dir)) return;
+    size_t before = noverlay;
+    mods_find(dir, 4);
+    rt_log("mods: %zu files from %s", noverlay - before, dir);
+}
+
+static void overlay_init(void) {
+    // XC3_ROMFS_PATCHES unset: romfs-patches next to romfs-index.bin if it has a manifest (tools/make_romfs_patches.py)
+    char def[2100];
+    const char *patches = cfg_get("XC3_ROMFS_PATCHES");
     if (!patches && snprintf(def, sizeof def, "%s/romfs-patches/manifest.tsv", index_dir) < (int)sizeof def &&
         plat_file_exists(def)) {
         def[strlen(def) - strlen("/manifest.tsv")] = 0;
         patches = def;
     }
-    const char *dirs[2] = {patches, cfg_get("XCX_ROMFS_MODS")};
+    const char *dirs[2] = {patches, cfg_get("XC3_ROMFS_MODS")};
     for (int i = 0; i < 2; i++)
         if (dirs[i] && *dirs[i] && strcmp(dirs[i], "0")) overlay_load(dirs[i]);
+    mods_load();
     heapdef_overlay();
     added_init();
     if (noverlay) qsort(overlays, noverlay, sizeof *overlays, overlay_order);
@@ -379,9 +512,9 @@ static void overlay_init(void) {
 }
 
 // ---- start
-// romfs-index.bin next to xcx.exe, or XCX_ROMFS_INDEX.
+// romfs-index.bin next to xc3.exe, or XC3_ROMFS_INDEX.
 static void index_path(char *out, size_t cap) {
-    const char *e = cfg_get("XCX_ROMFS_INDEX");
+    const char *e = cfg_get("XC3_ROMFS_INDEX");
     if (e && *e) {
         need(snprintf(out, cap, "%s", e) < (int)cap, "index path");
         return;
@@ -402,7 +535,7 @@ static void load_index(void) {
     else strcpy(index_dir, ".");
     uint64_t sz = 0;
     index_bytes = plat_file_read(path, &sz);
-    if (!index_bytes) rt_fatal("RomFS index %s missing (tools/build_game.py writes it next to xcx.exe)", path);
+    if (!index_bytes) rt_fatal("RomFS index %s missing (tools/build_game.py writes it next to xc3.exe)", path);
     need(sz >= 24 && sz < (128 << 20), "index size");
     index_size = (size_t)sz;
     uint8_t d[32];
@@ -412,7 +545,7 @@ static void load_index(void) {
     if (strcmp(hex, ROMFS_INDEX_SHA256))
         rt_fatal("RomFS index %s has SHA-256 %s, this build expects %s (rebuild with tools/build_game.py)", path, hex,
                  ROMFS_INDEX_SHA256);
-    need(!memcmp(index_bytes, "XCXRFS1", 8), "index format");
+    need(!memcmp(index_bytes, "XC3RFS1", 8), "index format");
     memcpy(&file_count, index_bytes + 8, 8);
     memcpy(&strings_offset, index_bytes + 16, 8);
     need(file_count == ROMFS_FILE_COUNT && file_count < 1000000 && strings_offset == 24 + file_count * 24 &&
@@ -441,7 +574,7 @@ static void init_once(void *param) {
     const char *dir = rt_config()->romfs;
     need(snprintf(image_file, sizeof image_file, "%s/romfs.bin", dir) < (int)sizeof image_file, "image path");
     image = open_read(image_file);
-    if (!image) rt_fatal("RomFS image %s missing; put romfs.bin into the romfs folder next to xcx or set XCX_ROMFS",
+    if (!image) rt_fatal("RomFS image %s missing; put romfs.bin into the romfs folder next to xc3 or set XC3_ROMFS",
                          image_file);
     PlatFileId sz;
     need(plat_file_id(image, &sz), "image size");
@@ -450,7 +583,7 @@ static void init_once(void *param) {
                  (unsigned long long)sz.size, (unsigned long long)ROMFS_IMAGE_SIZE);
     rt_log("RomFS image %s: size ok (%llu bytes)", image_file, (unsigned long long)ROMFS_IMAGE_SIZE);
     verify_image(index_dir);
-    const char *mm = cfg_get("XCX_ROMFS_MMAP");
+    const char *mm = cfg_get("XC3_ROMFS_MMAP");
     if (mm && strcmp(mm, "0")) {
         const void *v = plat_file_map(image);
         if (v) {
@@ -653,7 +786,7 @@ static void ov_initialize(Cpu *c) {
 }
 
 HOST_OVERRIDE("_ZN2nn2fs8MountRomEPKcPvm", ov_mount_rom);
-// XCX: the SDK 19 overload without a cache buffer; the host needs no cache either way
+// XC3: the SDK 19 overload without a cache buffer; the host needs no cache either way
 HOST_OVERRIDE("_ZN2nn2fs8MountRomEPKc", ov_mount_rom);
 HOST_OVERRIDE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", ov_query_cache);
 HOST_OVERRIDE("_ZN2nn2fs24InitializeForApplicationEv", ov_initialize);

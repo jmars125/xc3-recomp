@@ -44,7 +44,7 @@ static VkExec X;
 static int x_ready;
 static _Thread_local int x_here;   // this thread is inside vk_exec_record (vk_exec_inline_begin)
 
-// ---- XCX_TRACE=gfx frame counters
+// ---- XC3_TRACE=gfx frame counters
 
 VkExecFrame vk_exec_frame;
 static struct { const uint8_t *mem; uint32_t w, h, fmt, n; } fw[64];   // textures written this frame
@@ -143,7 +143,7 @@ static int view_format(const tex_t *t, const view_t *v, int blocks, VkFormat *ou
 }
 
 // ---- 3D BC render targets
-// A 3D BC texture has no block views (vk_texture.c create_tex, XCX_BLOCK_VIEWS_3D): on RDNA2 cards such an image made
+// A 3D BC texture has no block views (vk_texture.c create_tex, XC3_BLOCK_VIEWS_3D): on RDNA2 cards such an image made
 // BLOCK_TEXEL_VIEW_COMPATIBLE and 2D_ARRAY_COMPATIBLE took writes past the end of its memory (TotK Recomp issue #5).
 // Draws into it through an uncompressed view of its blocks (TotK's agl BC4 encoder fills 32x32x32 and 64x64x64 volumes
 // and their levels at the logo) go to a stand-in: a 2D array of the blocks of one level in the view's format, one layer
@@ -361,7 +361,7 @@ static void resolve_target(const tex_t *t, const view_t *v, int has_v, int depth
 }
 
 /* The size of a pass without attachments: the far corner of viewport 0, else of the scissor, 1..16384, as
-   MacNativeGames and nxnative size it. XCX draws a fragment shader that only writes a storage buffer into a 1x1
+   MacNativeGames and nxnative size it. XC3 draws a fragment shader that only writes a storage buffer into a 1x1
    viewport; a pass sized by the viewport's width alone puts an offset viewport outside the scissor, and the cave rock
    loses its ambient light. */
 void vk_exec_noatt_dims(const VkExec *ex, uint32_t *w, uint32_t *h) {
@@ -619,6 +619,7 @@ void vk_exec_pass_begin(VkExec *ex) {
 
 void vk_exec_pass_end(VkExec *ex) {
     if (!ex->in_pass) return;
+    vk_exec_xfb_pause(ex);
     vk_exec_oq_pass_end(ex);
     vkCmdEndRendering(ex->cb);
     ex->recorded++;
@@ -770,13 +771,13 @@ static void set_rt(VkExec *ex, const p_set_rt *r) {
 
 // ---- command buffer parts
 // NVN starts the GPU as soon as commands are submitted; one Vulkan command buffer per submission starts it only after
-// the whole replay. Between passes, once XCX_SPLIT_DRAWS (64; 0 off) draws and dispatches were recorded since the
+// the whole replay. Between passes, once XC3_SPLIT_DRAWS (64; 0 off) draws and dispatches were recorded since the
 // last part, the part goes to the queue (vk_sync_split) and the replay continues in a new command buffer. Only
 // command-buffer state is lost there (bindings and dynamic state: vk_exec_draw_new_cb, ex->dirty); barriers, layouts and
 // queries are not: a barrier's first scope is everything earlier in submission order, image layouts belong to the image,
 // and occlusion queries end with their pass. Fences, completion callbacks and reports stay per submission: only the last
 // part signals the value. nxnative commits every 64 draws between passes; MacNativeGames after 30, then every 40.
-// A part also spans at least XCX_SPLIT_US (1000) of replay time: a split costs about 40 us of the render thread
+// A part also spans at least XC3_SPLIT_US (1000) of replay time: a split costs about 40 us of the render thread
 // (vkQueueSubmit2, a command buffer, the mirror prologue), and a fight frame of 2,000 draws made 15 parts on the 7900X;
 // a millisecond of recording is a fraction of a millisecond of GPU work, so the GPU still starts early.
 static int split_n = -1, split_draws, part_start;
@@ -785,9 +786,9 @@ static uint64_t n_parts, n_subs;
 
 static void maybe_split(VkExec *ex) {
     if (split_n < 0) {
-        split_n = cfg_int("XCX_SPLIT_DRAWS");
+        split_n = cfg_int("XC3_SPLIT_DRAWS");
         if (split_n < 0) split_n = 0;
-        int us = cfg_int("XCX_SPLIT_US");
+        int us = cfg_int("XC3_SPLIT_US");
         split_ns = us > 0 ? (uint64_t)us * 1000 : 0;
         rt_log("vk: replay command buffer split every %d draws between passes, parts of at least %d us%s", split_n,
                us > 0 ? us : 0, split_n ? "" : " (off)");
@@ -819,6 +820,7 @@ static void walk(VkExec *ex, const op_hdr *h, int depth) {
             break;
         case OP_SET_RT: set_rt(ex, a); break;
         case OP_CLEAR_COLOR: clear_color(ex, a); break;
+        case OP_FENCE_SYNC: nvn_fence_sync_replayed(((const p_fence_sync *)a)->sync); break;
         case OP_CLEAR_DS: clear_ds(ex, a); break;
         case OP_VIEWPORTS: {
             const p_viewports *v = a;
@@ -862,14 +864,16 @@ static void walk(VkExec *ex, const op_hdr *h, int depth) {
         case OP_RASTER_DISCARD: ex->pipe.raster_discard = ((const p_flag *)a)->value != 0; break;
         case OP_PRIM_RESTART: ex->prim_restart = *(const p_prim_restart *)a; break;
         case OP_COPY_STRIDE: ex->copy_stride = ((const p_copy_stride *)a)->stride; break;
-        case OP_SET_TEX_POOL: ex->tex_pool = ((const p_set_pool *)a)->pool, ex->tex_serial++; break;
-        case OP_SET_SAMP_POOL: ex->samp_pool = ((const p_set_pool *)a)->pool; break;
         case OP_BARRIER: vk_exec_barrier(ex); break;
         case OP_DRAW: case OP_DRAW_IDX: case OP_DISPATCH: case OP_UPDATE_UB: case OP_DRAW_IDX_IND: case OP_DISPATCH_IND:
             if (h->op == OP_DRAW || h->op == OP_DRAW_IDX || h->op == OP_DRAW_IDX_IND) vk_exec_frame.draws_seen++, split_draws++;
             if (h->op == OP_DISPATCH || h->op == OP_DISPATCH_IND) vk_exec_frame.dispatches++, split_draws++;
+        case OP_XFB_DRAW:
+            vk_exec_frame.draws_seen++, split_draws++;
+            // fall through
+        case OP_XFB_BUF: case OP_XFB_BEGIN: case OP_XFB_END:
         case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
-        case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG:
+        case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL:
             vk_exec_op_draw(ex, h->op, a);
             break;
         case OP_COPY_B2B: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX:

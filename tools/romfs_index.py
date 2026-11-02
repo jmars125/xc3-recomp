@@ -6,7 +6,7 @@ MacNativeGames contributors).
 Input: <romfs>/index.json ({status, romfs_size, romfs_sha256, files: [{path, offset, size}]}) as tools/extract.py
 writes it, and <romfs>/romfs.bin, whose size must match. Output, both in the build directory (never in the repo):
 
-    romfs-index.bin   XCXRFS1 layout: header <8sQQ (magic, count, strings offset), count 24-byte rows <QQII (offset,
+    romfs-index.bin   XC3RFS1 layout: header <8sQQ (magic, count, strings offset), count 24-byte rows <QQII (offset,
                       size, name offset, name length including the NUL), then the NUL-terminated names; rows sorted by
                       the UTF-8 bytes of the path, which is the order strcmp sees
     romfs_config.h    ROMFS_IMAGE_SIZE, ROMFS_IMAGE_SHA256, ROMFS_INDEX_SHA256, ROMFS_FILE_COUNT
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from check_content import GENERATED_MARKER
 
-MAGIC = b'XCXRFS1'
+MAGIC = b'XC3RFS1'
 HEADER = struct.Struct('<8sQQ')
 ROW = struct.Struct('<QQII')
 
@@ -84,7 +84,7 @@ def write(romfs, out):
 
 
 def write_placeholder(out):
-    """romfs_config.h without a RomFS (no extracted game on this machine): xcx.exe builds, and fs_init stops with a
+    """romfs_config.h without a RomFS (no extracted game on this machine): xc3.exe builds, and fs_init stops with a
     named fatal."""
     (out / 'romfs-index.bin').unlink(missing_ok=True)
     config = (f'// No RomFS found by tools/romfs_index.py; do not edit. {GENERATED_MARKER}\n'

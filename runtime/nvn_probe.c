@@ -1,6 +1,6 @@
-// xcx.exe --probe-nvn: the NVN front end and the null back end, called the way the
+// xc3.exe --probe-nvn: the NVN front end and the null back end, called the way the
 // game calls them: through the real nvnp_* procs with a synthetic Cpu (AAPCS64 arguments in x0..x7 and v0..v7), on the
-// guest main thread, on the null back end whatever XCX_GPU says. Checks, in order:
+// guest main thread, on the null back end whatever XC3_GPU says. Checks, in order:
 //   - pool, buffer, texture, sampler, sync and event objects against MacNativeGames' semantics (hle_nvn.c), the
 //     texture storage sizes against the original-SDK goldens of MNG tests/texture_auto_layout/probe.c;
 //   - every op kind recorded through the CommandBuffer procs and parsed back with nvn_op_first/next/payload, and
@@ -8,7 +8,7 @@
 //   - the null back end's CPU-visible side effects (event write and add, counter report, buffer copy, uniform update,
 //     in stream order across handles) landing in guest memory at submit, and not before;
 //   - the proc table: every name of nvn_procs.inc resolves to its own synthetic address, an unknown name to NULL;
-//   - named fatal stubs stop with their name, each in a child process (this executable again, XCX_PROBE_NVN_CHILD).
+//   - named fatal stubs stop with their name, each in a child process (this executable again, XC3_PROBE_NVN_CHILD).
 // The 40 layout goldens themselves are run by --probe-nvn-tex against nvn_tex.c; here four of them go through the procs.
 // Ported in part from MacNativeGames games/totk/tests/texture_auto_layout/probe.c @ b75be8cf (MIT, Copyright (c) 2026
 // jhaizhou; origin d2r-mobile): the golden metadata, which holds no game bytes.
@@ -22,7 +22,7 @@
 #include "nvn_api.h"
 #include "platform/platform.h"
 
-#define CHILD_ENV "XCX_PROBE_NVN_CHILD"
+#define CHILD_ENV "XC3_PROBE_NVN_CHILD"
 
 #define NVN_PROC(n) void nvnp_##n(Cpu *c);
 #include "nvn_procs.inc"
@@ -107,7 +107,7 @@ static void probe_device_and_pools(void) {
     CHECK(nvn_pool_find(U(pmem) + 0x100, 0x200) == P() && !nvn_pool_find(U(pmem) + PROBE_POOL_SIZE - 8, 16), "pool index");
     n_objects += 6;
 
-    // refused: no storage, PHYSICAL | VIRTUAL, a size that is not a 64 KiB multiple (MNG xcx_vpool.c)
+    // refused: no storage, PHYSICAL | VIRTUAL, a size that is not a 64 KiB multiple (MNG xc3_vpool.c)
     static NVNmemoryPool bad;
     CHECK(make_pool(&bad, NULL, 0x10000, NVN_MEMORY_POOL_FLAGS_CPU_CACHED) == 0, "a pool without storage is refused");
     CHECK(make_pool(&bad, gmem, PROBE_GPOOL_SIZE, NVN_MEMORY_POOL_FLAGS_PHYSICAL | NVN_MEMORY_POOL_FLAGS_VIRTUAL) == 0,
@@ -399,6 +399,7 @@ static uint64_t record_all(void) {
     OBJ(NVNsamplerPool, sp2);
     CALL(nvnTexturePoolInitialize, U(&tp2), U(&pool), 0x30000, 16);
     CALL(nvnSamplerPoolInitialize, U(&sp2), U(&pool), 0x31000, 8);
+    CHECK(((const dpool_t *)&tp2)->base >= 16 && ((const dpool_t *)&sp2)->base >= 8, "a later pool has its own slot range");
     CALL(nvnProgramInitialize, U(&prog), U(&dev));
     CALL(nvnTextureViewSetDefaults, U(&view));
     CALL(nvnTextureViewSetLevels, U(&view), 1, 3);
@@ -457,6 +458,7 @@ static uint64_t record_all(void) {
     REC(OP_DISPATCH_IND, CALL(nvnCommandBufferDispatchComputeIndirect, U(c), 0xc100));
     REC(OP_CLEAR_BUF, CALL(nvnCommandBufferClearBuffer, U(c), 0xc200, 0x40, 0xdeadbeef));
     REC(OP_CLEAR_BUF, CALL(nvnCommandBufferReportValue, U(c), 0x1234, 0xc300));
+    REC(OP_FENCE_SYNC, CALL(nvnCommandBufferFenceSync, U(c), U(&syncs), NVN_SYNC_CONDITION_ALL_GPU_COMMANDS_COMPLETE, 0));
     static const int thresholds[4] = {1, 2, 3, 4};
     CALL(nvnCommandBufferSetColorReductionEnable, U(c), 1);   // hints: nothing recorded
     CALL(nvnCommandBufferSetColorReductionThresholds, U(c), 0, U(thresholds));
@@ -675,6 +677,9 @@ static void parse_all(uint64_t h) {
             break;
         }
         case OP_DISPATCH_IND: CHECK(((const p_dispatch_ind *)a)->ind == 0xc100, "DISPATCH_IND payload"); break;
+        case OP_FENCE_SYNC:
+            CHECK(((const p_fence_sync *)a)->sync == (const sync_t *)&syncs, "FENCE_SYNC payload");
+            break;
         case OP_CLEAR_BUF: {
             const p_clear_buf *p = a;
             CHECK((p->addr == 0xc200 && p->size == 0x40 && p->value == 0xdeadbeef) ||
@@ -867,7 +872,7 @@ static void probe_children(void) {
 int probe_nvn(void) {
     const char *child = getenv(CHILD_ENV);
     if (child && *child) return run_as_child(child);
-    // The probe checks the null back end whatever XCX_GPU says; the choice is made once, at the first object call.
+    // The probe checks the null back end whatever XC3_GPU says; the choice is made once, at the first object call.
     ((RtConfig *)rt_config())->gpu = "null";
     nvn_procs_register();
     hostfn_seal();

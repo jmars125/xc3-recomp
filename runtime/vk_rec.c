@@ -39,7 +39,7 @@ enum {
     R_SetDepthWriteEnable, R_SetFrontFace, R_SetPrimitiveRestartEnable, R_SetPrimitiveTopology,
     R_SetRasterizerDiscardEnable, R_SetScissorWithCount, R_SetStencilCompareMask, R_SetStencilOp, R_SetStencilReference,
     R_SetStencilTestEnable, R_SetStencilWriteMask, R_SetViewportWithCount, R_WriteTimestamp, R_WriteTimestamp2,
-    R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb,
+    R_PushTpl, R_Push, R_VertexInput, R_Bool, R_PolygonMode, R_XfbBind, R_XfbBegin, R_XfbEnd, R_XfbDraw, R_BlendEnable, R_BlendEquation, R_WriteMask, R_EndCb,
 };
 
 static uint64_t now_ns(void) { return plat_now_ns(); }
@@ -128,14 +128,14 @@ void rec_begin(VkCommandBuffer cb) {
     static int mode = -1;
     if (mode < 0) {
         // Default off on AMD GPUs: with the recorder their drivers lost the device within the first frames or at menu
-        // opens, 1 boot in 3 on an RX 9070 XT, and XCX_VK_RECORDER=0 ended it for three users (TotK Recomp issue #5);
+        // opens, 1 boot in 3 on an RX 9070 XT, and XC3_VK_RECORDER=0 ended it for three users (TotK Recomp issue #5);
         // under RADV the kernel saw an illegal opcode at the end of a command buffer (TotK Recomp issue #40). Letting
         // the recorder end its own parts (rec_end_cb) fixed the white scene on an RX 6700 XT; the default stays off
         // until more AMD cards run it.
-        const char *set = cfg_get("XCX_VK_RECORDER");
+        const char *set = cfg_get("XC3_VK_RECORDER");
         mode = rt_knob("VK_RECORDER", vk_caps.amd ? "0" : "1");
         if (!mode && vk_caps.amd && !(set && *set))
-            rt_log("vk_rec: no recorder thread on AMD GPUs (XCX_VK_RECORDER=1 turns it on)");
+            rt_log("vk_rec: no recorder thread on AMD GPUs (XC3_VK_RECORDER=1 turns it on)");
         if (mode) {
             plat_event_init(&wake_ev, 0, 0);
             rec_prio = plat_thread_priority_get();
@@ -145,7 +145,7 @@ void rec_begin(VkCommandBuffer cb) {
                 mode = 0;
             } else {
                 rt_log("vk_rec: the replay's Vulkan commands are made by a recorder thread%s",
-                       mode == 2 ? " in the B blocks (XCX_AB)" : "");
+                       mode == 2 ? " in the B blocks (XC3_AB)" : "");
             }
         }
     }
@@ -162,17 +162,17 @@ void rec_end(void) {
     rec_live = 0;
 }
 
-// XCX_REC_END (default 1): the thread that recorded the part also ends it, after the breadcrumb crumb (kind 0: none)
+// XC3_REC_END (default 1): the thread that recorded the part also ends it, after the breadcrumb crumb (kind 0: none)
 // that vk_sync.c writes at the end of a submission. On an RX 6700 XT (driver 26.10.1, TotK Recomp issue #5) parts the
 // recorder recorded and the submitting thread ended broke when a submission was split (vk_sync.c vk_sync_split): the
 // GPU hung or the scene turned green, then white. The handoff in rec_drain orders the two threads, so Vulkan allows the
-// old split; the driver did not cope with it. XCX_REC_END=0 brings the old split back.
+// old split; the driver did not cope with it. XC3_REC_END=0 brings the old split back.
 typedef struct { int kind; uint64_t n; } A_EndCb;
 int rec_end_cb(VkCommandBuffer cb, int crumb, uint64_t n) {
     static int mode = -1;
     if (mode < 0) {
         mode = rt_knob("REC_END", "1");
-        rt_log("vk_rec: a part the recorder records is ended by %s (XCX_REC_END=%d)",
+        rt_log("vk_rec: a part the recorder records is ended by %s (XC3_REC_END=%d)",
                mode ? "the recorder" : "the submitting thread", mode);
     }
     if (!rec_live || cb != rec_cb || !mode) {
@@ -527,6 +527,40 @@ void rec_polygon_mode(PFN_vkCmdSetPolygonModeEXT fn, VkCommandBuffer cb, VkPolyg
     pub();
 }
 
+typedef struct { PFN_vkCmdBindTransformFeedbackBuffersEXT fn; uint32_t n; VkBuffer b[4]; VkDeviceSize o[4], s[4]; } A_XfbBind;
+void rec_xfb_bind(PFN_vkCmdBindTransformFeedbackBuffersEXT fn, VkCommandBuffer cb, uint32_t n, const VkBuffer *b,
+                  const VkDeviceSize *o, const VkDeviceSize *s) {
+    if (!OWNED(cb)) { fn(cb, 0, n, b, o, s); return; }
+    A_XfbBind *a = put(R_XfbBind, sizeof *a);
+    a->fn = fn, a->n = n;
+    memcpy(a->b, b, sizeof a->b[0] * n), memcpy(a->o, o, sizeof a->o[0] * n), memcpy(a->s, s, sizeof a->s[0] * n);
+    pub();
+}
+
+typedef struct { void *fn; uint32_t n; VkBuffer b[4]; VkDeviceSize o[4]; } A_XfbCounters;
+static void xfb_counters(uint32_t op, void *fn, uint32_t n, const VkBuffer *b, const VkDeviceSize *o) {
+    A_XfbCounters *a = put(op, sizeof *a);
+    a->fn = fn, a->n = n;
+    if (n) memcpy(a->b, b, sizeof a->b[0] * n), memcpy(a->o, o, sizeof a->o[0] * n);
+    pub();
+}
+void rec_xfb_begin(PFN_vkCmdBeginTransformFeedbackEXT fn, VkCommandBuffer cb, uint32_t n, const VkBuffer *b, const VkDeviceSize *o) {
+    if (!OWNED(cb)) { fn(cb, 0, n, b, o); return; }
+    xfb_counters(R_XfbBegin, (void *)fn, n, b, o);
+}
+void rec_xfb_end(PFN_vkCmdEndTransformFeedbackEXT fn, VkCommandBuffer cb, uint32_t n, const VkBuffer *b, const VkDeviceSize *o) {
+    if (!OWNED(cb)) { fn(cb, 0, n, b, o); return; }
+    xfb_counters(R_XfbEnd, (void *)fn, n, b, o);
+}
+
+typedef struct { PFN_vkCmdDrawIndirectByteCountEXT fn; VkBuffer b; VkDeviceSize o; uint32_t stride; } A_XfbDraw;
+void rec_xfb_draw(PFN_vkCmdDrawIndirectByteCountEXT fn, VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, uint32_t stride) {
+    if (!OWNED(cb)) { fn(cb, 1, 0, b, o, 0, stride); return; }
+    A_XfbDraw *a = put(R_XfbDraw, sizeof *a);
+    *a = (A_XfbDraw){fn, b, o, stride};
+    pub();
+}
+
 typedef struct { void *fn; uint32_t first, n; const void *v; } A_Targets;
 #define TARGET_CMD(fname, R, PFN, T)                                                                                    \
     void fname(PFN fn, VkCommandBuffer cb, uint32_t first, uint32_t n, const T *v) {                                    \
@@ -611,6 +645,10 @@ static void exec_packet(uint32_t op, void *p) {
     case R_VertexInput: { A_VertexInput *a = p; a->fn(cb, a->nb, a->b, a->na, a->v); break; }
     case R_Bool: { A_Bool *a = p; a->fn(cb, a->v); break; }
     case R_PolygonMode: { A_PolygonMode *a = p; a->fn(cb, a->m); break; }
+    case R_XfbBind: { A_XfbBind *a = p; a->fn(cb, 0, a->n, a->b, a->o, a->s); break; }
+    case R_XfbBegin: { A_XfbCounters *a = p; ((PFN_vkCmdBeginTransformFeedbackEXT)a->fn)(cb, 0, a->n, a->b, a->o); break; }
+    case R_XfbEnd: { A_XfbCounters *a = p; ((PFN_vkCmdEndTransformFeedbackEXT)a->fn)(cb, 0, a->n, a->b, a->o); break; }
+    case R_XfbDraw: { A_XfbDraw *a = p; a->fn(cb, 1, 0, a->b, a->o, 0, a->stride); break; }
     case R_BlendEnable: { A_Targets *a = p; ((PFN_vkCmdSetColorBlendEnableEXT)a->fn)(cb, a->first, a->n, a->v); break; }
     case R_BlendEquation: { A_Targets *a = p; ((PFN_vkCmdSetColorBlendEquationEXT)a->fn)(cb, a->first, a->n, a->v); break; }
     case R_WriteMask: { A_Targets *a = p; ((PFN_vkCmdSetColorWriteMaskEXT)a->fn)(cb, a->first, a->n, a->v); break; }

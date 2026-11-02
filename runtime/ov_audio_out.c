@@ -1,4 +1,4 @@
-// nn::audio AudioOut on SDL3: XCX streams PCM through AudioOut next to the audio renderer (XCX used only the
+// nn::audio AudioOut on SDL3: XC3 streams PCM through AudioOut next to the audio renderer (XC3 used only the
 // renderer). Each open AudioOut is an SDL audio stream of 16-bit samples at 48 kHz with the channel count the game
 // asked for. AppendAudioOutBuffer queues a buffer's data on the stream; a buffer is released once the device has
 // consumed every byte up to its end, which GetReleasedAudioOutBuffer reports in append order. Without an audio device
@@ -24,7 +24,7 @@ typedef struct { uint64_t buf, end; } Queued;   // end: total bytes appended onc
 typedef struct {
     uint64_t guest, event;   // event: the SystemEvent of the overloads that take one, signalled on release; 0 if none
     uint32_t channels, state;
-    float volume;
+    float volume, gain;      // gain: what the stream has, the game's volume times the player's
     SDL_AudioStream *stream;
     uint64_t appended, consumed_at_stop, start_ns;   // byte counts; start_ns: the device-less clock
     Queued q[QUEUE_MAX];
@@ -59,7 +59,7 @@ static uint64_t consumed(const Out *o) {
 // The SDL device pulls on its own thread: a release there wakes a game waiting on the buffer event. SDL holds the
 // stream's lock around this callback, and the functions below hold `lock` while they call into the stream
 // (consumed), so waiting for `lock` here deadlocks with them: the game's audio thread then never returns from
-// GetReleasedAudioOutBuffer, keeps its virtual core, and the threads bound to that core stop (XCX after New Game).
+// GetReleasedAudioOutBuffer, keeps its virtual core, and the threads bound to that core stop (XC3 after New Game).
 // A busy `lock` skips this pull; the next one, a few milliseconds later, signals the release.
 static void SDLCALL device_pull(void *user, SDL_AudioStream *s, int additional, int total) {
     (void)s, (void)additional, (void)total;
@@ -84,7 +84,7 @@ static uint32_t open_out(Cpu *c, uint64_t guest, uint64_t event, const uint8_t *
     if (!o) o = find(0);
     if (!o) rt_fatal("audout: more than %d AudioOuts open", OUT_MAX);
     if (sdl_ready < 0) sdl_ready = SDL_InitSubSystem(SDL_INIT_AUDIO) ? 1 : 0;
-    *o = (Out){.guest = guest, .event = event, .channels = channels, .state = STATE_STOPPED, .volume = 1.0f};
+    *o = (Out){.guest = guest, .event = event, .channels = channels, .state = STATE_STOPPED, .volume = 1.0f, .gain = 1.0f};
     if (sdl_ready) {
         SDL_AudioSpec spec = {SDL_AUDIO_S16LE, channels, RATE};
         o->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
@@ -158,7 +158,8 @@ static void ov_append(Cpu *c) {
     if (ok) {
         size -= size % frame_bytes(o);
         if (o->stream && size) {
-            if (o->volume != 1.0f) SDL_SetAudioStreamGain(o->stream, o->volume);
+            float gain = o->volume * audio_player_volume();
+            if (gain != o->gain && SDL_SetAudioStreamGain(o->stream, gain)) o->gain = gain;
             SDL_PutAudioStreamData(o->stream, data, (int)size);
         }
         o->appended += size;

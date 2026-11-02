@@ -337,7 +337,10 @@ PlatFiber *plat_fiber_new(size_t stack, void (*fn)(void *arg), void *arg) {
     mprotect(m, 4096, PROT_NONE);
     f->stack = m, f->size = stack;
     uint64_t *top = (uint64_t *)(((uintptr_t)m + stack) & ~(uintptr_t)15);
-    uint64_t *sp = top - 10;   // fpu state (2 words), r15, r14, r13, r12, rbx, rbp, return address, padding
+    // fpu state (2 words), r15, r14, r13, r12, rbx, rbp, return address, 2 words of padding: fiber_swap's ret leaves
+    // rsp at top - 16, so plat_fiber_entry's call enters fn with rsp + 8 a multiple of 16, as the SysV ABI wants. With
+    // one word of padding fn ran 8 bytes off, and lifted code faulted on its first aligned 16-byte spill (vmovaps).
+    uint64_t *sp = top - 11;
     sp[0] = 0x037f;            // x87 control word: the default
     sp[1] = 0x1f80;            // MXCSR: the default
     sp[2] = sp[3] = 0;         // r15, r14

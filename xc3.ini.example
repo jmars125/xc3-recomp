@@ -1,11 +1,12 @@
-# xcx.ini: settings for xcx.exe. Copy this file to xcx.ini next to xcx.exe and remove the '#' of a line to change it.
-# Each line shows the default; on a Steam Deck the device profile ([display]) changes a few of them. A XCX_*
-# environment variable of the same name (XCX_FPS_LIMIT for fps_limit) overrides the file. Keys are case-insensitive;
+# xc3.ini: settings for xc3.exe. Copy this file to xc3.ini next to xc3.exe and remove the '#' of a line to change it.
+# Each line shows the default; on a Steam Deck the device profile ([display]) changes a few of them. A XC3_*
+# environment variable of the same name (XC3_FPS_LIMIT for fps_limit) overrides the file. Keys are case-insensitive;
 # '#' and ';' start a comment; [sections] only group lines.
 
 [frame rate]
 # Frame rate limit: 30, 40, 45, 60, 90, 120, 144, any whole rate from 30 to 360, or display (the refresh rate of the
-# window's monitor). Above 60 is experimental and needs realtime = 1. Changes while the game runs take effect at once.
+# window's monitor). The game steps whole 60 Hz vsyncs, so it runs at 60 for a limit of 60 or more (and display) and at
+# 30 below it. Changes while the game runs take effect at once.
 # fps_limit = 60
 # Older key, read only while fps_limit is unset: fps60 = 0 means a limit of 30.
 # fps60 = 1
@@ -101,7 +102,7 @@
 [display]
 # Device profile: auto (the Steam Deck when this is one), desktop or deck. On a Steam Deck the keys this file does not
 # set default to fullscreen = 1, window_size = 1280x800, output_res = 1280x720, render_scale = game, vk_present = fifo
-# and fps_limit = 40 (starting points, not measured yet). Read at start.
+# and fps_limit = 30 (starting points, not measured yet). Read at start.
 # device_profile = auto
 # Presentation mode: mailbox (default when the driver offers it, vsync otherwise), fifo (vsync) or immediate.
 # vk_present = mailbox
@@ -118,9 +119,9 @@
 # Game resolution: the size the game draws its picture and interface in (1280x720 to 7680x4320). Above 1920x1080 the
 # game's texture heap and memory pool grow with it. Read at start.
 # output_res = 1920x1080
-# 3D render scale: the scene's size relative to the game resolution: game (its dynamic resolution) or a fixed
-# percentage from 25 to 100; a higher one counts as 100. For supersampling, set output_res above window_size. Read at
-# start.
+# 3D render scale: the scene's size relative to the game resolution: game (the whole scene) or a fixed percentage from
+# 25 to 100; 100 or more is the same as game. The interface stays at the game resolution. For supersampling, set
+# output_res above window_size. Read at start.
 # render_scale = game
 # Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
 # from 0 (off) to 100. Changes while the game runs take effect at once.
@@ -183,14 +184,18 @@
 # bind_Y = pad:north, key:mouse_l
 
 [files]
-# Folder with RomFS mod files that replace or add game files. Default: none.
+# Mods made for emulators: unpack each into this folder, as for Ryujinx or yuzu (mods\<name>\romfs\... or
+# mods\contents\<title id>\<name>\romfs\...). Their romfs files replace or add game files; when two mods change the same
+# file, the first by folder name wins. exefs and cheat mods do not apply. Default: mods next to xc3.exe; 0 turns mods off.
+# mods = mods
+# Folder of replacement files listed in a manifest.tsv with their SHA-256 (romfs.c, overlay_load). Default: none.
 # romfs_mods =
 
 [diagnostics]
 # Extra lines in the log, comma separated: svc, host, ipc, fs, gfx, perf, sched, audio, present or all. The menu's
 # Performance log sets perf (frame timings). Default: none.
 # trace = perf
-# Flight recorder: keeps the last frames and saves them to a flight folder next to the folder of xcx.exe when a frame
+# Flight recorder: keeps the last frames and saves them to a flight folder next to the folder of xc3.exe when a frame
 # takes longer than flight_spike_ms (0 to 60000).
 # flight = 0
 # flight_spike_ms = 100

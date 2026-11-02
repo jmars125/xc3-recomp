@@ -1,7 +1,7 @@
 // Ported from MacNativeGames games/totk/third_party/d2r_gfx/gfx/nvn/nvn_pool_index.h @ b75be8cf (MIT, Copyright (c)
 // 2026 jhaizhou; origin d2r-mobile); code unchanged, the Metal residency note of `res` generalised.
 #pragma once
-/* XCX: memory pools sorted by guest address.
+/* XC3: memory pools sorted by guest address.
    The world scene keeps about 3,200 pools alive, and the replay resolves several dozen buffer addresses per draw
    (vertex / index / uniform / storage bindings). A linear scan of all pools for each of them was the largest part of
    the ~87k instructions per draw. Lookups are a binary search on the range start plus a backwards walk that is

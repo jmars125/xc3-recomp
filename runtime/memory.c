@@ -199,12 +199,12 @@ static void protect(uint64_t a, uint64_t n, int prot, const char *what) {
 // The process is re-run when a region is taken: Windows places DLLs, heaps and thread stacks at random addresses,
 // and a fresh process gets a fresh layout.
 static void reexec_or_fail(const char *what) {
-    const char *e = cfg_get("XCX_REEXEC");
+    const char *e = cfg_get("XC3_REEXEC");
     int n = e ? atoi(e) : 0;
     if (n >= REEXEC_LIMIT) rt_fatal("memory: %s is not free after %d attempts", what, n);
     char buf[16];
     snprintf(buf, sizeof buf, "%d", n + 1);
-    plat_setenv("XCX_REEXEC", buf);
+    plat_setenv("XC3_REEXEC", buf);
     plat_reexec();
 }
 
@@ -231,10 +231,10 @@ void mem_init(void) {
     plat_mem_fault_hook(thaw_fault);   // before the crash handler
     alias_pages = calloc(ALIAS_PAGES, 1);
     if (!alias_pages) rt_fatal("memory: cannot allocate the alias page map");
-    // xcx.ini is read here, once the address space is claimed and before the first setting: the pool size below
-    // depends on XCX_APP_POOL and on the resolution settings (resolution.c decides them once, on this first call).
+    // xc3.ini is read here, once the address space is claimed and before the first setting: the pool size below
+    // depends on XC3_APP_POOL and on the resolution settings (resolution.c decides them once, on this first call).
     cfg_init();
-    const char *pool = cfg_get("XCX_APP_POOL");
+    const char *pool = cfg_get("XC3_APP_POOL");
     L = (RtGuestLayout){
         .aslr = {low, RT_ADDRESS_LIMIT - low},
         .stack = {low + STACK_OFF, STACK_SIZE},
@@ -244,7 +244,7 @@ void mem_init(void) {
         .hostfn = {RT_HOSTFN_BASE, RT_HOSTFN_SIZE},
         .pool = pool ? strtoull(pool, NULL, 0) : DEFAULT_POOL + res_heap_extra_bytes(),   // resolution.c
     };
-    if (!L.pool) rt_fatal("memory: XCX_APP_POOL is 0");
+    if (!L.pool) rt_fatal("memory: XC3_APP_POOL is 0");
 }
 
 const RtGuestLayout *mem_layout(void) { return &L; }
@@ -374,7 +374,7 @@ static uint32_t stack_move(int unmap, uint64_t dst, uint64_t src, uint64_t n) {
     if (!inside(dst, n, L.stack)) return R_INVALID_REGION;
     int in_heap = inside(src, n, (RtRange){L.heap.base, heap_size});
     int in_alias = inside(src, n, L.alias);
-    // XCX gives some threads stacks in main's .bss; Horizon lets module data be aliased like heap memory.
+    // XC3 gives some threads stacks in main's .bss; Horizon lets module data be aliased like heap memory.
     int in_module = module_data(src, n) >= 0;
     if (!in_heap && !in_alias && !in_module) return R_INVALID_REGION;
     plat_mutex_lock(&lock);
@@ -420,7 +420,7 @@ uint32_t mem_map(uint64_t dst, uint64_t src, uint64_t n) { return stack_move(0, 
 uint32_t mem_unmap(uint64_t dst, uint64_t src, uint64_t n) { return stack_move(1, dst, src, n); }
 
 // ---- 0x2C/0x2D MapPhysicalMemory, UnmapPhysicalMemory. Horizon maps only the still-unmapped pages of the range and
-// leaves mapped pages and their contents alone; XCX's heaps grow by re-mapping ranges they partly own.
+// leaves mapped pages and their contents alone; XC3's heaps grow by re-mapping ranges they partly own.
 static void alias_runs(uint64_t first, uint64_t count, uint8_t want, int do_commit) {   // under lock
     uint64_t i = 0;
     while (i < count) {

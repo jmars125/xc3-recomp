@@ -1,6 +1,6 @@
-// xcx.exe entry: reserves the guest address space, parses the command line and runs one mode.
+// xc3.exe entry: reserves the guest address space, parses the command line and runs one mode.
 //
-//   xcx.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
+//   xc3.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
 //     --selftest        layout, dispatch table and host-function registry; needs no game files
 //     --probe-loader    load and relocate the modules, check them against the measured 1.2.1 values
 //     --probe-kernel, --probe-ipc, --probe-services, --probe-fs    host probes
@@ -11,7 +11,7 @@
 //     --boot            run the game to the first NVN call
 //     --seconds S       run the game (implies --boot's start-up) until the world clock (game time since the loaded
 //                       save's first frame) passed S seconds, then exit 0 at that present
-//     --shot PNG        with --seconds: save that frame; env XCX_GPU=null|vulkan selects the back end
+//     --shot PNG        with --seconds: save that frame; env XC3_GPU=null|vulkan selects the back end
 //     (no mode)         run the game
 //
 // Also here: the runtime services the generated code calls besides rt_dispatch and rt_svc (rt_brk, rt_udf,
@@ -37,9 +37,9 @@
 unsigned rt_trace;
 
 // Log file. A game run whose stderr is not a file already (started from Explorer, a shortcut or a console) also
-// writes its log to logs\xcx.log next to xcx.exe, so a player has one to attach to a report; run_game.py and
-// `2> file` keep their own file. Each start moves the earlier logs to xcx.1.log .. xcx.4.log. A file stops at 64 MiB
-// (XCX_TRACE can write that much). Lines from before log_open wait in a static buffer: mem_init runs first so that
+// writes its log to logs\xc3.log next to xc3.exe, so a player has one to attach to a report; run_game.py and
+// `2> file` keep their own file. Each start moves the earlier logs to xc3.1.log .. xc3.4.log. A file stops at 64 MiB
+// (XC3_TRACE can write that much). Lines from before log_open wait in a static buffer: mem_init runs first so that
 // nothing else lands in the guest address space, and an earlier open would put the CRT's heap there.
 #define LOG_KEEP 5
 #define LOG_CAP (64ull << 20)
@@ -110,13 +110,13 @@ static void log_open(int game) {
     if (cut && (size_t)(cut - dir) + sizeof "/logs" <= sizeof dir) {
         strcpy(cut, "/logs");
         plat_file_mkdir_p(dir);
-        for (int i = LOG_KEEP - 1; i > 0; i--) {   // xcx.3.log -> xcx.4.log, ..., xcx.log -> xcx.1.log
-            if (i > 1) snprintf(from, sizeof from, "%s/xcx.%d.log", dir, i - 1);
-            else snprintf(from, sizeof from, "%s/xcx.log", dir);
-            snprintf(to, sizeof to, "%s/xcx.%d.log", dir, i);
+        for (int i = LOG_KEEP - 1; i > 0; i--) {   // xc3.3.log -> xc3.4.log, ..., xc3.log -> xc3.1.log
+            if (i > 1) snprintf(from, sizeof from, "%s/xc3.%d.log", dir, i - 1);
+            else snprintf(from, sizeof from, "%s/xc3.log", dir);
+            snprintf(to, sizeof to, "%s/xc3.%d.log", dir, i);
             if (plat_file_exists(from)) plat_file_replace(from, to);
         }
-        snprintf(g_log_path, sizeof g_log_path, "%s/xcx.log", dir);
+        snprintf(g_log_path, sizeof g_log_path, "%s/xc3.log", dir);
         g_log_file = plat_append_open(g_log_path);
     }
     if (!g_log_file) {
@@ -132,7 +132,7 @@ static void log_open(int game) {
 }
 
 static void parse_trace(void) {
-    const char *e = cfg_get("XCX_TRACE");   // no default: nothing is traced when unset
+    const char *e = cfg_get("XC3_TRACE");   // no default: nothing is traced when unset
     if (!e) return;
     static const struct { const char *name; unsigned bit; } names[] = {
         {"svc", RT_TRACE_SVC}, {"host", RT_TRACE_HOSTCALL}, {"ipc", RT_TRACE_IPC}, {"fs", RT_TRACE_FS},
@@ -143,7 +143,7 @@ static void parse_trace(void) {
         int known = 0;
         for (unsigned i = 0; i < sizeof names / sizeof *names; i++)
             if (strlen(names[i].name) == n && !strncmp(p, names[i].name, n)) rt_trace |= names[i].bit, known = 1;
-        if (!known && n) rt_log("XCX_TRACE: unknown item '%.*s' (svc, host, ipc, fs, gfx, perf, sched, audio, present, all)", (int)n, p);
+        if (!known && n) rt_log("XC3_TRACE: unknown item '%.*s' (svc, host, ipc, fs, gfx, perf, sched, audio, present, all)", (int)n, p);
         p += n + (p[n] == ',');
     }
 }
@@ -212,7 +212,7 @@ static uint64_t lifted_function(uintptr_t rip) {
 static int readable(uint64_t a, uint64_t n) { return plat_mem_readable(a, n); }
 
 #ifdef _WIN32
-// XCX_WATCH=<hex guest address>: a debugging write watchpoint. A thread makes the page read-only once it is committed;
+// XC3_WATCH=<hex guest address>: a debugging write watchpoint. A thread makes the page read-only once it is committed;
 // the first writes to it are logged with the lifted function and guest call chain, the page is made writable for the
 // writer, and the thread arms it again 50 ms later (16 hits at most).
 static volatile uint64_t watch_page;
@@ -242,14 +242,14 @@ static int watch_hit(EXCEPTION_POINTERS *ep) {
     VirtualProtect((void *)(uintptr_t)watch_page, 4096, PAGE_READWRITE, &old);
     char d[160];
     uint64_t f = lifted_function((uintptr_t)ep->ContextRecord->Rip);
-    rt_logf("watch: write %#llx from host xcx.exe rip %p, lifted f_%llx = %s\n",
+    rt_logf("watch: write %#llx from host xc3.exe rip %p, lifted f_%llx = %s\n",
             (unsigned long long)r->ExceptionInformation[1], (void *)ep->ContextRecord->Rip, (unsigned long long)f,
             f ? ldr_describe(f, d, sizeof d) : "?");
     void *bt[24];
     USHORT nbt = RtlCaptureStackBackTrace(0, 24, bt, NULL);
     uintptr_t exe = (uintptr_t)GetModuleHandleW(NULL);
     for (USHORT i = 0; i < nbt; i++)
-        if ((uintptr_t)bt[i] - exe < (256u << 20)) rt_logf("  host xcx.exe+%#llx\n", (unsigned long long)((uintptr_t)bt[i] - exe));
+        if ((uintptr_t)bt[i] - exe < (256u << 20)) rt_logf("  host xc3.exe+%#llx\n", (unsigned long long)((uintptr_t)bt[i] - exe));
     Cpu *c = kern_cpu();
     if (c) {
         rt_logf("  lr %s\n", ldr_describe(c->x[30], d, sizeof d));
@@ -268,7 +268,7 @@ static int watch_hit(EXCEPTION_POINTERS *ep) {
     return 1;
 }
 
-// Windows diagnostics: the XCX_WATCH watchpoint ahead of the crash hook (platform/win32.c), which would take its writes
+// Windows diagnostics: the XC3_WATCH watchpoint ahead of the crash hook (platform/win32.c), which would take its writes
 // for crashes; behind it, a log line naming the module of a fault outside our code that nothing resolved, as an
 // unhandled one ends the process with no other trace.
 static LONG CALLBACK watch_handler(EXCEPTION_POINTERS *ep) {
@@ -317,7 +317,7 @@ static void crash_handler(const PlatCrash *x) {
     if (plat_xchg32(&busy, 1)) plat_exit(71);
     char d[160];
     uintptr_t rip = x->rip;
-    rt_logf("FATAL: %s (%#x) at host %p (xcx+%#llx)", x->what, x->code, (void *)rip, (unsigned long long)x->offset);
+    rt_logf("FATAL: %s (%#x) at host %p (xc3+%#llx)", x->what, x->code, (void *)rip, (unsigned long long)x->offset);
     if (x->access >= 0)
         rt_logf(", %s address %#llx", x->access == 1 ? "writing" : x->access == 8 ? "executing" : "reading",
                 (unsigned long long)x->addr);
@@ -529,9 +529,9 @@ static int usage(const char *argv0) {
     return 2;
 }
 
-// Paths for a copied folder (tools/package_build.py). Per path: XCX_EXEFS, XCX_ROMFS, XCX_PROFILE_DIR, else the
-// folder next to xcx.exe (exefs, romfs, profile) if it exists, else the path baked in at build time. A relative
-// value is relative to xcx.exe's folder.
+// Paths for a copied folder (tools/package_build.py). Per path: XC3_EXEFS, XC3_ROMFS, XC3_PROFILE_DIR, else the
+// folder next to xc3.exe (exefs, romfs, profile) if it exists, else the path baked in at build time. A relative
+// value is relative to xc3.exe's folder.
 static char pp_exefs[PLAT_PATH_MAX * 2], pp_romfs[PLAT_PATH_MAX * 2], pp_profile[PLAT_PATH_MAX * 2];
 
 static const char *portable_path(const char *dir, const char *var, const char *sub, const char *must, char *out, size_t cap,
@@ -555,17 +555,17 @@ static void portable_paths(RtConfig *c) {
     char *cut = n && n < sizeof exe ? plat_last_sep(exe) : NULL;
     if (!cut) return;
     *cut = 0;
-    c->exefs = portable_path(exe, "XCX_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
-    c->romfs = portable_path(exe, "XCX_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
-    c->profile = portable_path(exe, "XCX_PROFILE_DIR", "profile", ".", pp_profile, sizeof pp_profile, c->profile);
+    c->exefs = portable_path(exe, "XC3_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
+    c->romfs = portable_path(exe, "XC3_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
+    c->profile = portable_path(exe, "XC3_PROFILE_DIR", "profile", ".", pp_profile, sizeof pp_profile, c->profile);
 }
 
 int main(int argc, char **argv) {
-    mem_init();   // first: claim the guest address space before anything else can land there; reads xcx.ini
+    mem_init();   // first: claim the guest address space before anything else can land there; reads xc3.ini
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 #ifdef _WIN32
-    const char *watch = cfg_get("XCX_WATCH");
+    const char *watch = cfg_get("XC3_WATCH");
     if (watch && *watch) {
         watch_page = strtoull(watch, NULL, 16) & ~4095ull;
         AddVectoredExceptionHandler(1, watch_handler);
@@ -579,13 +579,13 @@ int main(int argc, char **argv) {
     parse_trace();
     prof_start();
     // Timed guest waits (kernel.c block_inner) sleep in whole milliseconds; at the default 15.6 ms tick a 1 ms wait
-    // costs a full tick. XCX_TIMER_1MS=0 keeps the default for comparison.
-    if (cfg_bool("XCX_TIMER_1MS")) plat_timer_1ms();
+    // costs a full tick. XC3_TIMER_1MS=0 keeps the default for comparison.
+    if (cfg_bool("XC3_TIMER_1MS")) plat_timer_1ms();
     cfg = (RtConfig){.exefs = rt_default_exefs, .romfs = rt_default_romfs, .profile = rt_default_profile,
-                     .gpu = cfg_get("XCX_GPU")};
+                     .gpu = cfg_get("XC3_GPU")};
     portable_paths(&cfg);   // command-line paths below still win
     if (cfg.gpu && strcmp(cfg.gpu, "null") && strcmp(cfg.gpu, "vulkan")) {
-        rt_logf("XCX_GPU must be null or vulkan, not '%s'\n", cfg.gpu);
+        rt_logf("XC3_GPU must be null or vulkan, not '%s'\n", cfg.gpu);
         return 2;
     }
     const char *mode = NULL;

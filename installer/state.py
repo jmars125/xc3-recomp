@@ -1,4 +1,4 @@
-"""xcx-install.json in the install folder: what built it and which steps finished.
+"""xc3-install.json in the install folder: what built it and which steps finished.
 
     {"format": 1, "release": "...", "lang": "en-US",
      "inputs": {"base": {"name", "size", "sha256"}, "update": {...}},
@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 
-NAME = 'xcx-install.json'
+NAME = 'xc3-install.json'
 FORMAT = 1
 
 

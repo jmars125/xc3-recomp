@@ -7,8 +7,8 @@
 // DSP-ADPCM) along the sample path the voice clock consumes, resamples it linearly, runs the voice biquads, scales it
 // into its destination mix, folds the submixes, runs the mix effects and writes the device sink's stereo mix into a
 // single-producer single-consumer ring. The SDL audio thread drains that ring without taking any lock: an empty ring
-// plays silence and never blocks the render thread or the guest. XCX_AUDIO=none (or XCX_AUDIO_OFF) mixes without a
-// device; XCX_AUDIO_PREFILL_MS (0..500, default 20) is the queued audio the output waits for after start or underrun.
+// plays silence and never blocks the render thread or the guest. XC3_AUDIO=none (or XC3_AUDIO_OFF) mixes without a
+// device; XC3_AUDIO_PREFILL_MS (0..500, default 20) is the queued audio the output waits for after start or underrun.
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -56,17 +56,18 @@ typedef struct Mixer {
 
 static _Atomic float device_volume = 1.0f;
 
-// XCX_VOLUME: the player's volume in percent (0..100) on top of the game's own; a live setting (the
-// menu), parsed again when cfg_version changes. Render thread only.
-static float host_volume(void) {
-    static float v = 1.0f;
-    static unsigned seen = ~0u;
+// XC3_VOLUME: the player's volume in percent (0..100) on top of the game's own; a live setting (the
+// menu), parsed again when cfg_version changes. The renderer and AudioOut (ov_audio_out.c) both apply it: XC3 plays
+// through AudioOut.
+float audio_player_volume(void) {
+    static _Atomic float v = 1.0f;
+    static _Atomic unsigned seen = ~0u;
     unsigned ver = cfg_version();
-    if (ver == seen) return v;
-    seen = ver;
-    double pct = cfg_double("XCX_VOLUME");
-    v = (float)((pct < 0 ? 0 : pct > 100 ? 100 : pct) / 100);
-    return v;
+    if (ver == atomic_load(&seen)) return atomic_load(&v);
+    double pct = cfg_double("XC3_VOLUME");
+    atomic_store(&v, (float)((pct < 0 ? 0 : pct > 100 ? 100 : pct) / 100));
+    atomic_store(&seen, ver);
+    return atomic_load(&v);
 }
 static unsigned audio_revision(const AudioRenderer *r) { unsigned byte = r->revision >> 24; return byte >= '0' ? byte - '0' : 0; }
 static void report_once(Mixer *m, unsigned bit, const char *msg, int value) {
@@ -76,7 +77,7 @@ static void report_once(Mixer *m, unsigned bit, const char *msg, int value) {
 }
 
 // ---- output: SDL3 audio stream fed from the ring
-// How much audio the output waits for before it starts, and again after an underrun: XCX_AUDIO_PREFILL_MS rounded up
+// How much audio the output waits for before it starts, and again after an underrun: XC3_AUDIO_PREFILL_MS rounded up
 // to whole 5 ms render blocks. Returns -1 for a value outside 0..500 ms.
 static int prefill_blocks_for(const char *e) {
     if (!e || !*e) return 4;
@@ -150,9 +151,9 @@ static void SDLCALL sdl_pull(void *user, SDL_AudioStream *stream, int additional
 }
 
 static void output_open(Mixer *m, int rate) {
-    const char *mode = cfg_get("XCX_AUDIO");
-    if ((mode && !strcmp(mode, "none")) || cfg_get("XCX_AUDIO_OFF")) {
-        rt_log("audio: XCX_AUDIO=none: mixing without a device");
+    const char *mode = cfg_get("XC3_AUDIO");
+    if ((mode && !strcmp(mode, "none")) || cfg_get("XC3_AUDIO_OFF")) {
+        rt_log("audio: XC3_AUDIO=none: mixing without a device");
         return;
     }
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
@@ -192,7 +193,7 @@ static void output_push(Mixer *m, const float *lr, int frames) {
     if (!m->device_ok) atomic_store(&m->rd, wr + (uint64_t)frames);   // no device: the ring only keeps the latest frames
 }
 
-// Level meter (XCX_TRACE=audio): one line per 5 s of output, and the first nonzero frame.
+// Level meter (XC3_TRACE=audio): one line per 5 s of output, and the first nonzero frame.
 static void level_note(AudioRenderer *r, Mixer *m, const float *lr, int frames) {
     if (!(rt_trace & RT_TRACE_AUDIO)) return;
     int sound = 0;
@@ -245,10 +246,10 @@ void audio_mixer_open(AudioRenderer *r) {
     m->sink_written = calloc(sinks, sizeof(uint32_t));
     if (!m->sink_address || !m->sink_size || !m->sink_offset || !m->sink_old || !m->sink_written)
         rt_fatal("audio sink state allocation");
-    const char *pe = cfg_get("XCX_AUDIO_PREFILL_MS");
+    const char *pe = cfg_get("XC3_AUDIO_PREFILL_MS");
     m->prefill = prefill_blocks_for(pe);
     if (m->prefill < 0) {
-        rt_log("audio: XCX_AUDIO_PREFILL_MS=%s is not 0..500 ms: using 20", pe);
+        rt_log("audio: XC3_AUDIO_PREFILL_MS=%s is not 0..500 ms: using 20", pe);
         m->prefill = 4;
     }
     r->mixer = m;
@@ -313,7 +314,7 @@ static void splitters_update(AudioRenderer *r, const uint8_t *p, uint32_t n) {
         SplitInfo *s = &m->split[h[1]]; free(s->ids);
         s->ndest = (int32_t)h[3]; s->ids = calloc(h[3] ? h[3] : 1, sizeof(int32_t));
         if (!s->ids) rt_fatal("audio splitter destinations");
-        memcpy(s->ids, p + at, 4u * h[3]); at += 4u * h[3] + 12;   /* 12 reserved bytes follow the ids (measured, XCX REV11) */
+        memcpy(s->ids, p + at, 4u * h[3]); at += 4u * h[3] + 12;   /* 12 reserved bytes follow the ids (measured, XC3 REV11) */
         if (at > n) rt_fatal("audio splitter info padding overruns section");
         for (uint32_t k = 0; k < h[3]; k++) if (s->ids[k] < 0 || s->ids[k] >= m->ndest) rt_fatal("audio splitter destination id");
     }
@@ -754,7 +755,7 @@ void audio_mixer_render(AudioRenderer *r, double seconds) {
     float *lr=m->output_scratch;
     memset(lr, 0, sizeof(float) * 2 * (size_t)frames);
     if (sink && sink->input_count >= 1 && sink->input_count <= 6) {
-        const float gain = host_volume() * atomic_load(&device_volume) * (r->mixes[0].in_use ? r->mixes[0].volume : 1.0f);
+        const float gain = audio_player_volume() * atomic_load(&device_volume) * (r->mixes[0].in_use ? r->mixes[0].volume : 1.0f);
         const float *ch[6] = {0};
         for (uint32_t c = 0; c < sink->input_count; c++) if (sink->inputs[c] >= 0 && sink->inputs[c] < m->nbuf) ch[c] = mixbuf(m, sink->inputs[c]);
         for (int k = 0; k < frames; k++) {

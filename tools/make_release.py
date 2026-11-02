@@ -1,8 +1,8 @@
 """Assemble the release folder of docs/installer.md ("Release layout") from pinned downloads.
 
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup [--zip build/release/XCX-Setup-<version>-windows.zip]
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --from ..\\..\\totk-pc-recomp
-    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XCX-Setup --prove
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XC3-Setup [--zip build/release/XC3-Setup-<version>-windows.zip]
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XC3-Setup --from <unpacked XCX-Setup release>
+    .venv-py314\\Scripts\\python tools\\make_release.py --out build/release/XC3-Setup --prove
 
 Needs Python 3.14 (tarfile reads the MSYS2 .zst packages), uv on PATH and network access on the first run. Downloads are
 cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismatch stops the build. The folder holds:
@@ -10,23 +10,23 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
     python/    python.org embeddable 3.14.9 + the packages of tools/requirements-installer.txt + tkinter (the Tcl/Tk 9.0
                files come out of the python.org installer's own component MSI, unpacked with msiexec /a and expand.exe;
                the installer is never run)
-    llvm/      llvm-mingw, x86_64 only, the files clang and lld need to compile and link xcx.exe
-    runtime/   libxcxrt.a (build_game.py --make-runtime-lib with llvm/), the runtime headers, romfs.c, patches.c and
+    llvm/      llvm-mingw, x86_64 only, the files clang and lld need to compile and link xc3.exe
+    runtime/   libxc3rt.a (build_game.py --make-runtime-lib with llvm/), the runtime headers, romfs.c, patches.c and
                ov_zstd.c (compiled per install), deps/ (headers and import libraries of SDL3, Opus, libvpx, Vulkan and VMA)
-    bin/       xcx_xlate.exe (+ .id), hactool.exe, SDL3.dll (upstream), libopus-0.dll, ninja.exe
-    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xcx.ini.example
+    bin/       xc3_xlate.exe (+ .id), hactool.exe, SDL3.dll (upstream), libopus-0.dll, ninja.exe
+    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example
     VERSION    the repository's VERSION plus the commit, 0.1.0+973c626 (VERSION alone outside a git checkout); the
                installer's release string
-    XCX-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
+    XC3-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
 
 --from DIR takes python/, llvm/, runtime/deps/, bin/ and licenses/ from an unpacked earlier release (an XCX Recomp
-release, or the TotK Recomp release whose bin/totk_xlate.exe is the same translator) instead of downloading and
+release, whose bin/xcx_xlate.exe is the same translator) instead of downloading and
 unpacking them; runtime/, the sources and the launcher are still built from this checkout.
 
 Assembling the folder reads no game files, so it runs on a CI runner (.github/workflows/release.yml), after
-tools/build_hactool.py and tools/build_xlate.py: libxcxrt.a takes the module layout from tools/runtime-layout.
+tools/build_hactool.py and tools/build_xlate.py: libxc3rt.a takes the module layout from tools/runtime-layout.
 
---prove compiles generated/upd and links build/release-check/xcx.exe with nothing but the folder's python/, llvm/,
+--prove compiles generated/upd and links build/release-check/xc3.exe with nothing but the folder's python/, llvm/,
 runtime/ and bin/ (PATH holds the Windows system directory and those), then runs the four probes there. It needs a
 generated/upd and build/extracted/upd from the usual game build (they are read, nothing is written to them), so it is a
 local step, never CI's. It takes an existing folder: one unpacked from a CI build works.
@@ -94,7 +94,7 @@ PINS = {
 TCLTK_PAYLOAD = ('a12', 'ac87609db3f715404dd41a989c2f1706ea1512f3d86217f938d11c63af8eb505')
 SDL3_DLL_SHA256 = '2b4b128d8d510cc2d442693cf848c050d700d43dc667afe9e5fd82b0570d667e'   # SDL3.dll inside the SDL zip
 
-# llvm-mingw: what clang and lld need to compile and link xcx.exe for x86_64-w64-mingw32 (dynamic LLVM, libc++, compiler-rt).
+# llvm-mingw: what clang and lld need to compile and link xc3.exe for x86_64-w64-mingw32 (dynamic LLVM, libc++, compiler-rt).
 LLVM_BIN = {'clang.exe', 'clang++.exe', 'clang-23.exe', 'ld.lld.exe', 'llvm-ar.exe', 'llvm-ranlib.exe', 'llvm-nm.exe',
             'llvm-objdump.exe', 'llvm-objcopy.exe', 'llvm-strip.exe', 'llvm-readobj.exe', 'llvm-dlltool.exe',
             'llvm-rc.exe', 'llvm-cvtres.exe', 'llvm-windres.exe', 'llvm-wrapper.exe', 'mingw32-common.cfg',
@@ -105,13 +105,14 @@ LLVM_SKIP_DIRS = {'aarch64-w64-mingw32', 'armv7-w64-mingw32', 'i686-w64-mingw32'
 LLVM_SKIP_SUFFIXES = {'.idl', '.tlb'}
 
 # tools/ files the installer steps run (and what they import), copied from the repo.
-TOOLS_FILES = ['build_game.py', 'build_shaders.py', 'check_content.py', 'extract.py', 'package_select.py', 'romfs_index.py']
+TOOLS_FILES = ['build_game.py', 'build_shaders.py', 'check_content.py', 'extract.py', 'package_select.py', 'romfs_index.py',
+               'ard_shaders.py', 'prepare_shaders.py', 'game_icon.py']
 TOOLS_DIRS = ['vendor/macnativegames', 'data']   # data/: expected hashes
-RUNTIME_LAYOUT = ROOT / 'tools' / 'runtime-layout'   # build_game.py --gen of libxcxrt.a
-RUNTIME_SUFFIXES = {'.h', '.inc', '.ico'}   # .ico: the installer window icon
+RUNTIME_LAYOUT = ROOT / 'tools' / 'runtime-layout'   # build_game.py --gen of libxc3rt.a
+RUNTIME_SUFFIXES = {'.h', '.inc', '.ico', '.rc', '.manifest'}   # .ico: the installer window icon; xc3.rc builds per install
 
-VERSION_TAG = 'upd'   # installer/layout.py version_tag: the generated/ and build/extracted/ name of 2.0.0
-EXPECTED = 'expected-xcx-2.0.0.json'
+VERSION_TAG = 'upd'   # installer/layout.py version_tag: the generated/ and build/extracted/ name of 2.2.1
+EXPECTED = 'expected-xc3-2.2.1.json'
 PROBES = ['--probe-kernel', '--probe-vkexec', '--probe-nvn-tex', '--probe-shader']
 
 
@@ -201,7 +202,7 @@ def mng_license():
 
 
 def check_runtime_layout(gen):
-    """The two values libxcxrt.a was built with (tools/runtime-layout/layout.h) match the game's generated layout.h."""
+    """The two values libxc3rt.a was built with (tools/runtime-layout/layout.h) match the game's generated layout.h."""
     def defines(path):
         return dict(line.split()[1:3] for line in path.read_text(encoding='utf-8').splitlines()
                     if line.startswith('#define '))
@@ -304,7 +305,7 @@ def build_llvm(out):
 def build_bin(out):
     b = out / 'bin'
     b.mkdir(parents=True, exist_ok=True)
-    for f in ('xcx_xlate.exe', 'xcx_xlate.id'):
+    for f in ('xc3_xlate.exe', 'xc3_xlate.id'):
         shutil.copy2(MAIN_ROOT / 'build' / 'xlate' / f, b / f)
     shutil.copy2(MAIN_ROOT / 'toolchain' / 'hactool' / 'hactool.exe', b / 'hactool.exe')
     dll = unpack('sdl3-dll') / 'SDL3.dll'
@@ -362,30 +363,35 @@ def collect_licenses(out):
 
 def take_prebuilt(out, src):
     """python/, llvm/, runtime/deps/, bin/ and licenses/ copied from the unpacked release src. The translator is renamed
-    to xcx_xlate when src is the TotK Recomp release."""
+    to xc3_xlate when src is the XCX or TotK Recomp release; build/xlate's, when there is one, is taken instead."""
     for d in ('python', 'llvm', 'licenses'):
         copy_tree(src / d, out / d, lambda r: '__pycache__' in r)
     copy_tree(src / 'runtime' / 'deps', out / 'runtime' / 'deps')
     (out / 'bin').mkdir(parents=True, exist_ok=True)
     for name in ('hactool.exe', 'ninja.exe', 'SDL3.dll', 'libopus-0.dll'):
         shutil.copy2(src / 'bin' / name, out / 'bin' / name)
-    stem = 'xcx_xlate' if (src / 'bin' / 'xcx_xlate.exe').is_file() else 'totk_xlate'
+    built = MAIN_ROOT / 'build' / 'xlate'   # this repository's translator (tools/build_xlate.py) when it was built
+    if (built / 'xc3_xlate.exe').is_file():
+        for ext in ('.exe', '.id'):
+            shutil.copy2(built / ('xc3_xlate' + ext), out / 'bin' / ('xc3_xlate' + ext))
+        return out / 'llvm'
+    stem = next(n for n in ('xc3_xlate', 'xcx_xlate', 'totk_xlate') if (src / 'bin' / (n + '.exe')).is_file())
     for ext in ('.exe', '.id'):
-        shutil.copy2(src / 'bin' / (stem + ext), out / 'bin' / ('xcx_xlate' + ext))
+        shutil.copy2(src / 'bin' / (stem + ext), out / 'bin' / ('xc3_xlate' + ext))
     return out / 'llvm'
 
 
 # ---- runtime/, recomp/, tools/, data/ ---------------------------------------------------------------------------------
 
 def runtime_lib(out, llvm):
-    """Build libxcxrt.a with the folder's llvm/ and copy it, the headers and the install-side sources into runtime/."""
+    """Build libxc3rt.a with the folder's llvm/ and copy it, the headers and the install-side sources into runtime/."""
     build = MAIN_ROOT / 'build' / 'release-check' / 'rtlib'
     run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', VERSION_TAG,
          '--expected', ROOT / 'tools' / 'data' / EXPECTED, '--toolchain', llvm,
          '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--gen', RUNTIME_LAYOUT,
          '--out', build], env=clean_env(llvm / 'bin', out / 'bin'))
     rt = out / 'runtime'
-    shutil.copy2(build / 'libxcxrt.a', rt / 'libxcxrt.a')
+    shutil.copy2(build / 'libxc3rt.a', rt / 'libxc3rt.a')
     for p in sorted((ROOT / 'runtime').rglob('*')):
         if p.suffix in RUNTIME_SUFFIXES and p.is_file():
             (rt / p.relative_to(ROOT / 'runtime')).parent.mkdir(parents=True, exist_ok=True)
@@ -402,7 +408,7 @@ def build_sources(out):
     for d in TOOLS_DIRS:
         copy_tree(ROOT / 'tools' / d, out / 'tools' / d, lambda r: '__pycache__' in r or r.endswith('.md'))
     copy_tree(ROOT / 'installer', out / 'installer', lambda r: '__pycache__' in r or r.startswith('launcher/'))
-    shutil.copy2(ROOT / 'xcx.ini.example', out / 'xcx.ini.example')
+    shutil.copy2(ROOT / 'xc3.ini.example', out / 'xc3.ini.example')
     shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', out / 'THIRD_PARTY_NOTICES.md')
     (out / 'VERSION').write_text(version() + '\n', encoding='utf-8')
 
@@ -418,7 +424,7 @@ def version():
     return semver + '+' + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else semver
 
 
-# ---- XCX-Setup.exe --------------------------------------------------------------------------------------------------
+# ---- XC3-Setup.exe --------------------------------------------------------------------------------------------------
 
 def c_wide(text):
     """A C wide string literal of text: ASCII as is, everything else as a universal character name."""
@@ -455,7 +461,7 @@ def build_launcher(out, llvm):
     run([llvm / 'bin' / 'llvm-windres.exe', '-I', ROOT / 'runtime', '-O', 'coff',
          ROOT / 'installer' / 'launcher' / 'launcher.rc', '-o', res], env=env)
     run([llvm / 'bin' / 'clang.exe', '-O2', '-mwindows', '-Wall', '-Wl,-s', '-I', work,
-         ROOT / 'installer' / 'launcher' / 'launcher.c', res, '-o', out / 'XCX-Setup.exe'], env=env)
+         ROOT / 'installer' / 'launcher' / 'launcher.c', res, '-o', out / 'XC3-Setup.exe'], env=env)
 
 
 # ---- checks ----------------------------------------------------------------------------------------------------------
@@ -512,7 +518,7 @@ def write_zip(out, path):
 
 
 def prove(out):
-    """Compile generated/upd and link xcx.exe with the folder's tools only, then run the probes next to it."""
+    """Compile generated/upd and link xc3.exe with the folder's tools only, then run the probes next to it."""
     out = out.resolve()
     gen = MAIN_ROOT / 'generated' / VERSION_TAG
     ext = MAIN_ROOT / 'build' / 'extracted' / VERSION_TAG
@@ -522,7 +528,7 @@ def prove(out):
     t0 = time.time()
     run([out / 'python' / 'python.exe', out / 'tools' / 'build_game.py', '--version', VERSION_TAG,
          '--expected', out / 'tools' / 'data' / EXPECTED, '--toolchain', out / 'llvm',
-         '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime', '--runtime-lib', out / 'runtime' / 'libxcxrt.a',
+         '--deps', out / 'runtime' / 'deps', '--runtime', out / 'runtime', '--runtime-lib', out / 'runtime' / 'libxc3rt.a',
          '--ninja', out / 'bin' / 'ninja.exe', '--gen', gen, '--out', chk, '--exefs', ext / 'exefs', '--romfs', ext / 'romfs',
          '--profile', chk / 'profile'], env=env)
     print(f'prove: build {time.time() - t0:.0f} s')
@@ -530,11 +536,11 @@ def prove(out):
         shutil.copy2(out / 'bin' / dll, chk / dll)
     for dll in ('libc++.dll', 'libunwind.dll', 'libwinpthread-1.dll'):   # installer/layout.py release_dlls
         shutil.copy2(out / 'llvm' / 'bin' / dll, chk / dll)
-    for name in ('xcx_xlate.exe', 'xcx_xlate.id'):   # beside the game, as in an install: the shader probes translate
+    for name in ('xc3_xlate.exe', 'xc3_xlate.id'):   # beside the game, as in an install: the shader probes translate
         shutil.copy2(out / 'bin' / name, chk / name)
     failed = []
     for probe in PROBES:
-        r = subprocess.run([str(chk / 'xcx.exe'), probe], cwd=chk, env=clean_env(chk), capture_output=True, text=True,
+        r = subprocess.run([str(chk / 'xc3.exe'), probe], cwd=chk, env=clean_env(chk), capture_output=True, text=True,
                            timeout=900)
         tail = (r.stdout.strip().splitlines() or [''])[-1]
         print(f'{probe}: exit {r.returncode}: {tail}')

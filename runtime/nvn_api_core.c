@@ -53,7 +53,7 @@ void nvn_guest_written(uint64_t addr, uint64_t size) {
     if (size) gfx_backend()->guest_written(addr, size);
 }
 
-// memcpy of pool storage the GPU rendered into must copy what the GPU wrote: XCX moves its generated grass maps
+// memcpy of pool storage the GPU rendered into must copy what the GPU wrote: XC3 moves its generated grass maps
 // between pools with memcpy. Copies below 1 KiB skip the check; the copy itself is memmove, as overlapping
 // arguments are undefined for memcpy anyway.
 static void ov_memcpy(Cpu *c) {
@@ -130,7 +130,7 @@ const pool_t *nvn_pool_find(uint64_t addr, uint64_t len) {
     return p;
 }
 
-// Physical and virtual pools (MacNativeGames xcx_vpool.c checks). A CPU-invisible one gets a GPU window range.
+// Physical and virtual pools (MacNativeGames xc3_vpool.c checks). A CPU-invisible one gets a GPU window range.
 // A CPU-visible physical pool (1.4.3: flags 0x18c, GPU_NO_ACCESS) keeps the game's storage for the CPU; the back end
 // gives it device memory as any physical pool (vk_memory.c vk_pool_init), which the GPU reaches through virtual pools.
 static int pool_place(pool_t *o) {
@@ -167,7 +167,7 @@ static int pool_gpu_visible(const pool_t *o) { return !(o->flags & NVN_MEMORY_PO
 
 // ---------- Device
 static const int devinfo[] = {   // Tegra X1 values (nnheaders nvn_DeviceConstantsNX.h, measured on SMO)
-    [0x00] = 55, [0x01] = 15,    // ABI: XCX main requires major 55, minor >= 15
+    [0x00] = 55, [0x01] = 15,    // ABI: XC3 main requires major 55, minor >= 15
     [0x02] = 14, [0x03] = 65536, [0x04] = 256, [0x05] = 8, [0x06] = 16, [0x07] = 4, [0x08] = 16, [0x09] = 32,
     [0x0A] = 16, [0x0B] = 4, [0x0C] = 4, [0x0D] = 4, [0x0E] = 16, [0x0F] = 32, [0x10] = 32, [0x11] = 256, [0x12] = 256,
     [0x13] = 4, [0x14] = 8, [0x15] = 512, [0x16] = 256, [0x17] = 2, [0x18] = 256, [0x19] = 4096, [0x1A] = 131072,
@@ -268,7 +268,7 @@ NVN_API(nvnMemoryPoolBuilderSetStorage) {
 NVN_API(nvnMemoryPoolBuilderSetFlags) { ((pool_builder_t *)arg_p(c, 0))->flags = (uint32_t)arg_x(c, 1); }
 // NVNboolean nvnMemoryPoolInitialize(NVNmemoryPool *p, const NVNmemoryPoolBuilder *b)
 // Pool setup imports, mirrors and maps memory in the back end (the driver, VirtualAlloc): up to 20 ms on the game's
-// loader threads, which held a virtual core through it while job workers waited (XCX_CORE_DIAG). The thread gives
+// loader threads, which held a virtual core through it while job workers waited (XC3_CORE_DIAG). The thread gives
 // the core up, as for any blocking host call.
 NVN_API(nvnMemoryPoolInitialize) {
     NVN_BLOCKING();
@@ -344,7 +344,7 @@ NVN_API(nvnMemoryPoolMap) {
     if (o->magic != NVN_POOL_MAGIC || (o->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS)) { ret_x(c, 0); return; }
     ret_x(c, (uintptr_t)o->mem);
 }
-// MacNativeGames xcx_vpool.c: every request is checked before any mapping changes.
+// MacNativeGames xc3_vpool.c: every request is checked before any mapping changes.
 static int check_request(const pool_t *v, const nvn_mapping_t *r, int i) {
     uint64_t end = (uint64_t)r->virtual_offset + r->size;
     if (r->virtual_offset < 0 || r->physical_offset < 0 || !r->size) {
@@ -471,6 +471,25 @@ NVN_API(nvnQueueFenceSync) {
     s->fenced = 1;
     s->fence = nvn_fence_last();
 }
+// Syncs a command buffer fenced in the submit being replayed: the submit gives them its fence value once it has one.
+static sync_t *replayed_syncs[256];
+static int replayed_sync_count;
+static PlatMutex replayed_sync_lock = PLAT_MUTEX_INIT;
+void nvn_fence_sync_replayed(sync_t *s) {
+    plat_mutex_lock(&replayed_sync_lock);
+    if (replayed_sync_count == 256) rt_fatal("nvn: more than 256 CommandBufferFenceSync in one submit");
+    replayed_syncs[replayed_sync_count++] = s;
+    plat_mutex_unlock(&replayed_sync_lock);
+}
+static void replayed_syncs_fence(uint64_t f) {
+    plat_mutex_lock(&replayed_sync_lock);
+    for (int i = 0; i < replayed_sync_count; i++) {
+        replayed_syncs[i]->fence = f;
+        __atomic_store_n(&replayed_syncs[i]->fenced, 1, __ATOMIC_RELEASE);
+    }
+    replayed_sync_count = 0;
+    plat_mutex_unlock(&replayed_sync_lock);
+}
 // NVNsyncWaitResult nvnSyncWait(const NVNsync *s, uint64_t timeout_ns): a sync never fenced reports a timeout at once;
 // a fenced one is released only after the back end completed that fence value
 NVN_API(nvnSyncWait) {
@@ -572,7 +591,7 @@ NVN_API(nvnQueueFinish) {
     }
     gfx_backend()->cpu_synced(gfx_backend()->fence_done());
 }
-// ---------- Submit latency guard for XCX 1.2.1's per-object uniform double buffer
+// ---------- Submit latency guard for XC3 1.2.1's per-object uniform double buffer
 // NVN starts the GPU when QueueSubmitCommands returns, within microseconds; here the replay into Vulkan takes 15-30 ms
 // first, and the GPU reads uniform memory only after it. The game's producer f_70008c6460 (thread 0x103e, p56)
 // rewrites the half of its per-object uniform blocks that was front until the last flip, 14-23 ms after the submit
@@ -580,12 +599,12 @@ NVN_API(nvnQueueFinish) {
 // the replay, and that frame draws other objects' matrices (phantom rocks, flat far field).
 // The guard makes the producer wait, at its commit point, until the newest submit has been replayed and completed.
 // lod_entered / lod_issued count submits that entered QueueSubmitCommands / reached the back end; lod_fence holds
-// the fence of the last LOD_RING. XCX_LOD_GUARD=0 turns the wait off.
+// the fence of the last LOD_RING. XC3_LOD_GUARD=0 turns the wait off.
 #define LOD_RING 64
 static uint64_t lod_entered, lod_issued, lod_fence[LOD_RING];
 
 // void nvnQueueSubmitCommands(NVNqueue *q, int n, const NVNcommandHandle *handles): replayed on this thread with its
-// core given up (section 2.2), or queued for the replay thread (XCX_REPLAY_ASYNC, vk_backend.c); the newest fence
+// core given up (section 2.2), or queued for the replay thread (XC3_REPLAY_ASYNC, vk_backend.c); the newest fence
 // value is what QueueFenceSync records. With the queue the fence covers replay and GPU, so the LOD guard below waits
 // for both.
 NVN_API(nvnQueueSubmitCommands) {
@@ -611,16 +630,17 @@ NVN_API(nvnQueueSubmitCommands) {
         nvn_submit_prepare(h, n);
         f = gfx_backend()->submit(h, n);
     }
+    replayed_syncs_fence(f);
     uint64_t prev = __atomic_load_n(&last_fence, __ATOMIC_RELAXED);
     while (f > prev && !__atomic_compare_exchange_n(&last_fence, &prev, f, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
     __atomic_store_n(&lod_fence[no % LOD_RING], f, __ATOMIC_RELAXED);
     __atomic_store_n(&lod_issued, no, __ATOMIC_SEQ_CST);
-    // XCX_SUBMIT_WAIT=1, a test for issue 28: the submit returns only once the GPU has run it, so no game thread can
+    // XC3_SUBMIT_WAIT=1, a test for issue 28: the submit returns only once the GPU has run it, so no game thread can
     // rewrite pool memory the GPU still reads. Costs the CPU/GPU overlap.
     static int wait_on = -1;
     if (wait_on < 0) {
-        wait_on = cfg_bool("XCX_SUBMIT_WAIT");
-        if (wait_on) rt_log("nvn: XCX_SUBMIT_WAIT: every submit waits for the GPU to finish it");
+        wait_on = cfg_bool("XC3_SUBMIT_WAIT");
+        if (wait_on) rt_log("nvn: XC3_SUBMIT_WAIT: every submit waits for the GPU to finish it");
     }
     if (wait_on && gfx_backend()->fence_done() < f) gfx_backend()->fence_wait(f, 2000000000ull);
 }
@@ -633,7 +653,7 @@ static void obs_release_read(Cpu *c) {
     if (lr != 0x70008c70c8ull) return;
     static int on = -1;
     if (on < 0) {
-        on = cfg_bool("XCX_LOD_GUARD");
+        on = cfg_bool("XC3_LOD_GUARD");
     }
     if (!on || *(volatile uint8_t *)(uintptr_t)(obj + 0x528) != *(volatile uint8_t *)(uintptr_t)(obj + 0x529)) return;
     uint64_t e = __atomic_load_n(&lod_entered, __ATOMIC_SEQ_CST);

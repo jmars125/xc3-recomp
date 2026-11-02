@@ -1,7 +1,7 @@
 """Check a packed release as a player receives it, on a machine that did not build it.
 
-    python tools/check_release.py XCX-Setup-<version>-windows.zip
-    python tools/check_release.py XCX-Setup-<version>-linux.AppImage
+    python tools/check_release.py XC3-Setup-<version>-windows.zip
+    python tools/check_release.py XC3-Setup-<version>-linux.AppImage
 
 Unpacks the package into build/release-verify, then runs the checks of tools/make_release.py and
 tools/make_release_linux.py over the result: check_content over every file (and the glibc floor on Linux), then the
@@ -30,7 +30,7 @@ def main():
     if package.suffix == '.zip':
         with zipfile.ZipFile(package) as z:
             z.extractall(work)
-        out = work / 'XCX-Setup'
+        out = work / 'XC3-Setup'
         mr.check_folder(out)
         mr.check_bundle(out)
     else:

@@ -1,4 +1,4 @@
-# Python 3.14 venv at .venv-py314: MacNativeGames XCX scripts (need stdlib compression.zstd, 3.14+). Source: refs/MacNativeGames/games/totk/requirements-dev.txt
+# Python 3.14 venv at .venv-py314: MacNativeGames XC3 scripts (need stdlib compression.zstd, 3.14+). Source: refs/MacNativeGames/games/totk/requirements-dev.txt
 # Recreate: uv venv --python 3.14 .venv-py314 && uv pip install --python .venv-py314/Scripts/python.exe -r tools/requirements-py314.txt
 ansicon==1.89.0
 blessed==1.51.0

@@ -8,7 +8,7 @@
 // vkEndCommandBuffer included; submitting and the command pool stay on the submitting thread.
 //
 // Every vkCmd* the runtime calls through vk.h goes through the rc_* wrappers below (the macros at the end); the
-// extension commands called through function pointers have rec_* wrappers of their own. XCX_VK_RECORDER=0 makes every
+// extension commands called through function pointers have rec_* wrappers of their own. XC3_VK_RECORDER=0 makes every
 // call at once (the same calls in the same order), =ab switches it with the A/B blocks (rt_ab), per submission part.
 //
 // The design follows Savage Wind Recomp's and LAS Recomp's recorder threads (LAS Recomp runtime/nvn/vulkan/record.c,
@@ -21,7 +21,7 @@ void rec_end(void);                   // waits for the recorder; no-op when rec_
 // when it records cb, and the wait for it (1); otherwise rec_end and the breadcrumb, and the caller ends cb (0).
 int rec_end_cb(VkCommandBuffer cb, int crumb, uint64_t n);
 void rec_drain(void);                 // waits until the recorder made every call queued so far
-void rec_stats_log(void);             // XCX_TRACE=perf: packets, bytes, drains and waits since the last call
+void rec_stats_log(void);             // XC3_TRACE=perf: packets, bytes, drains and waits since the last call
 
 // Extension commands called through device function pointers.
 void rec_push_tpl(PFN_vkCmdPushDescriptorSetWithTemplateKHR fn, VkCommandBuffer cb, VkDescriptorUpdateTemplate tpl,
@@ -33,6 +33,11 @@ void rec_vertex_input(PFN_vkCmdSetVertexInputEXT fn, VkCommandBuffer cb, uint32_
                       const VkVertexInputAttributeDescription2EXT *a);
 void rec_bool(PFN_vkCmdSetDepthClampEnableEXT fn, VkCommandBuffer cb, VkBool32 v);   // also alpha to coverage
 void rec_polygon_mode(PFN_vkCmdSetPolygonModeEXT fn, VkCommandBuffer cb, VkPolygonMode m);
+void rec_xfb_bind(PFN_vkCmdBindTransformFeedbackBuffersEXT fn, VkCommandBuffer cb, uint32_t n, const VkBuffer *b,
+                  const VkDeviceSize *o, const VkDeviceSize *s);
+void rec_xfb_begin(PFN_vkCmdBeginTransformFeedbackEXT fn, VkCommandBuffer cb, uint32_t n, const VkBuffer *b, const VkDeviceSize *o);
+void rec_xfb_end(PFN_vkCmdEndTransformFeedbackEXT fn, VkCommandBuffer cb, uint32_t n, const VkBuffer *b, const VkDeviceSize *o);
+void rec_xfb_draw(PFN_vkCmdDrawIndirectByteCountEXT fn, VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, uint32_t stride);
 void rec_blend_enable(PFN_vkCmdSetColorBlendEnableEXT fn, VkCommandBuffer cb, uint32_t first, uint32_t n, const VkBool32 *v);
 void rec_blend_equation(PFN_vkCmdSetColorBlendEquationEXT fn, VkCommandBuffer cb, uint32_t first, uint32_t n,
                         const VkColorBlendEquationEXT *v);

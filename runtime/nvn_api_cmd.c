@@ -3,7 +3,7 @@
 // (nvn_submit_prepare, called by nvnQueueSubmitCommands in nvn_api_core.c). Ported from MacNativeGames
 // games/totk/third_party/d2r_gfx/gfx/nvn/hle_nvn.c @ b75be8cf (MIT, Copyright (c) 2026 jhaizhou; origin d2r-mobile),
 // lines 647-1062, 1261-1286, 1486-1760 and 1975-1990, and the *Deferred and memory-callback entry points of
-// xcx_nvn_ext.c in the same directory. Metal, mach, the translation thread, Apple diagnostics, the per-frame
+// xc3_nvn_ext.c in the same directory. Metal, mach, the translation thread, Apple diagnostics, the per-frame
 // statistics and the long-session sweeps (copy marks in control memory, texture pin sweep) dropped.
 //
 // Records are written into a growable host buffer per command buffer, never into the game's command memory: games hand
@@ -467,7 +467,6 @@ NVN_API(nvnCommandBufferUpdateUniformBuffer) {
 }
 
 static void ui_note_target(const tex_t *t);
-static void ui_rect(const Cpu *c, float *x, float *w, int viewport);
 // ---------- CommandBuffer: render state, payloads of nvn_obj.h
 // void nvnCommandBufferSetRenderTargets(NVNcommandBuffer *cmd, int n, const NVNtexture *const *colors,
 // const NVNtextureView *const *color_views, const NVNtexture *depth, const NVNtextureView *depth_view)
@@ -491,18 +490,40 @@ NVN_API(nvnCommandBufferSetRenderTargets) {
     r->depth = tex_pin(dt);
     copy_view(&r->dview, &r->has_dview, dv);
 }
-// void nvnCommandBufferClearColor(NVNcommandBuffer *cmd, int index, const float *rgba, int mask)
-NVN_API(nvnCommandBufferClearColor) {
+// void nvnCommandBufferClearColor{,i,ui}(NVNcommandBuffer *cmd, int index, const float / int / uint32_t *rgba, int mask):
+// the replay hands the four words to Vulkan as they are, so the integer forms record the same bits (vk_exec.c clear_color).
+static void clear_color(const Cpu *c) {
     p_clear_color *r = REC(cmd_of(c), OP_CLEAR_COLOR, p_clear_color);
     r->index = (int)arg_x(c, 1);
     r->mask = (int)arg_x(c, 3);
     memcpy(r->rgba, arg_p(c, 2), 16);
 }
+NVN_API(nvnCommandBufferClearColor) { clear_color(c); }
+NVN_API(nvnCommandBufferClearColori) { clear_color(c); }
+NVN_API(nvnCommandBufferClearColorui) { clear_color(c); }
+// void nvnCommandBufferBindTransformFeedbackBuffer(NVNcommandBuffer *cmd, int index, NVNbufferAddress addr, size_t size)
+NVN_API(nvnCommandBufferBindTransformFeedbackBuffer) {
+    *REC(cmd_of(c), OP_XFB_BUF, p_xfb_buf) = (p_xfb_buf){(int)arg_x(c, 1), arg_x(c, 2), arg_x(c, 3)};
+}
+// void nvnCommandBufferBindTransformFeedbackBuffers(NVNcommandBuffer *cmd, int first, int count, const NVNbufferRange *r)
+NVN_API(nvnCommandBufferBindTransformFeedbackBuffers) {
+    const NVNbufferRange *r = arg_p(c, 3);
+    for (int i = 0; i < (int)arg_x(c, 2); i++)
+        *REC(cmd_of(c), OP_XFB_BUF, p_xfb_buf) = (p_xfb_buf){(int)arg_x(c, 1) + i, r[i].address, r[i].size};
+}
+// void nvnCommandBuffer{Begin,End,Pause,Resume}TransformFeedback(NVNcommandBuffer *cmd, NVNbufferAddress control)
+NVN_API(nvnCommandBufferBeginTransformFeedback) { *REC(cmd_of(c), OP_XFB_BEGIN, p_xfb) = (p_xfb){0, arg_x(c, 1)}; }
+NVN_API(nvnCommandBufferResumeTransformFeedback) { *REC(cmd_of(c), OP_XFB_BEGIN, p_xfb) = (p_xfb){1, arg_x(c, 1)}; }
+NVN_API(nvnCommandBufferEndTransformFeedback) { *REC(cmd_of(c), OP_XFB_END, p_xfb) = (p_xfb){0, arg_x(c, 1)}; }
+NVN_API(nvnCommandBufferPauseTransformFeedback) { *REC(cmd_of(c), OP_XFB_END, p_xfb) = (p_xfb){1, arg_x(c, 1)}; }
+// void nvnCommandBufferDrawTransformFeedback(NVNcommandBuffer *cmd, NVNdrawPrimitive mode, NVNbufferAddress control)
+NVN_API(nvnCommandBufferDrawTransformFeedback) { *REC(cmd_of(c), OP_XFB_DRAW, p_xfb) = (p_xfb){(int)arg_x(c, 1), arg_x(c, 2)}; }
 // void nvnCommandBufferClearDepthStencil(NVNcommandBuffer *cmd, float depth, NVNboolean depth_mask, int stencil,
 // int stencil_mask)
 NVN_API(nvnCommandBufferClearDepthStencil) {
     *REC(cmd_of(c), OP_CLEAR_DS, p_clear_ds) = (p_clear_ds){arg_s(c, 0), nvn_arg_bool(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3)};
 }
+
 static void set_viewports(cmd_t *o, int first, int n, const float *v) {
     if (first < 0 || n < 0 || first + n > 16) {
         rt_log("nvn: SetViewports first %d n %d", first, n);
@@ -517,24 +538,17 @@ static void set_viewports(cmd_t *o, int first, int n, const float *v) {
 NVN_API(nvnCommandBufferSetViewports) {
     const float *v = arg_p(c, 3);
     int first = (int)arg_x(c, 1), n = (int)arg_x(c, 2);
-    if (first != 0 || n != 1) return set_viewports(cmd_of(c), first, n, v);
-    float one[4];   // the game's array stays as it is: it may set the same one again
-    memcpy(one, v, sizeof one);
-    ui_rect(c, &one[0], &one[2], 1);
-    set_viewports(cmd_of(c), 0, 1, one);
+    set_viewports(cmd_of(c), first, n, v);
 }
 // void nvnCommandBufferSetViewport(NVNcommandBuffer *cmd, int x, int y, int w, int h)
 NVN_API(nvnCommandBufferSetViewport) {
     float v[4] = {(float)(int)arg_x(c, 1), (float)(int)arg_x(c, 2), (float)(int)arg_x(c, 3), (float)(int)arg_x(c, 4)};
-    ui_rect(c, &v[0], &v[2], 1);
     set_viewports(cmd_of(c), 0, 1, v);
 }
 static void set_scissor(cmd_t *o, int x, int y, int w, int h) { *REC(o, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 // void nvnCommandBufferSetScissor(NVNcommandBuffer *cmd, int x, int y, int w, int h)
 NVN_API(nvnCommandBufferSetScissor) {
-    float x = (float)(int)arg_x(c, 1), w = (float)(int)arg_x(c, 3);
-    ui_rect(c, &x, &w, 0);
-    set_scissor(cmd_of(c), (int)x, (int)arg_x(c, 2), (int)w, (int)arg_x(c, 4));
+    set_scissor(cmd_of(c), (int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3), (int)arg_x(c, 4));
 }
 // void nvnCommandBufferSetScissors(NVNcommandBuffer *cmd, int first, int n, const int *xywh): the replay keeps one
 // scissor (index 0); other indices matter only to shaders that select a viewport index, so differing ones are reported
@@ -547,11 +561,7 @@ NVN_API(nvnCommandBufferSetScissors) {
             static int once;
             if (!once++) rt_log("nvn: SetScissors: differing scissor %d ignored (single-scissor replay)", first + i);
         }
-    if (first == 0 && n > 0) {
-        float x = (float)r[0], w = (float)r[2];
-        ui_rect(c, &x, &w, 0);
-        set_scissor(cmd_of(c), (int)x, r[1], (int)w, r[3]);
-    }
+    if (first == 0 && n > 0) set_scissor(cmd_of(c), r[0], r[1], r[2], r[3]);
 }
 static void set_depth_range(cmd_t *o, float n, float f) { *REC(o, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
 // void nvnCommandBufferSetDepthRange(NVNcommandBuffer *cmd, float near, float far)
@@ -571,16 +581,16 @@ NVN_API(nvnCommandBufferSetDepthRanges) {
 // void nvnCommandBufferSetDepthClamp / SetRenderEnable / SetRasterizerDiscard(NVNcommandBuffer *cmd, NVNboolean enable)
 NVN_API(nvnCommandBufferSetDepthClamp) { REC(cmd_of(c), OP_DEPTH_CLAMP, p_flag)->value = nvn_arg_bool(c, 1) != 0; }
 NVN_API(nvnCommandBufferSetRenderEnable) { REC(cmd_of(c), OP_RENDER_ENABLE, p_flag)->value = nvn_arg_bool(c, 1) != 0; }
-// Rasterizer discard runs vertex work without rasterising; with no transform feedback that equals not drawing.
+// Rasterizer discard runs vertex work without rasterising: the vertex shader's storage writes still happen.
 NVN_API(nvnCommandBufferSetRasterizerDiscard) { REC(cmd_of(c), OP_RASTER_DISCARD, p_flag)->value = nvn_arg_bool(c, 1) != 0; }
-// void nvnCommandBufferSetPrimitiveRestart(NVNcommandBuffer *cmd, NVNboolean enable, int index): XCX draws its
+// void nvnCommandBufferSetPrimitiveRestart(NVNcommandBuffer *cmd, NVNboolean enable, int index): XC3 draws its
 // terrain and cliff strips with 16-bit indices and restart at 0xffff; the replay applies it per indexed draw (op_draw_idx)
 NVN_API(nvnCommandBufferSetPrimitiveRestart) {
     *REC(cmd_of(c), OP_PRIM_RESTART, p_prim_restart) = (p_prim_restart){nvn_arg_bool(c, 1) != 0, (uint32_t)arg_x(c, 2)};
 }
 // void nvnCommandBufferSetRenderEnableConditional(NVNcommandBuffer *cmd, NVNconditionalRenderMode mode,
 // NVNbufferAddress counters): rendering is enabled when the two NVNcounterData.counter values at addr / addr+16
-// compare equal (mode 0) or not equal (mode 1). XCX gates most of its ClearColor commands with it; the replay
+// compare equal (mode 0) or not equal (mode 1). XC3 gates most of its ClearColor commands with it; the replay
 // evaluates it in GPU order.
 NVN_API(nvnCommandBufferSetRenderEnableConditional) {
     int m = (int)arg_x(c, 1);
@@ -650,50 +660,30 @@ NVN_API(nvnCommandBufferBindVertexBuffer) {
     NVNbufferRange r = {arg_x(c, 2), arg_x(c, 3)};
     bind_vertex_buffers(cmd_of(c), (int)arg_x(c, 1), 1, &r);
 }
-// The game lays its interface out on a 16:9 canvas whatever the frame's shape: main+0xa2463c and its siblings turn each
-// element's transform into clip space with fixed scales, and on a wider frame that stretches the interface. Each
-// element's first uniform block holds the result as a 2x4 matrix (row 0 x, row 1 y) when main+0x95cd50 binds it, so a
-// frame wider than 16:9 narrows row 0 here, around the centre of the frame. Only binds to the output-sized target count:
+// The game lays its interface out on a 16:9 canvas whatever the frame's shape, and on a wider frame that stretches the
+// interface. Each element's first uniform block holds its clip-space transform as a 2x4 matrix (row 0 x, row 1 y) when
+// the interface renderer binds it (2.2.1: the call of the bind wrapper main+0xea5e90 that returns to main+0x1038b8c), so
+// a frame wider than 16:9 narrows row 0 here, around the centre of the frame. Only binds to the output-sized target count:
 // the game also draws interface pieces into textures, and those keep their own shape. An element as wide as the canvas
-// (fades, dim layers) stays as it is, so that it still covers the frame.
-#define UI_BIND_LR (MOD_MAIN_BASE + 0x95ce04)
+// (fades, dim layers) stays as it is, so that it still covers the frame. Viewports and scissors stay as the game sets
+// them: the ones set on the interface path in 2.2.1 belong to the scene composite (main+0xea8cb4), and narrowing them
+// cut the 3D frame.
+#define UI_BIND_LR (MOD_MAIN_BASE + 0x1038b8c)   // the wrapper's return address, saved in its frame
 #define UI_FULL_WIDTH 1.9f
-static _Thread_local int ui_on_output, ui_in_rect;
+static _Thread_local int ui_on_output;
 
 static void ui_note_target(const tex_t *t) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
     ui_on_output = t && t->d.width == out[0] && t->d.height == out[1];
-    ui_in_rect = 0;
 }
 
-// Whether the guest call chain runs through the interface renderer.
-static int ui_caller(const Cpu *c) {
-    if (c->x[30] - (MOD_MAIN_BASE + 0xa1c000) < 0x2c000) return 1;
-    uint64_t fp = c->x[29];
-    for (int i = 0; i < 6 && fp && !(fp & 7) && plat_mem_readable(fp, 16); i++) {
-        uint64_t next = *(uint64_t *)(uintptr_t)fp, ret = *(uint64_t *)(uintptr_t)(fp + 8);
-        if (ret - (MOD_MAIN_BASE + 0xa1c000) < 0x2c000) return 1;
-        if (next <= fp) break;
-        fp = next;
-    }
-    return 0;
-}
-
-// The game draws the interface as a list of top-level nodes (the loop returning to main+0xa434b4), and each piece of the
-// HUD or a menu hangs off one of them. A node's saved register in the frame below that loop tells them apart. A node that
-// stays on one side of the screen moves to that edge once narrowed; one that spans the centre, as world labels do, stays.
-#define UI_ROOT_LR (MOD_MAIN_BASE + 0xa434b4)
+// A HUD piece that stays on one side of the screen could move to that edge once narrowed (ui_shift), given the top-level
+// interface node it belongs to. XC3's node list is not found yet, so every piece narrows around the centre: the
+// interface keeps its 16:9 layout in the middle of the frame.
 #define UI_EDGE_SIDE 0.33f
-#define UI_LIST_LR (MOD_MAIN_BASE + 0xa3b8cc)   // a node reached through the parent's list: made at run time, world labels
 static uint64_t ui_node(const Cpu *c) {
-    uint64_t a = c->x[29], below = 0, lr = 0;
-    for (int d = 0; d < 16 && a && plat_mem_readable(a, 0x48); d++) {
-        const uint64_t *q = (const uint64_t *)(uintptr_t)a;
-        if (q[1] == UI_ROOT_LR) return lr == UI_LIST_LR ? 0 : below;
-        below = q[8], lr = q[1];
-        a = q[0];
-    }
+    (void)c;
     return 0;
 }
 
@@ -714,29 +704,12 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     return mid < -UI_EDGE_SIDE ? k - 1 : mid > UI_EDGE_SIDE ? 1 - k : 0;
 }
 
-// A viewport or scissor of the interface narrows like its elements. Elements inside a smaller viewport are placed in that
-// viewport's clip space, which is narrow already, so ui_fit leaves them.
-static void ui_rect(const Cpu *c, float *x, float *w, int viewport) {
-    float k = res_ui_fit();
-    if (k >= 1 || !ui_on_output) return;
-    unsigned out[2], scene[2];
-    res_sizes(out, scene);
-    if (*x <= 0 && *w >= (float)out[0]) {
-        if (viewport) ui_in_rect = 0;
-        return;
-    }
-    if (!ui_caller(c)) return;
-    float mid = out[0] / 2.0f, lo = *x / mid - 1, hi = (*x + *w) / mid - 1;
-    *x = mid + (*x - mid) * k + ui_shift(ui_node(c), lo, hi, k) * mid;
-    *w *= k;
-    if (viewport) ui_in_rect = 1;
-}
-
 static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     static _Thread_local struct { uint64_t addr; float x; } done[64];
     float k = res_ui_fit();
-    if (k >= 1 || !ui_on_output || ui_in_rect || st != 0 || c->x[30] != UI_BIND_LR || size < 0x80 || size > 0x400 ||
-        !plat_mem_readable(addr, 0x40))
+    uint64_t fp = c->x[29];
+    if (k >= 1 || !ui_on_output || st != 0 || !fp || (fp & 7) || !plat_mem_readable(fp, 16) ||
+        *(uint64_t *)(uintptr_t)(fp + 8) != UI_BIND_LR || size < 0x80 || size > 0x400 || !plat_mem_readable(addr, 0x40))
         return;
     float *f = (float *)(uintptr_t)addr;
     if (f[2] != 0 || f[6] != 0 || f[8] != 0 || f[9] != 0 || f[10] != 0 || f[11] != 0 || fabsf(f[0]) >= UI_FULL_WIDTH) return;
@@ -935,6 +908,7 @@ static void clear_texture(const Cpu *c, int is_uint) {
     memcpy(o->c.u, arg_p(c, 4), 16);
 }
 NVN_API(nvnCommandBufferClearTexture) { clear_texture(c, 0); }
+NVN_API(nvnCommandBufferClearTexturei) { clear_texture(c, 1); }
 NVN_API(nvnCommandBufferClearTextureui) { clear_texture(c, 1); }
 // void nvnCommandBufferCopyTextureToTexture(NVNcommandBuffer *cmd, const NVNtexture *src, const NVNtextureView *src_view,
 // const NVNcopyRegion *src_region, const NVNtexture *dst, const NVNtextureView *dst_view,
@@ -973,6 +947,13 @@ NVN_API(nvnCommandBufferSetBlendColor) { memcpy(REC(cmd_of(c), OP_BLEND_COLOR, p
 // NVNeventWaitMode mode, uint32_t value), SetShaderScratchMemory(cmd, const NVNmemoryPool *pool, ptrdiff_t offset,
 // size_t size), SetPatchSize(cmd, int size)
 NVN_API(nvnCommandBufferWaitSync) { (void)c; }
+// void nvnCommandBufferFenceSync(NVNcommandBuffer *cmd, NVNsync *s, NVNsyncCondition condition, int flags): the sync
+// fires with the submit that replays this point (nvn_api_core.c nvn_fence_sync_replayed), not when it is recorded.
+NVN_API(nvnCommandBufferFenceSync) {
+    sync_t *s = arg_p(c, 1);
+    s->fenced = 0;
+    REC(cmd_of(c), OP_FENCE_SYNC, p_fence_sync)->sync = s;
+}
 NVN_API(nvnCommandBufferWaitEvent) { (void)c; }
 NVN_API(nvnCommandBufferSetShaderScratchMemory) { (void)c; }
 NVN_API(nvnCommandBufferSetPatchSize) { (void)c; }
@@ -1074,7 +1055,8 @@ const char *nvn_op_name(uint32_t op) {
         "BIND_VSTREAM", "BIND_VBUF", "BIND_UBO", "BIND_SSBO", "BIND_TEX", "BIND_SAMP", "STENCIL", "POLY_OFFSET", "DRAW",
         "DRAW_IDX", "DISPATCH", "BARRIER", "SET_TEX_POOL", "SET_SAMP_POOL", "COPY_B2T", "COPY_STRIDE", "BLEND_COLOR",
         "COPY_T2B", "BIND_IMG", "COPY_T2T", "RESET_COUNTER", "CLEAR_TEX", "DEPTH_CLAMP", "RENDER_ENABLE",
-        "RASTER_DISCARD", "RENDER_COND", "PRIM_RESTART", "DRAW_IDX_IND", "DISPATCH_IND", "CLEAR_BUF",
+        "RASTER_DISCARD", "RENDER_COND", "PRIM_RESTART", "DRAW_IDX_IND", "DISPATCH_IND", "CLEAR_BUF", "FENCE_SYNC",
+        "XFB_BUF", "XFB_BEGIN", "XFB_END", "XFB_DRAW",
     };
     _Static_assert(sizeof names / sizeof *names == OP_COUNT_, "one name per op");
     return op < OP_COUNT_ ? names[op] : "?";

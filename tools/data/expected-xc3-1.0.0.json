@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "display_version": "XC3 1.0.0",
+  "exefs_sha256": {
+    "main": "5c5784a2c42e6317d8ee816561e521a0475485d10e54b3584e686cf00b5b60c5",
+    "sdk": "dcf4aba559fd4ef623a0d5b5462deb1a9f4111587b6e78dae24ee2dba0fc5c5a",
+    "subsdk0": "d413db23c0f1cf09d2a71c9ba0e627e1fffec14a3516ffe87c05f661308ae335",
+    "rtld": "a977ae6f4952aad94e1c69e6b4ae6a7526824fea5ff01abd7271d81ac737a624",
+    "main.npdm": "22e766a352190128f22ae03389bfdb1a9b8399befac6ebf5a55403c13d3412a0"
+  },
+  "title_id": "010074F013262000"
+}

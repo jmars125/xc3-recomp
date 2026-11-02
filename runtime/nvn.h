@@ -119,11 +119,11 @@ typedef struct {
 } NVNwindow;
 
 typedef struct {
-    char reserved[0x80]; /* XCX v0 main+214c964 allocates 128 bytes. */
+    char reserved[0x80]; /* XC3 v0 main+214c964 allocates 128 bytes. */
 } NVNtexture;
 
 typedef struct {
-    char reserved[0x10];   /* XCX NVN 55: 16 bytes (game stack layout at main+0x823398) */
+    char reserved[0x10];   /* XC3 NVN 55: 16 bytes (game stack layout at main+0x823398) */
 } NVNtextureView;
 
 typedef struct {
