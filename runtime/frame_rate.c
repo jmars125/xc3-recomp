@@ -61,13 +61,14 @@ static void step_store(float seconds) {
 }
 
 static void frame_limit_live(void);
+static int cut_now;   // a cutscene or title menu runs (cutscene below)
 static int limit_hz;
 
 // The game's vsync count per frame (main+0x1b42db0; setter main+0x124a528, getter main+0x1249b6c).
 static _Atomic uint32_t *vsyncs_word;
 
 static void vsyncs_store(void) {
-    uint32_t want = !step_word && limit_hz && limit_hz < 60 ? 2 : 1;
+    uint32_t want = cut_now || (!step_word && limit_hz && limit_hz < 60) ? 2 : 1;
     if (atomic_load_explicit(vsyncs_word, memory_order_relaxed) != want)
         atomic_store_explicit(vsyncs_word, want, memory_order_release);
 }
@@ -134,6 +135,7 @@ static void frame_limit_live(void) {
 
 uint64_t frame_step_cap_ns(void) {
     frame_limit_live();
+    if (cut_now) return (uint64_t)(1e9 / 30 + 0.5);
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
@@ -145,6 +147,7 @@ uint64_t frame_step_cap_ns(void) {
 double frame_step_limit_hz(void) {
     int hz = limit_hz;
     if (hz < 0) return 0;
+    if (cut_now) return 30;
     double r = hz ? hz : gfx_window_refresh_hz();
     if (r < LIMIT_MIN_HZ) r = 60;
     return !step_word && r > 60 ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;
@@ -240,11 +243,35 @@ static void world_clock(double dt, double step) {
     atomic_store_explicit(&world_us, w + (int64_t)(step * 1e6 + 0.5), memory_order_relaxed);
 }
 
+// Cutscenes and the title menus run at 30 fps, as on the console: their animation advances per frame, so at 120 fps a
+// cutscene ran ahead of its voices. The step update's object (main+0xf3c0, its address stored to the patch page's +0x70
+// by the realtime site at main+0xf3dc) has bit 2 of +0x1fc set while the game takes a fixed step instead of the
+// measured one: the title menus and every cutscene, clear in play. While it is set the step is 1/30 s, the frame rate
+// 30, the vsync count 2 and the pacer holds 30 fps. XC3_CUTSCENE_30=0 keeps the limit.
+static int cut_on = -1;
+
+static int cutscene(void) {
+    if (cut_on < 0) cut_on = !(cfg_get("XC3_CUTSCENE_30") && !cfg_bool("XC3_CUTSCENE_30"));
+    if (!cut_on || !step_word) return 0;
+    uint64_t obj = 0;
+    uint32_t flags = 0;
+    memcpy(&obj, (uint8_t *)rt_patch_page() + 0x70, 8);
+    return obj && plat_mem_read(obj + 0x1fc, &flags, 4) && (flags & 4);
+}
+
 void frame_step_present(uint64_t display_ns, int interval) {
     frame_limit_live();
+    int cut = cutscene();
+    if (cut != cut_now) {
+        cut_now = cut;
+        sample_count = sample_next = 0;   // the average starts again at the new rate
+        rt_log("frame rate: %s", cut ? "cutscene or title menu, 30 fps" : "play, the limit again");
+    }
     if (vsyncs_word) vsyncs_store();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
-    if (step_word && last_ns) {
+    if (cut_now) {
+        step_store(1.0f / 30.0f);
+    } else if (step_word && last_ns) {
         if (dt > STEP_RESET_S || dt < 0.001) {
             sample_count = sample_next = 0;
         } else {

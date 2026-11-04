@@ -12,6 +12,8 @@
 # Real-time frame step: game speed follows the clock instead of the frame count. With 0 the game steps whole 60 Hz
 # vsyncs, so it runs at 60 for a limit of 60 or more and at 30 below it. Read at start.
 # realtime = 1
+# Cutscenes and the title menus at 30 fps, as on the console (their animation counts frames). 0 keeps fps_limit.
+# cutscene_30 = 1
 
 [performance]
 # The keys of this section and of [diagnostics] are for testing and troubleshooting, and take effect at the next start.
