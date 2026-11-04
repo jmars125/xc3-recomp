@@ -15,12 +15,13 @@ site scene main ed5730 b2091be8 @page:x8 f9402d08
 # realtime (XC3_REALTIME, frame_rate.c): the frame step follows the time each frame is shown. The game's frame-step
 # update (main+0xf3c0) takes 60 / its vsync count per frame (main+0x1249b6c) as the frame rate (+0x210, an int), its
 # reciprocal as the step (+0x214), and the frame's measured time (main+0x12800c4) clamped to [step, 2 step] as the time
-# stepped (+0x218, ratio to 30 fps at +0x21c). The sites read the frame rate from the patch page's +8 (an int), the step
+# stepped (+0x218, ratio to 30 fps at +0x21c). The first site stores the object to the patch page's +0x70 (frame_rate.c
+# cutscene reads its fixed-step flag) and the sites read the frame rate from the page's +8 (an int), the step
 # and the measured time from +4 (a float). The main loop's limiter (main+0x124fa34) waits until the vsync count times
 # the vsync period has passed since the last frame; it already returns at once when its object's +0xa0 bit 0 or +0x194
 # is set, and the fourth site makes that test always pass, so the host pacer alone holds frames to the limit.
 set realtime XC3_REALTIME 1
-site realtime main f3dc 1ac00d08 @page:x8 b9400908
+site realtime main f3dc 1ac00d08 @page:x8 f9003913 b9400908
 site realtime main f3e8 1e201821 @page:x9 bd400521
 site realtime main f400 9449c331 @page:x8 bd400500
 site realtime main 124fa70 2a090108 32000108
