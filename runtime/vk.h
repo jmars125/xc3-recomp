@@ -103,6 +103,29 @@ void vk_present_blit(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int
 int vk_fsr_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, int sw, int sh, const int crop[4],
                   VkImage dst, int dx, int dy, uint32_t dw, uint32_t dh);
 void vk_fsr_release(void);   // before the device goes away
+// Temporal upscaling in place of the game's scaled-scene reconstruction (vk_tup.c).
+enum { VK_TUP_OFF, VK_TUP_FSR3, VK_TUP_DLSS, VK_TUP_DLAA };
+// VK_TUP_COPY: the game's copy of the reconstruction's output towards the frame (not skipped).
+enum { VK_TUP_NONE, VK_TUP_FIRST, VK_TUP_MID1, VK_TUP_MID2, VK_TUP_MID3, VK_TUP_LAST, VK_TUP_COPY, VK_TUP_ROLES };
+typedef struct {
+    VkImage image;
+    VkFormat format;
+    VkImageAspectFlags aspect;
+    uint32_t w, h;
+} VkTupImage;
+typedef struct {
+    VkTupImage color, depth, motion;   // render size, GENERAL: tonemapped colour, depth-stencil, packed motion vectors
+    VkTupImage out;                    // output size, GENERAL: where the game's reconstruction writes
+    int own_out;                       // 1: the result stays in an image of ours of out's size (vk_tup_result)
+    float jitter[2];                   // camera jitter in render pixels, x right and y down
+    float near_z, fov_y;               // 0: defaults
+} VkTupFrame;
+int vk_tup_mode(void);                           // XC3_UPSCALER as a VK_TUP_* mode
+int vk_tup_role(const GfxShader *fs);            // VK_TUP_FIRST..LAST for the game's reconstruction draws
+int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f);   // outside a pass; 0 = nothing recorded
+int vk_tup_result(VkTupImage *o);                // the image vk_tup_record wrote for own_out
+void vk_tup_copy(VkCommandBuffer cb, const VkTupImage *src, const VkTupImage *dst);   // outside a pass, GENERAL; scales
+void vk_tup_release(void);                       // before the device goes away
 void vk_present_flip(void);
 // Every submission to ctx->gfx_queue (and xfer_queue when shared) takes this lock; vk_present_image and the swapchain
 // rebuild do. Recursive.
@@ -189,6 +212,7 @@ void vk_mem_gpu_wrote(const VkMemSpan *sp, uint64_t size);
 void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence);
 void vk_usnap_end(uint64_t fence);
 int vk_usnap_find(uint64_t addr, uint64_t n, uint64_t align, VkDescriptorBufferInfo *out);
+int vk_usnap_read(uint64_t addr, uint64_t n, void *out);   // the snapshot's bytes of [addr, addr+n); 0 if not held
 void vk_usnap_drop(uint64_t addr, uint64_t n);   // the replay makes the GPU write [addr, addr+n) of guest memory
 uint64_t vk_usnap_gen(void);                      // changes whenever a binding may resolve differently
 void vk_usnap_shutdown(void);                     // vk_exec_draw_shutdown: frees the arenas

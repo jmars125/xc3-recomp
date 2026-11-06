@@ -59,10 +59,17 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                   "For supersampling, set the game resolution above the window's. Takes effect after "
                                   "a restart.",
     [UI_MENU_RENDER_SCALE_GAME] = "Game (whole)",
-    [UI_MENU_UPSCALER] = "Scaling to the window",
-    [UI_MENU_UPSCALER_DESC] = "How the picture is scaled when the window is larger than the game resolution. FSR keeps "
-                              "edges and detail sharper than bilinear.",
+    [UI_MENU_UPSCALER] = "Upscaler",
+    [UI_MENU_UPSCALER_DESC] = "FSR 1 and bilinear scale the picture to the window when the window is larger than the "
+                              "game resolution; FSR 1 keeps edges and detail sharper. The temporal upscalers rebuild the "
+                              "3D scene in place of the game's own reconstruction, which draws it at half the game "
+                              "resolution (or at the render scale): AMD FSR 3 needs amd_fidelityfx_vk.dll next to "
+                              "xc3.exe; NVIDIA DLSS and DLAA need an RTX card and the Streamline DLLs next to xc3.exe, "
+                              "and take effect after a restart. DLAA draws the scene at the full game resolution and "
+                              "only smooths it.",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Bilinear",
+    [UI_MENU_UPSCALER_FSR3] = "AMD FSR 3 (temporal)", [UI_MENU_UPSCALER_DLSS] = "NVIDIA DLSS",
+    [UI_MENU_UPSCALER_DLAA] = "NVIDIA DLAA",
     [UI_MENU_PICTURE_FIT] = "Picture shape",
     [UI_MENU_PICTURE_FIT_DESC] = "When the window's shape differs from the game resolution's (a 16:9 game on the Steam "
                                  "Deck's 16:10 screen), keep the picture's proportions with black bars, or stretch it "
@@ -293,10 +300,17 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                   "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
                                   "перезапуска.",
     [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (целиком)",
-    [UI_MENU_UPSCALER] = "Масштабирование под окно",
-    [UI_MENU_UPSCALER_DESC] = "Как картинка растягивается, когда окно больше разрешения игры. FSR сохраняет края и "
-                              "детали чётче билинейного.",
+    [UI_MENU_UPSCALER] = "Масштабирование",
+    [UI_MENU_UPSCALER_DESC] = "FSR 1 и билинейное растягивают картинку под окно, когда окно больше разрешения игры; "
+                              "FSR 1 сохраняет края и детали чётче. Временные апскейлеры восстанавливают 3D-сцену "
+                              "вместо собственной реконструкции игры, которая рисует её в половине разрешения игры "
+                              "(или в масштабе рендера): AMD FSR 3 нужен amd_fidelityfx_vk.dll рядом с xc3.exe; "
+                              "NVIDIA DLSS и DLAA нужны карта RTX и библиотеки Streamline рядом с xc3.exe, и они "
+                              "включаются после перезапуска. DLAA рисует сцену в полном разрешении игры и только "
+                              "сглаживает её.",
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Билинейное",
+    [UI_MENU_UPSCALER_FSR3] = "AMD FSR 3 (временной)", [UI_MENU_UPSCALER_DLSS] = "NVIDIA DLSS",
+    [UI_MENU_UPSCALER_DLAA] = "NVIDIA DLAA",
     [UI_MENU_PICTURE_FIT] = "Пропорции картинки",
     [UI_MENU_PICTURE_FIT_DESC] = "Когда форма окна отличается от формы разрешения игры (игра 16:9 на экране Steam Deck "
                                  "16:10), сохранять пропорции картинки с чёрными полосами или растягивать её на всё окно.",
