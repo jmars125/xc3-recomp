@@ -6,9 +6,11 @@ Input comes from the first SDL3 gamepad, the keyboard and the mouse, merged into
 
 - `nintendo`: by position, as on a Switch (the table below).
 - `xbox`: south A, east B, west X, north Y, as an Xbox pad labels them; on a PlayStation pad cross is A, circle B, square X, triangle Y.
-- `auto` (default): `nintendo` for a pad whose east button SDL reports labelled A (Switch Pro Controller, Nintendo-layout pads), `xbox` for the others.
+- `auto` (default): `nintendo` for every pad. XC3 lays out its art palette (and confirm and back in its menus) by where the Switch buttons sit, so a label mapping puts the arts on the wrong buttons.
 
-The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*. The game's button prompts stay Switch letters either way.
+The log names the layout in effect (`input: gamepad layout ...`); the menu shows it under *Automatic*.
+
+`XC3_PROMPTS` (`prompts`, the *Button prompts* row on the Controls tab, read at start) picks the glyphs the game draws for A, B, X and Y: `switch` (the game's own letters), `xbox`, `playstation`, or `auto` (default: PlayStation glyphs for a pad whose south button SDL reports labelled cross, Xbox letters for one labelled A, Switch letters otherwise). Each prompt shows the button that does the action under the layout in use: with `nintendo`, Switch X (north) shows as Y on an Xbox pad and as triangle on a PlayStation pad. `runtime/prompts.c` redraws the face-button cells of the game's two prompt atlases (`menu/image/icon_button.wilay` and `icon_button_y.wilay`) as the archive is read; nothing is written to disk. The log names the choice (`prompts: ... glyphs`).
 
 | Switch | Gamepad (by position, Nintendo layout) | Keyboard and mouse | Action in the world |
 |---|---|---|---|

@@ -282,10 +282,10 @@ void input_map_line(const InputMap *m, int action, char *out, size_t n) {
 #undef PUT
 }
 
-int input_pad_layout_pick(const char *setting, int east_labelled_a) {
-    if (setting && !strcasecmp(setting, "nintendo")) return PAD_LAYOUT_NINTENDO;
-    if (setting && !strcasecmp(setting, "xbox")) return PAD_LAYOUT_XBOX;
-    return east_labelled_a ? PAD_LAYOUT_NINTENDO : PAD_LAYOUT_XBOX;
+// Automatic is by position for every pad: XC3 lays out its art palette and its menus' confirm and back by where the
+// Switch buttons sit (X top, Y left, B bottom, A right), so a label mapping puts the arts on the wrong buttons.
+int input_pad_layout_pick(const char *setting) {
+    return setting && !strcasecmp(setting, "xbox") ? PAD_LAYOUT_XBOX : PAD_LAYOUT_NINTENDO;
 }
 
 uint64_t input_map_pad_buttons(const uint8_t down[PAD_COUNT], int layout) {

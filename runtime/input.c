@@ -39,7 +39,7 @@ static SDL_Gamepad *pad;
 static uint64_t next_scan;
 static int pad_rumble;               // the open gamepad has rumble motors
 static volatile int32_t pad_labels[4];  // ... and the labels of its south, east, west, north buttons (PAD_LABEL_*), any thread
-static int pad_east_a;               // ... and labels its east face button A (Nintendo layout under XC3_PAD_LAYOUT=auto)
+static int pad_east_a;               // ... and labels its east face button A (logged)
 static int pad_layout = -1;          // PAD_LAYOUT_* in effect for the open gamepad, -1 to pick again; live (cfg_version)
 static unsigned pad_layout_seen;
 static volatile int32_t pad_layout_shown = -1;   // pad_layout for the menu (any thread), -1 without a gamepad
@@ -326,7 +326,7 @@ static int pad_layout_get(void) {
     pad_layout_gen = read_snap.gen;
     int was = pad_layout;
     const char *set = cfg_value("XC3_PAD_LAYOUT");
-    pad_layout = input_pad_layout_pick(set, pad_east_a);
+    pad_layout = input_pad_layout_pick(set);
     if (pad_layout != was)
         rt_log("input: gamepad layout %s (pad_layout = %s)", pad_layout == PAD_LAYOUT_XBOX ? "xbox" : "nintendo", set);
     plat_xchg32(&pad_layout_shown, pad_layout);
@@ -543,6 +543,14 @@ uint16_t rumble_motor(float a, float curve, float strength) {
 
 int input_pad_layout(void) {
     return (int)plat_cas32(&pad_layout_shown, 0, 0);
+}
+
+int input_pad_south_label(void) {
+    plat_mutex_lock(&lock);
+    if (!state) start();
+    int l = state == 1 ? (int)plat_cas32(&pad_labels[0], 0, 0) : PAD_LABEL_NONE;
+    plat_mutex_unlock(&lock);
+    return l;
 }
 
 int input_pad_label(int pad_id) {

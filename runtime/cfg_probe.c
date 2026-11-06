@@ -262,10 +262,10 @@ int probe_cfg(void) {
     input_mouse_stick(30, 0, 1.0 / 60, 0, st);
     CHECK(st[0] == 0 && st[1] == 0, "mouse: sensitivity 0 is off");
     // Gamepad layouts (input_map.c)
-    CHECK(input_pad_layout_pick("auto", 1) == PAD_LAYOUT_NINTENDO && input_pad_layout_pick(NULL, 0) == PAD_LAYOUT_XBOX,
-          "pad layout: automatic is Nintendo for an east button labelled A, Xbox otherwise");
-    CHECK(input_pad_layout_pick("Xbox", 1) == PAD_LAYOUT_XBOX && input_pad_layout_pick("nintendo", 0) == PAD_LAYOUT_NINTENDO,
-          "pad layout: a set layout wins over the labels");
+    CHECK(input_pad_layout_pick("auto") == PAD_LAYOUT_NINTENDO && input_pad_layout_pick(NULL) == PAD_LAYOUT_NINTENDO,
+          "pad layout: automatic is by position for every pad");
+    CHECK(input_pad_layout_pick("Xbox") == PAD_LAYOUT_XBOX && input_pad_layout_pick("nintendo") == PAD_LAYOUT_NINTENDO,
+          "pad layout: xbox maps by label, nintendo by position");
     uint8_t pd[PAD_COUNT] = {0};
     pd[PAD_SOUTH] = pd[PAD_NORTH] = 1;
     CHECK(input_map_pad_buttons(pd, PAD_LAYOUT_NINTENDO) == (1ull << B_B | 1ull << B_X) &&
