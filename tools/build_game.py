@@ -426,6 +426,8 @@ def main_objects(gen, main_out, rt_dir, mods):
     flags = next((l for l in lines if l.startswith('genflags = ')), '')
     if not flags.startswith('genflags = ' + ' '.join(GEN_FLAGS) + ' -I '):
         return None, 'main build uses other compile flags'
+    if f'cc = {cmd_arg(CLANG.as_posix())}' not in lines:   # --toolchain or not: the same compiler made them
+        return None, 'main build uses another compiler'
     pairs = {}
     for mod, files in mods.items():
         for f in files:
@@ -822,8 +824,6 @@ def main():
         mods, linked, why = {}, [], ''
     elif args.full_build:
         why = '--full-build'
-    elif args.toolchain:
-        why = f'--toolchain {flag_path(args.toolchain)}'
     elif out == main_out:
         why = ''
     else:

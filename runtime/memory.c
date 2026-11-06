@@ -180,9 +180,14 @@ static void commit(uint64_t a, uint64_t n, const char *what) {
     if (!ok) rt_fatal("memory: commit %s %#llx+%#llx failed", what, (unsigned long long)a, (unsigned long long)n);
 }
 
+static volatile uint32_t n_unmapped;
+
+uint32_t mem_unmap_count(void) { return __atomic_load_n(&n_unmapped, __ATOMIC_ACQUIRE); }
+
 static void decommit(uint64_t a, uint64_t n, const char *what) {
     plat_mutex_lock(&frz_lock);
     thaw_range_locked(a, n, 3);
+    __atomic_add_fetch(&n_unmapped, 1, __ATOMIC_RELEASE);   // before the pages go, so a cache check after sees it
     int ok = !n || plat_mem_decommit(a, n);
     plat_mutex_unlock(&frz_lock);
     if (!ok) rt_fatal("memory: decommit %s %#llx+%#llx failed", what, (unsigned long long)a, (unsigned long long)n);
