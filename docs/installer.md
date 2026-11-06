@@ -28,6 +28,10 @@ The install folder (`main.c` `portable_paths()` reads this layout; it stays port
   xc3-install.json              what built this folder: release version, input hashes, finished steps
 ```
 
+`XC3_PROFILE_DIR` overrides the `profile/` folder. A `profile/` folder with no saves is skipped while the profile baked
+into the exe at build time has some (a developer build copied into an install folder): the log says so and how to move
+them.
+
 ## Updating the port
 
 The player runs a newer installer on the same folder. It reads `xc3-install.json`, keeps `romfs/`, `exefs/`,

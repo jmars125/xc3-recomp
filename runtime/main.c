@@ -531,7 +531,8 @@ static int usage(const char *argv0) {
 
 // Paths for a copied folder (tools/package_build.py). Per path: XC3_EXEFS, XC3_ROMFS, XC3_PROFILE_DIR, else the
 // folder next to xc3.exe (exefs, romfs, profile) if it exists, else the path baked in at build time. A relative
-// value is relative to xc3.exe's folder.
+// value is relative to xc3.exe's folder. must "/" asks for a directory (plat_file_exists is 1 for files only, so the
+// profile folder was never picked before).
 static char pp_exefs[PLAT_PATH_MAX * 2], pp_romfs[PLAT_PATH_MAX * 2], pp_profile[PLAT_PATH_MAX * 2];
 
 static const char *portable_path(const char *dir, const char *var, const char *sub, const char *must, char *out, size_t cap,
@@ -546,7 +547,34 @@ static const char *portable_path(const char *dir, const char *var, const char *s
     char probe[PLAT_PATH_MAX * 3];
     snprintf(out, cap, "%s/%s", dir, sub);
     snprintf(probe, sizeof probe, "%s/%s", out, must);
-    return plat_file_exists(probe) ? out : fallback;
+    int found = must[0] == '/' ? plat_dir_exists(out) : plat_file_exists(probe);
+    return found ? out : fallback;
+}
+
+// Whether a profile folder holds a game save: a .sav file in one of its save/<user> folders (fs_host.c save_root).
+static int sav_found(const char *name, void *ctx) {
+    (void)name;
+    *(int *)ctx = 1;
+    return 0;
+}
+
+static int user_has_sav(const char *name, void *ctx) {
+    const char *save = ((const char **)ctx)[0];
+    int *found = ((int **)ctx)[1];
+    char dir[PLAT_PATH_MAX * 3];
+    if (name[0] == '.') return 1;
+    snprintf(dir, sizeof dir, "%s/%s", save, name);
+    if (plat_dir_exists(dir)) plat_file_list(dir, ".sav", sav_found, found);
+    return !*found;
+}
+
+static int profile_has_saves(const char *profile) {
+    char save[PLAT_PATH_MAX * 3];
+    int found = 0;
+    snprintf(save, sizeof save, "%s/save", profile);
+    const void *ctx[2] = {save, &found};
+    if (plat_dir_exists(save)) plat_file_list(save, "", user_has_sav, (void *)ctx);
+    return found;
 }
 
 static void portable_paths(RtConfig *c) {
@@ -557,7 +585,17 @@ static void portable_paths(RtConfig *c) {
     *cut = 0;
     c->exefs = portable_path(exe, "XC3_EXEFS", "exefs", "main.npdm", pp_exefs, sizeof pp_exefs, c->exefs);
     c->romfs = portable_path(exe, "XC3_ROMFS", "romfs", "romfs.bin", pp_romfs, sizeof pp_romfs, c->romfs);
-    c->profile = portable_path(exe, "XC3_PROFILE_DIR", "profile", ".", pp_profile, sizeof pp_profile, c->profile);
+    const char *baked = c->profile;
+    c->profile = portable_path(exe, "XC3_PROFILE_DIR", "profile", "/", pp_profile, sizeof pp_profile, baked);
+    // A build that has been saving into its baked-in profile (a dev build copied next to an install's empty profile
+    // folder) keeps doing so instead of starting from no saves: nothing is moved, the log says how to switch.
+    const char *e = cfg_get("XC3_PROFILE_DIR");
+    if (c->profile == pp_profile && !(e && *e) && baked && strcmp(baked, pp_profile) && !profile_has_saves(pp_profile) &&
+        profile_has_saves(baked)) {
+        rt_log("profile: %s has no saves and %s has; keeping %s. To use the folder next to xc3.exe, move the contents "
+               "of %s (account.uid and save/ included) into it, or set XC3_PROFILE_DIR", pp_profile, baked, baked, baked);
+        c->profile = baked;
+    }
 }
 
 int main(int argc, char **argv) {
