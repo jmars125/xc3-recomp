@@ -1,0 +1,30 @@
+// Inputs of a temporal upscaler (runtime/vk_tup.c) from the game's render-size targets: the tonemapped colour as it
+// is, the depth plane of its depth-stencil target as R32F, and its motion vectors decoded into UV offsets to the
+// previous frame. The game packs a motion vector into an RGB10A2 G-buffer target: R and G hold sqrt(|v|) per axis,
+// B * 3 holds the signs (bit 0 set: x positive, bit 1: y positive); its reconstruction (fragment shader
+// 8a739994fe8f27fd) reads the previous frame at uv.x - v.x, uv.y + v.y.
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D color_in;
+layout(set = 0, binding = 1) uniform sampler2D depth_in;
+layout(set = 0, binding = 2) uniform sampler2D motion_in;
+layout(set = 0, binding = 3, rgba8) uniform writeonly image2D color_out;
+layout(set = 0, binding = 4, r32f) uniform writeonly image2D depth_out;
+layout(set = 0, binding = 5, rg16f) uniform writeonly image2D motion_out;
+
+layout(push_constant) uniform Params {
+    ivec2 size;   // render size
+} pc;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.size.x || p.y >= pc.size.y) return;
+    imageStore(color_out, p, vec4(texelFetch(color_in, p, 0).rgb, 1.0));
+    imageStore(depth_out, p, vec4(texelFetch(depth_in, p, 0).r));
+    vec3 m = texelFetch(motion_in, p, 0).rgb;
+    int s = int(m.b * 3.01);
+    vec2 v = m.rg * m.rg * vec2((s & 1) != 0 ? 1.0 : -1.0, (s & 2) != 0 ? 1.0 : -1.0);
+    imageStore(motion_out, p, vec4(-v.x, v.y, 0.0, 0.0));
+}

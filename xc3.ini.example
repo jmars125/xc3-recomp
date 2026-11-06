@@ -120,12 +120,21 @@
 # Game resolution: the size the game draws its picture and interface in (1280x720 to 7680x4320). Above 1920x1080 the
 # game's texture heap and memory pool grow with it. Read at start.
 # output_res = 1920x1080
-# 3D render scale: the scene's size relative to the game resolution: game (the whole scene) or a fixed percentage from
-# 25 to 100; 100 or more is the same as game. The interface stays at the game resolution. For supersampling, set
-# output_res above window_size. Read at start.
+# 3D render scale: the scene's size relative to the game resolution: game (the game's own: half the game resolution,
+# rebuilt to the full size by its 2x2 temporal reconstruction or by a temporal upscaler) or a fixed percentage from
+# 25 to 99; 100 or more is the same as game. With a temporal upscaler, 67 is DLSS's quality mode and 58 its balanced
+# one. The interface stays at the game resolution. For supersampling, set output_res above window_size. Read at
+# start.
 # render_scale = game
-# Scaling to the window when it is larger than the game resolution: fsr (AMD FSR 1) or bilinear, and FSR's sharpening
-# from 0 (off) to 100. Changes while the game runs take effect at once.
+# Upscaler. fsr (AMD FSR 1) or bilinear scale the picture to the window when the window is larger than the game
+# resolution. The temporal upscalers rebuild the 3D scene in place of the game's own 2x2 reconstruction, from the
+# game's depth, motion vectors and camera jitter, from the scene at half the game resolution (render_scale = game)
+# or at render_scale. fsr3 is AMD FSR 3.1 and needs AMD's amd_fidelityfx_vk.dll next to xc3.exe. dlss is NVIDIA DLSS super
+# resolution; dlaa draws the scene at the full game resolution (render_scale is then left out) and has DLSS only
+# smooth it. Both need an NVIDIA RTX card and NVIDIA's Streamline DLLs next to xc3.exe, and a switch to them takes a
+# restart; without them they fall back to fsr3. python tools/fetch_upscalers.py <folder of xc3.exe> puts all the DLLs
+# there. With a temporal upscaler the window scales bilinearly. sharpness (0 = off, 100 = most) sets FSR 1's RCAS and
+# FSR 3's sharpening. Other changes while the game runs take effect at once.
 # upscaler = fsr
 # sharpness = 80
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its

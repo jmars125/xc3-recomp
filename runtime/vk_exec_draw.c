@@ -1926,6 +1926,129 @@ static void xfb_stop(VkExec *ex, uint64_t addr, int barrier) {
 }
 
 // Pass, shaders, pipeline, fixed state and resources for a draw. 0: the draw is skipped.
+// ---- temporal upscaling (vk_tup.c): the game's scaled-scene reconstruction draws are replaced
+static struct {
+    int captured;   // the first draw of this frame's reconstruction gave its inputs
+    int failed;     // vk_tup_record failed: the game's reconstruction stays for the session
+    VkTupFrame f;
+    VkTupImage done;   // scaled scene: our upscaler's result at the frame size, for after the game's copy
+    VkTupImage fix;    // scaled scene: the image still to be brought into the frame (tup_fixup)
+    VkImage copy_dst;  // scaled scene: the target of the game's copy, never the frame
+} TU;
+
+static int tup_image(const VkExec *ex, int slot, VkTupImage *o) {
+    uint64_t h = ex->tex[NVN_STAGE_FS][slot];
+    if (!h) return 0;
+    view_t v;
+    int hv;
+    vk_texture_lock();
+    const VkTexImage *img = vk_texture_by_id_locked((int)(h & 0xfffff), &v, &hv);
+    if (img) *o = (VkTupImage){img->image, img->format, img->aspect, img->width, img->height};
+    vk_texture_unlock();
+    return img != NULL;
+}
+
+// n bytes at off of uniform block c<slot> of stage st, as this point of the replay sees them.
+static int ubo_peek(const VkExec *ex, int st, int slot, uint64_t off, void *out, size_t n) {
+    const p_bind_buf *u = &ex->ubo[st][slot - 3];
+    VkMemSpan sp;
+    if (!u->addr || u->size < off + n) return 0;
+    if (upd_read(ex, u->addr + off, out, n) || vk_usnap_read(u->addr + off, n, out)) return 1;
+    if (!vk_mem_resolve(u->addr + off, n, &sp)) return 0;
+    memcpy(out, (const void *)(uintptr_t)(u->addr + off), n);
+    return 1;
+}
+
+// 1: the draw is one of the reconstruction's and is skipped. The first captures colour (texture slot 0), motion (2),
+// depth (3) and, from its block c4, the jitter phase ([2].z); the last records the upscaler into its target instead.
+static int tup_draw(VkExec *ex, const GfxShader *fs) {
+    int role = vk_tup_role(fs);
+    if (!role) return 0;
+    if (role == VK_TUP_COPY) {   // the scene-size copy on the scaled path, or our result, goes into the frame next
+        const VkExecTarget *t = &ex->color[0];
+        if (res_scene_on() && t->image && t->img) {
+            TU.copy_dst = t->image;
+            TU.fix = TU.done.image ? TU.done
+                                   : (VkTupImage){t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width,
+                                                  t->img->height};
+        }
+        TU.done.image = VK_NULL_HANDLE;
+        return 0;
+    }
+    if (role == VK_TUP_FIRST) {
+        TU.captured = 0;
+        TU.fix.image = TU.done.image = VK_NULL_HANDLE;
+        if (TU.failed || vk_tup_mode() == VK_TUP_OFF) return 0;
+        float c4[12];
+        VkTupFrame *f = &TU.f;
+        memset(f, 0, sizeof *f);
+        if (!tup_image(ex, 0, &f->color) || !tup_image(ex, 2, &f->motion) || !tup_image(ex, 3, &f->depth) ||
+            !ubo_peek(ex, NVN_STAGE_FS, 4, 0, c4, sizeof c4) || !(f->depth.aspect & VK_IMAGE_ASPECT_DEPTH_BIT))
+            return 0;
+        // Phase 0 puts -1/(2 w) in the projection's [0][2] and +1/(2 h) in [1][2]: the picture moves a quarter pixel
+        // right and down. XC3_TUP_JITTER=-1 flips the sign (a check of the convention).
+        const char *js = cfg_get("XC3_TUP_JITTER");
+        float sign = (c4[10] != 0 ? -1.0f : 1.0f) * (js && !strcmp(js, "-1") ? -1.0f : 1.0f);
+        f->jitter[0] = f->jitter[1] = 0.25f * sign;
+        f->near_z = 0.1f;
+        f->fov_y = 1.222f;
+        static int said;
+        if (!said && cfg_get("XC3_TUP_DEBUG")) {
+            said = 1;
+            rt_log("vk: temporal upscale: colour %ux%u motion %ux%u depth %ux%u; c4 %g %g %g %g | %g %g %g %g | %g %g %g %g",
+                   f->color.w, f->color.h, f->motion.w, f->motion.h, f->depth.w, f->depth.h, c4[0], c4[1], c4[2], c4[3],
+                   c4[4], c4[5], c4[6], c4[7], c4[8], c4[9], c4[10], c4[11]);
+        }
+        TU.captured = 1;
+        return 1;
+    }
+    if (!TU.captured) return 0;
+    if (role != VK_TUP_LAST) return 1;
+    TU.captured = 0;
+    const VkExecTarget *t = &ex->color[0];
+    if (!t->image || !t->img) return 0;
+    TU.f.out = (VkTupImage){t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width, t->img->height};
+    // The scaled path's output is twice the scene, which the game's copy halves into a scene-size target: the upscaler
+    // writes the frame size into an image of its own instead, which tup_fixup brings into the frame.
+    TU.f.own_out = res_scene_on();
+    if (TU.f.own_out) {
+        unsigned out[2], scene[2];
+        res_sizes(out, scene);
+        TU.f.out.w = out[0], TU.f.out.h = out[1];
+    }
+    vk_exec_pass_end(ex);
+    if (!vk_tup_record(ex->cb, &TU.f)) {   // this frame's last draw runs on the skipped draws' leftovers
+        TU.failed = 1;
+        rt_log("vk: temporal upscale off: the upscaler did not record; the game's reconstruction from now on");
+        return 0;
+    }
+    if (TU.f.own_out && !vk_tup_result(&TU.done)) TU.done.image = VK_NULL_HANDLE;
+    ex->recorded++;
+    ex->dirty = VK_EXEC_DIRTY_ALL;
+    vk_exec_draw_new_cb();   // the upscaler bound pipelines and descriptors of its own
+    return 1;
+}
+
+// The scaled-scene path (res_scene_on) never brings the scene into the frame: the reconstruction writes twice the
+// scene size, the game's copy (fragment shader de3f095d826afe46, which on its own path draws the reconstruction's
+// output into the frame target) halves it into a target of the scene size, and the interface is then drawn over an
+// empty frame. So after that copy the first pass that draws into another target of the frame's size and format, the
+// one the interface goes on, gets first the copy's target stretched in or, with a temporal upscaler, its result at the
+// frame size. The game's own path draws its copy into the frame and sets nothing here.
+static void tup_fixup(VkExec *ex) {
+    if (!TU.fix.image) return;
+    const VkExecTarget *t = &ex->color[0];
+    unsigned out[2], scene[2];
+    res_sizes(out, scene);
+    if (!t->image || !t->img || t->image == TU.fix.image || t->image == TU.copy_dst || t->img->width != out[0] ||
+        t->img->height != out[1] || t->img->format != TU.fix.format)
+        return;
+    VkTupImage dst = {t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width, t->img->height};
+    if (ex->in_pass) vk_exec_pass_end(ex);
+    vk_tup_copy(ex->cb, &TU.fix, &dst);
+    TU.fix.image = VK_NULL_HANDLE;
+}
+
 static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (ex->render_disabled) return 0;
     cb_res(ex);
@@ -1936,6 +2059,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         if (ex->in_pass && (w > ex->pass_w || h > ex->pass_h)) vk_exec_pass_end(ex);
         if (!ex->in_pass) ex->rt_resolved = 0;
     }
+    if (!ex->in_pass || TU.fix.image) tup_fixup(ex);
     if (!ex->in_pass) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     vk_exec_pass_begin(ex);
     VkRect2D sc = vk_exec_scissor(ex);
@@ -1974,6 +2098,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         if (gs_wait) gs = shader_for(ex, NVN_STAGE_GS, &has_gs, NULL, 1);
     }
     if (!vs || (has_fs && !fs) || (has_gs && !gs)) return 0;
+    if (fs && tup_draw(ex, fs)) return 0;
     uint32_t fbl = feedback_prepare(ex, fs);
     VkPipeState s = ex->pipe;
     s.vs = vs, s.fs = fs, s.gs = gs;
