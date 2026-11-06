@@ -9,8 +9,9 @@ Lifted code cannot be byte-patched when the game runs, so a patch is applied whe
   spin <module> <head> <back-edge> [<back-edge> ...]
 
 <address> is a module offset (hex), <original> the instruction word the module has there (checked; a mismatch stops
-the generator), each <replacement> an instruction word (hex) or `@page:x<n>`, which is `adrp x<n>, <patch page>`
-encoded for the site's address. The patch page is the first 4 KiB page after main's image (layout.py leaves the rest
+the generator), each <replacement> an instruction word (hex), `@page:x<n>`, which is `adrp x<n>, <patch page>`
+encoded for the site's address, or `@call:<offset>`, a `bl` to the patch page plus <offset> (hex) encoded for the
+site's address: the runtime registers a host function there (rt_register_host). The patch page is the first 4 KiB page after main's image (layout.py leaves the rest
 of the 2 MiB-aligned module slot free); the runtime commits it and owns its contents.
 
 The replacement words are lifted at the site's address in place of the original instruction, and the generated C reads
@@ -31,6 +32,13 @@ PAGE = 0x1000
 
 class PatchError(ValueError):
     pass
+
+
+def bl(pc, target):
+    imm = (target - pc) >> 2
+    if not -(1 << 25) <= imm < (1 << 25):
+        raise PatchError(f'{pc:#x}: patch page call {target:#x} out of BL range')
+    return 0x94000000 | (imm & 0x3FFFFFF)
 
 
 def adrp(pc, target, rd):
@@ -59,7 +67,8 @@ class Table:
         out = {}
         for off, (k, repl, _) in self.sites.get(name, {}).items():
             a = base + off
-            out[a] = (k, [adrp(a, self.page, w[1]) if isinstance(w, tuple) else w for w in repl])
+            out[a] = (k, [w if not isinstance(w, tuple) else adrp(a, self.page, w[1]) if w[0] == 'page'
+                          else bl(a, self.page + w[1]) for w in repl])
         return out
 
 
@@ -87,6 +96,10 @@ def load(path, mods):
             for w in f[5:]:
                 if w.startswith('@page:x'):
                     repl.append(('page', int(w[7:])))
+                elif w.startswith('@call:'):
+                    if not 0 <= int(w[6:], 16) < PAGE or int(w[6:], 16) & 3:
+                        raise PatchError(f'{where}: {w} is not an aligned offset in the patch page')
+                    repl.append(('call', int(w[6:], 16)))
                 else:
                     repl.append(int(w, 16))
             mod = sites.setdefault(f[2], {})

@@ -120,6 +120,15 @@ static void script_load(void) {
     rt_log("input: script %s, %d events", path, script_n);
 }
 
+// The map-jump tour's input (tour.c): buttons ored in and the right stick's x while it is not 0.
+static uint64_t tour_buttons;
+static int32_t tour_rx;
+
+void input_tour(uint64_t buttons, int32_t rx) {
+    __atomic_store_n(&tour_buttons, buttons, __ATOMIC_RELAXED);
+    __atomic_store_n(&tour_rx, rx, __ATOMIC_RELAXED);
+}
+
 static void script_apply(uint64_t *b, int32_t sl[2], int32_t sr[2]) {
     if (!script_state) script_load();
     if (!script_n) return;
@@ -451,6 +460,10 @@ static void poll_merged(uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx
         }
     }
     script_apply(&b, sl, sr);
+    uint64_t tb = __atomic_load_n(&tour_buttons, __ATOMIC_RELAXED);
+    int32_t trx = __atomic_load_n(&tour_rx, __ATOMIC_RELAXED);
+    b |= tb;
+    if (trx) sr[0] = trx;
     rec_apply(b, sl, sr);
     // Minus and Plus held together (gamepad or keys) open or close the menu and never reach the game
     static int combo_held;
