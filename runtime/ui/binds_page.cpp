@@ -99,10 +99,10 @@ static const char *pad_label(int p) {
     return menu_text((UiTextId)(UI_PAD_SOUTH + (p - PAD_SOUTH)));
 }
 
-// The layout the gamepad cells show: the one in effect, or without a gamepad the one the setting names (Xbox for auto).
+// The layout the gamepad cells show: the one in effect, or without a gamepad the one the setting names.
 static int shown_layout(void) {
     int l = input_pad_layout();
-    return l >= 0 ? l : input_pad_layout_pick(cfg_value("XC3_PAD_LAYOUT"), 0);
+    return l >= 0 ? l : input_pad_layout_pick(cfg_value("XC3_PAD_LAYOUT"));
 }
 
 // Writes the bind_ line of every action whose line for m differs from the one set; a line at the defaults goes away.
