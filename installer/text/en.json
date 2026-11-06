@@ -168,5 +168,7 @@
  "phase.prepare.scan": "Finding the shaders in the game files",
  "phase.prepare.shaders": "Translating the shaders",
  "phase.prepare.pipelines": "Building the shaders for your GPU",
+ "phase.prepare.pack": "Packing the shader cache into one file",
+ "warn.shader_pack_failed": "Packing the shader cache failed (exit code {code}). The game reads the loose files instead and starts a little slower. Details: {log}",
  "warn.shaders_not_prepared": "The shaders could not be prepared ahead of play. The game still runs, and translates each shader the first time it needs it, so it will stutter at first. Run the installer again to retry. Details: {log}"
 }

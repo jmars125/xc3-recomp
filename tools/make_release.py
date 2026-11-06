@@ -106,7 +106,7 @@ LLVM_SKIP_SUFFIXES = {'.idl', '.tlb'}
 
 # tools/ files the installer steps run (and what they import), copied from the repo.
 TOOLS_FILES = ['build_game.py', 'build_shaders.py', 'check_content.py', 'extract.py', 'package_select.py', 'romfs_index.py',
-               'ard_shaders.py', 'prepare_shaders.py', 'pipeline_list.py', 'game_icon.py']
+               'ard_shaders.py', 'prepare_shaders.py', 'pipeline_list.py', 'pack_shader_cache.py', 'game_icon.py']
 TOOLS_DIRS = ['vendor/macnativegames', 'data']   # data/: expected hashes
 RUNTIME_LAYOUT = ROOT / 'tools' / 'runtime-layout'   # build_game.py --gen of libxc3rt.a
 RUNTIME_SUFFIXES = {'.h', '.inc', '.ico', '.rc', '.manifest'}   # .ico: the installer window icon; xc3.rc builds per install

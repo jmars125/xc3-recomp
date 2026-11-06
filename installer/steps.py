@@ -747,10 +747,11 @@ class Prepare(Step):
 
     def key(self, ctx):
         layout = ctx.layout
-        return fingerprint('prepare-6', ctx.keys['compile'], ctx.keys['dlc'], layout.xlate,
+        return fingerprint('prepare-7', ctx.keys['compile'], ctx.keys['dlc'], layout.xlate,
                            layout.xlate.with_suffix('.id'), layout.tools / 'prepare_shaders.py',
                            layout.tools / 'ard_shaders.py', layout.tools / 'data' / 'shader-variants-xc3-2.2.1.bin.gz',
-                           layout.tools / 'pipeline_list.py', layout.tools / 'data' / 'pipeline-keys-xc3-2.2.1.bin.gz')
+                           layout.tools / 'pipeline_list.py', layout.tools / 'data' / 'pipeline-keys-xc3-2.2.1.bin.gz',
+                           layout.tools / 'pack_shader_cache.py')
 
     def current(self, ctx, record):
         xlate = ctx.dest / XLATE
@@ -782,6 +783,13 @@ class Prepare(Step):
         if code:
             rep.warning('warn.shaders_not_prepared', log=str(log))
             remove(dest / 'shader-prepared.bin')
+        else:
+            # One shader-cache.pack instead of four files per shader (about 200,000): xc3.exe reads the pack first and
+            # the loose files after it, so a failure here only costs boot time (TotK Recomp 00da267).
+            rep.progress('prepare', 'pack', force=True)
+            code, log = run_tool(ctx, 'prepare', layout.tools / 'pack_shader_cache.py', [dest / 'shader-cache'])
+            if code:
+                rep.warning('warn.shader_pack_failed', code=code, log=str(log))
         return {'xlate_sha256': file_sha256(xlate)}
 
 
