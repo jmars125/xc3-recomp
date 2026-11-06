@@ -829,6 +829,17 @@ static int alias_copy(Tex *e, const Tex *src) {
     return 1;
 }
 
+// Render targets the CPU reads without NVN's invalidate (vk_texture_write_back_small): live ones up to WB_SMALL bytes,
+// released ones up to WB_RELEASED; small_pending: one may be dirty.
+enum { WB_SMALL = 64 << 10, WB_RELEASED = 512 << 10 };
+static int small_pending;
+
+static void write_back(Tex *e);
+
+static int wb_at_fence(const Tex *e) {
+    return e->t.L.size <= WB_SMALL || (e->released && e->t.L.size <= WB_RELEASED);
+}
+
 static Tex *entry_of(const tex_t *t) {
     TexKey k;
     make_key(t, &k);
@@ -840,13 +851,17 @@ static Tex *entry_of(const tex_t *t) {
         }
         if (!(e = create_tex(t, &k, tex_alias))) return NULL;
         perf_count(PERF_CNT_TEX_NEW);
-        // released entries of another descriptor at this address are replaced by the new one; a live one holding
-        // GPU-written content is the alias source, preferring the one that differs only in swizzle (same_but_swizzle)
+        // released entries of another descriptor at this address are replaced by the new one, except one whose render
+        // the next fence wait writes back to the storage (vk_texture_write_back_small); a live one holding GPU-written
+        // content is the alias source, preferring the one that differs only in swizzle (same_but_swizzle)
         int alias = 0;
         Tex *src = NULL;
         for (Tex *p = nvn_hm_get(&by_addr, &k.addr), *nx; p; p = nx) {
             nx = p->next_at;
-            if (p->released) { destroy_tex(p); continue; }
+            if (p->released) {
+                if (!(p->pub.mirrored && p->gpu_dirty && wb_at_fence(p))) destroy_tex(p);
+                continue;
+            }
             alias = 1;
             if (tex_alias && (!src || (same_but_swizzle(&p->key, &k) && !same_but_swizzle(&src->key, &k))) &&
                 alias_compatible(e, p) && alias_has_gpu_content(p))
@@ -901,11 +916,6 @@ const VkTexImage *vk_texture_get(const tex_t *t) {
     return e ? &e->pub : NULL;
 }
 
-// Small render targets the CPU reads without NVN's invalidate (vk_texture_write_back_small); small_pending: one may be
-// dirty.
-enum { WB_SMALL = 64 << 10 };
-static int small_pending;
-
 void vk_texture_gpu_written(const tex_t *t) {
     if (!t || !t->mem) return;
     vk_exec_frame_written(t);
@@ -936,6 +946,18 @@ void vk_texture_release(const tex_t *t) {
     Tex *e = nvn_hm_get(&by_key, &k);
     if (e && !e->released) {
         e->released = 1;
+        // A released mirrored target whose render the storage lacks goes back to the storage now when the render's
+        // submission is issued (the write-back copy runs after it on the queue), else at the next fence wait. Opening
+        // the main menu renders the save thumbnail into a 320x180 RGBA8 target (327,680 bytes), finalizes the texture
+        // right after the submission without waiting for it and initializes another at the same storage; saving later
+        // converts the storage's texels to the 320x180 RGB picture of the .tmb file with CPU loads. Dropping the
+        // released entry with its render left the storage zero: black save slots.
+        if (e->pub.mirrored && e->gpu_dirty && wb_at_fence(e)) {
+            uint32_t now;
+            if (storage_rewritten(e, e->gpu_gen, &now) == 1) e->gpu_dirty = 0;
+            else if (e->gpu_fence <= vk_sync_issued()) write_back(e), perf_count(PERF_CNT_WB);
+            else __atomic_store_n(&small_pending, 1, __ATOMIC_RELEASE);
+        }
         nreleased++;
         rel_append(e);
         tex_gen_bump(k.addr);
@@ -1441,6 +1463,7 @@ void vk_texture_write_back(uint64_t addr, uint64_t size) {
 // itself). On the Switch the bytes are there once the frame's fence has passed. So when the
 // CPU waits for a fence, mirrored targets up to WB_SMALL bytes rendered by work up to that fence go back to their
 // storage, unless the CPU rewrote it since. Larger targets still go back on an invalidate, memcpy or ReadTexels.
+// Released targets up to WB_RELEASED bytes go back too (vk_texture_release).
 int vk_texture_small_dirty(void) { return __atomic_load_n(&small_pending, __ATOMIC_ACQUIRE); }
 
 void vk_texture_write_back_small(uint64_t fence) {
@@ -1448,13 +1471,13 @@ void vk_texture_write_back_small(uint64_t fence) {
     __atomic_store_n(&small_pending, 0, __ATOMIC_RELAXED);
     plat_mutex_lock_shared(&owned_lock);
     int n = 0, later = 0;
-    for (int i = 0; i < nowned; i++) n += owned[i]->gpu_dirty && owned[i]->t.L.size <= WB_SMALL;
+    for (int i = 0; i < nowned; i++) n += owned[i]->gpu_dirty && wb_at_fence(owned[i]);
     Tex **hit = n ? malloc(sizeof *hit * (size_t)n) : NULL;
     if (n && !hit) rt_fatal("vk: out of memory for a texture write-back");
     n = 0;
     for (int i = 0; i < nowned; i++) {
         Tex *e = owned[i];
-        if (!e->gpu_dirty || e->t.L.size > WB_SMALL) continue;
+        if (!e->gpu_dirty || !wb_at_fence(e)) continue;
         if (e->gpu_fence > fence) later = 1;
         else hit[n++] = e;
     }

@@ -28,6 +28,7 @@
 #include "romfs_config.h"
 #include "romfs_path.h"
 #include "platform/platform.h"
+#include "prompts.h"
 #include "sha256.h"
 
 #define NH 65536                     // RomFS handle slots
@@ -710,7 +711,7 @@ static int handle_source(uint64_t h, PlatFile **f, uint64_t *base, uint64_t *siz
     return 1;
 }
 
-uint32_t romfs_read(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uint64_t size) {
+static uint32_t read_raw(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uint64_t size) {
     PlatFile *f;
     uint64_t base, fsize;
     if (!out || offset < 0 || !handle_source(h, &f, &base, &fsize)) return FS_R_INVALID;
@@ -728,6 +729,17 @@ uint32_t romfs_read(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uin
     }
     *out = done;
     return 0;
+}
+
+// Reads with the button prompt patch (prompts.c) on top.
+uint32_t romfs_read(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uint64_t size) {
+    PlatFile *f;
+    uint64_t base, fsize;
+    if (!out || offset < 0 || !handle_source(h, &f, &base, &fsize)) return FS_R_INVALID;
+    if (buffer && prompts_payload(base, offset, buffer, size, out)) return 0;
+    uint32_t r = read_raw(out, h, offset, buffer, size);
+    if (!r && buffer) prompts_header(h, base, offset, buffer, *out, read_raw);
+    return r;
 }
 
 uint32_t romfs_size(int64_t *out, uint64_t h) {

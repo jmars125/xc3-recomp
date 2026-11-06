@@ -27,6 +27,8 @@ int input_pad_layout(void);
 enum { PAD_LABEL_NONE, PAD_LABEL_A, PAD_LABEL_B, PAD_LABEL_X, PAD_LABEL_Y, PAD_LABEL_CROSS, PAD_LABEL_CIRCLE,
        PAD_LABEL_SQUARE, PAD_LABEL_TRIANGLE };
 int input_pad_label(int pad);
+// input_pad_label(PAD_SOUTH), starting the gamepad input first if nothing has polled it yet.
+int input_pad_south_label(void);
 // The menu's remapping rows (Controls tab). input_map_snapshot copies the tables in effect (after any changed XC3_BIND_* line).
 // input_capture polls the keys, the mouse buttons and the gamepad for a press: reset 1 takes what is held now as the
 // start (a held key counts once released and pressed again) and returns NONE; then it returns KEY or PAD with *id the
