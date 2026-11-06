@@ -78,6 +78,9 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     // the monitor's refresh rate; printf format with the rate in Hz when it is known
     [UI_MENU_FPS_DISPLAY] = "Monitor rate", [UI_MENU_FPS_DISPLAY_HZ] = "Monitor rate (%.0f Hz)",
+    [UI_MENU_FRAME_QUEUE] = "Frame queue",
+    [UI_MENU_FRAME_QUEUE_DESC] = "The game starts a frame while the previous one waits for its turn on screen: far fewer "
+                                 "dropped frames at the limit, up to one frame more input delay. Applies at once.",
     [UI_MENU_CUTSCENE_FPS] = "Cutscene frame rate",
     [UI_MENU_CUTSCENE_FPS_DESC] = "30 fps: every cutscene at 30, as on the console. Mixed: most in-game cutscenes at the "
                                   "frame rate limit, the rest and videos at 30. Limit: every cutscene at the limit "
@@ -315,6 +318,9 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
     [UI_MENU_FPS_DISPLAY] = "Как у монитора", [UI_MENU_FPS_DISPLAY_HZ] = "Как у монитора (%.0f Гц)",
+    [UI_MENU_FRAME_QUEUE] = "Очередь кадров",
+    [UI_MENU_FRAME_QUEUE_DESC] = "Игра начинает кадр, пока предыдущий ждёт показа: намного меньше пропущенных кадров на "
+                                 "лимите, задержка ввода больше не более чем на кадр. Применяется сразу.",
     [UI_MENU_CUTSCENE_FPS] = "Частота кадров в роликах",
     [UI_MENU_CUTSCENE_FPS_DESC] = "30 кадров: все ролики в 30, как на консоли. Смешанно: большинство игровых роликов с "
                                   "ограничением частоты кадров, остальные и видео в 30. Ограничение: все ролики с "

@@ -53,6 +53,9 @@ release that changes nothing game-derived skips the rebuild.
    `.ard` (about 28,400 unique, 30 s), `tools/prepare_shaders.py` writes each one's default variant as seed files, and
    `xc3.exe --prepare-shaders` translates them into `shader-cache/` (about 1.1 GB) and builds them into the GPU driver's
    disk cache: under 4 minutes on 16 threads. A failure here is a warning: the game then translates shaders on first use.
+   Then `tools/pack_shader_cache.py` folds the cache's loose files (about 200,000) into `shader-cache/shader-cache.pack`;
+   xc3.exe reads the pack first and the loose files after it, and writes new translations as loose files, which the
+   next run of the tool folds in.
 7. **Clean up** the temp folder (generated C and objects, about 1.3 GB).
 
 A cancelled or failed setup resumes from the last finished step (`xc3-install.json`).

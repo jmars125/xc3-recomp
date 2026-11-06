@@ -1,5 +1,17 @@
-# Title screen to gameplay (first save slot).
+# Title screen to gameplay (first save slot). A first start or a cold cache keeps the title loading longer than the
+# menu's first presses, so A repeats until 40 s of game time; once the save loads, the last presses fall in its load.
 300 A 4
-520 A 4
-700 A 4
+450 A 4
+600 A 4
+750 A 4
 900 A 4
+1050 A 4
+1200 A 4
+1350 A 4
+1500 A 4
+1650 A 4
+1800 A 4
+1950 A 4
+2100 A 4
+2250 A 4
+2400 A 4

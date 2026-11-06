@@ -1,0 +1,33 @@
+# Title screen to the field (first save slot, as load_save.txt), then three minutes of running and turning the camera
+# from 60 s of game time on: a repeatable load for frame time measurements (XC3_TRACE=perf) and profiles. Frames are
+# 60 Hz ticks of game time, so the run is the same at any frame limit.
+300 A 4
+450 A 4
+600 A 4
+750 A 4
+900 A 4
+1050 A 4
+1200 A 4
+1350 A 4
+1500 A 4
+1650 A 4
+1800 A 4
+1950 A 4
+2100 A 4
+2250 A 4
+2400 A 4
+3900 RSTICK 24000 0 1200
+5100 LSTICK 0 32767 900
+5100 RSTICK 12000 0 900
+6000 LSTICK 32767 0 600
+6600 LSTICK 0 -32767 900
+6600 RSTICK -16000 0 900
+7500 LSTICK -32767 0 600
+8100 RSTICK -24000 0 1200
+9300 LSTICK 0 32767 1200
+9300 RSTICK 8000 0 1200
+10500 LSTICK 23000 23000 900
+11400 LSTICK -23000 -23000 900
+11400 RSTICK 20000 0 900
+12300 LSTICK 0 32767 1200
+13500 RSTICK -20000 0 900

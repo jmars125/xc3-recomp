@@ -552,6 +552,7 @@ static void tab_screen(float scale) {
 static void tab_game(float scale) {
     opt_begin("##game", scale);
     row_fps_limit();
+    opt_toggle("XC3_FRAME_QUEUE", UI_MENU_FRAME_QUEUE, UI_MENU_FRAME_QUEUE_DESC);
     static const UiTextId cut[] = {UI_MENU_CUTSCENE_30, UI_MENU_CUTSCENE_MIXED, UI_MENU_CUTSCENE_LIMIT};
     opt_choice("XC3_CUTSCENE_30", UI_MENU_CUTSCENE_FPS, cut, 3, UI_MENU_CUTSCENE_FPS_DESC);
     row_game_lang();

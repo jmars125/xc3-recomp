@@ -578,17 +578,20 @@ static void astc_check(const Tex *e, const uint8_t *raw, const VkAstcRegion *ar,
 
 // Whether [mem, mem + size) of a texture's storage is readable. VirtualQuery waits on the process's address space lock,
 // which a driver allocation holds for tens of ms, and a scene change uploads hundreds of textures, so a pool found
-// readable once is not asked again: it stays mapped while textures in it exist. Texture lock held.
+// readable is not asked again until guest memory is unmapped (mem_unmap_count): at a scene change the game unmaps
+// physical memory under pools whose textures it still binds, and the copy of such a texture read freed pages and
+// crashed in tex_bl_copy (map-jump tour, line 1; a movie start in play). Texture lock held.
 static int storage_readable(const tex_t *t) {
-    static struct { const uint8_t *mem; uint64_t size; } known[64];
+    static struct { const uint8_t *mem; uint64_t size; uint32_t gen; } known[64];
     const pool_t *p = t->pool;
     if (!p || !p->mem || t->mem < p->mem || t->L.size > p->size || (uint64_t)(t->mem - p->mem) > p->size - t->L.size)
         return plat_mem_readable((uint64_t)(uintptr_t)t->mem, 1) &&
                plat_mem_readable((uint64_t)(uintptr_t)t->mem + t->L.size - 1, 1);
     typeof(known[0]) *k = &known[((uintptr_t)p->mem >> 16) % 64];
-    if (k->mem == p->mem && k->size == p->size) return 1;
+    uint32_t gen = mem_unmap_count();
+    if (k->mem == p->mem && k->size == p->size && k->gen == gen) return 1;
     if (!plat_mem_readable((uint64_t)(uintptr_t)p->mem, p->size)) return plat_mem_readable((uint64_t)(uintptr_t)t->mem, t->L.size);
-    k->mem = p->mem, k->size = p->size;
+    k->mem = p->mem, k->size = p->size, k->gen = gen;
     return 1;
 }
 
