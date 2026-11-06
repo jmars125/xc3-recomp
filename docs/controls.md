@@ -85,6 +85,16 @@ The stick direction bits (`StickLLeft` to `StickRDown`) are derived from the sti
 
 `XC3_INPUT_RECORD=<file>` (`input_record` in `xc3.ini`, or Input recording in the menu) writes the merged input in the same format, one line per button press and per stick segment: events before the world clock starts by tick, the rest timed; a button or stick held when the world clock starts is cut there and goes on as a timed event. The file replays as a script, which makes it the repro to attach to a bug report.
 
+## Map-jump tour
+
+A test tool that reaches the field of every region without anyone playing (`runtime/tour.c`, ported from Lucky7). `tools/tour_list.py` writes the destinations, every landmark's Skip Travel jump, from the extracted RomFS:
+
+```
+.venv-py314\Scripts\python tools\tour_list.py build\extracted\upd\romfs > build\upd\tour.txt
+```
+
+`XC3_TOUR=<list>` then jumps to each line in turn: it waits for the load (`XC3_TOUR_WAIT` seconds at least, default 25), saves `tour_<jump id>.png` in `XC3_TOUR_OUT` (default `tour`), turns the camera for 8 seconds and logs the frame rate of that turn (`tour: line N, jump J: F fps while turning`). The first jump waits `XC3_TOUR_START` seconds (default 60), until the world is shown and while no story event plays, so start from a save past the opening (`XC3_INPUT_SCRIPT=tools/input/load_save.txt`): during the opening's story chain the game ignores a jump, and a forced one crashed the renderer. `XC3_TOUR_FROM` and `XC3_TOUR_COUNT` pick lines. The game exits after the last one.
+
 ## RenderDoc capture (blocked)
 
 `XC3_RDOC=<frame>[,...]` (`runtime/rdoc_win.c`; `XC3_RDOC_DIR`, `XC3_RDOC_DLL`) loads RenderDoc before `vkCreateInstance`. RenderDoc hides `VK_EXT_external_memory_host`, which the back end requires for guest pool imports (`runtime/vk_memory.c`), so device creation fails under it. A capture needs a copy-based pool fallback first.

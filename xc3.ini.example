@@ -14,6 +14,9 @@
 # realtime = 1
 # Cutscenes and the title menus at 30 fps, as on the console (their animation counts frames). 0 keeps fps_limit.
 # cutscene_30 = 1
+# Menus and the HUD animate at the console's speed at any frame rate (0: one 30 fps step per frame, faster above 30).
+# Read at start.
+# menu_time = 1
 
 [performance]
 # The keys of this section and of [diagnostics] are for testing and troubleshooting, and take effect at the next start.

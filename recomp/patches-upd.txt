@@ -25,3 +25,32 @@ site realtime main f3dc 1ac00d08 @page:x8 f9003913 b9400908
 site realtime main f3e8 1e201821 @page:x9 bd400521
 site realtime main f400 9449c331 @page:x8 bd400500
 site realtime main 124fa70 2a090108 32000108
+
+# menus (XC3_MENU_TIME, frame_rate.c): the interface's animation follows the time each frame is shown. Every layout
+# (menus, the HUD, their fades) advances each frame by its own speed (+0x290) times the layout manager's rate (+0x80 of
+# the object at *main+0x1b64fc0, the 1/30 s step at +0x7c times a rate at +0x94, set in main+0x10107b4) and stores the
+# product at +0x294, so at 60 fps it ran twice the console's speed. Each site loads the rate, then multiplies the speed
+# by it and loads the patch page's +0 (the frame's step in 30 fps frames, frame_rate.c step_store) in its place, so
+# the game's own multiply that follows applies both. x8 (the manager) and the reloaded float are dead after each site.
+# The last site (main+0x1031e88) scales a frame time by the rate the same way, with s2. Sites from Lucky7
+# (games/xc3/patches.py, the L7 layout step), which scales the same loads in its runtime.
+set menus XC3_MENU_TIME 1
+site menus main 1015c84 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1015ff0 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 10162dc bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1016444 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1021f48 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 102202c bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1023ef8 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1024218 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1029fbc bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 102a098 bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 102d73c bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 102d8fc bd408101 bd408101 @page:x8 1e210800 bd400101
+site menus main 1031e88 bd408102 bd408102 @page:x8 1e220800 bd400102
+
+# tour (XC3_TOUR, tour.c): a test tool, off unless XC3_TOUR names a list. The world tick (main+0xf3c0, once a frame on
+# the main thread) calls tour.c tour_tick with its object in x0 before it reads the vsync count; x0 to x18 are dead at
+# the site (a bl follows). Hook site from Lucky7 (games/xc3/patches.py, the L8 tour).
+set tour XC3_TOUR 0
+site tour main f3d0 aa0003f3 aa0003f3 @call:f00

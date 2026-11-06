@@ -17,6 +17,7 @@ const OvNvState *ov_nv_state(void);                        // ov_gfx.c
 #define RT_GPU_VA_SIZE (64ull << 30)
 
 // ---- window, vsync, focus (gfx_present.c and the window back end, gfx_wsys.h; vk_device.c). Host threads only; never run guest code.
+void gfx_shot_request(const char *path);                    // the next presented frame to a PNG at path (tour.c)
 void gfx_window_start(void);                               // window thread, Vulkan device, swapchain; idempotent
 void gfx_vsync_bind(uint64_t system_event);                // nn::vi vsync event; signalled at 60 Hz
 uint64_t gfx_vsync_ticks(void);                            // ticks since start

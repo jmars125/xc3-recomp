@@ -494,6 +494,18 @@ int vk_present_captured(const uint8_t **px, int *w, int *h, VkFormat *fmt) {
     return ok;
 }
 
+// A capture of the next presented frame asked by gfx_shot_request (the map-jump tour). One at a time: a request while
+// one is pending replaces it.
+static char shot_path[600];
+static int shot_pending;
+
+void gfx_shot_request(const char *path) {
+    plat_rmutex_lock(&g_pl);
+    snprintf(shot_path, sizeof shot_path, "%s", path);
+    shot_pending = 1;
+    plat_rmutex_unlock(&g_pl);
+}
+
 // The captured swapchain image as a PNG (the menu's test hook), RGBA with opaque alpha.
 static void save_capture(const char *path) {
     size_t n = (size_t)g_cap_w * (size_t)g_cap_h * 4;
@@ -570,6 +582,12 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                      g_sc_ext.height, cw, ch, g_scaler};
     int overlay = g_sc_view[idx] &&
                   menu_overlay_frame(__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED), &mt, &menu_shot);
+    static char shot_now[600];
+    if (!menu_shot && shot_pending) {
+        memcpy(shot_now, shot_path, sizeof shot_now);
+        shot_pending = 0;
+        menu_shot = shot_now;
+    }
     int cap = (g_capture || menu_shot) && ensure_capture_buffer();
     int thumb = g_th_n && ensure_thumbs();
 

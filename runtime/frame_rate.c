@@ -13,6 +13,10 @@
 // rate. Without the set (XC3_REALTIME=0) vsyncs_store writes the count, 1 for a limit of 60 or more, 2 below, and the
 // game steps whole vsyncs.
 //
+// The set menus (XC3_MENU_TIME) scales the interface's per-frame animation step by the patch page's +0 ratio (the
+// step in 30 fps frames), so menus and the HUD move at the console's speed at any frame rate. Without the real-time
+// step, frame_step_present writes the whole-vsync ratio there instead (vsyncs / 2).
+//
 // The sample is the display time the pacer gives each present (nvnQueuePresentTexture), so the step follows the
 // frames as shown, pacing waits included. One 64-bit and one 32-bit store per present; the guest reads them on its own
 // threads, and each stays finite and in range whichever store it sees.
@@ -46,6 +50,7 @@
 static _Atomic uint64_t *step_word;   // patch page +0: ratio (low float), seconds (high float)
 static double step_now = STEP_FIRST_S;   // the step the patch page holds: what the game steps each frame
 static _Atomic int32_t *step_fps;   // patch page +8: the frame rate the step makes, rounded (patches-upd.txt realtime)
+static float *menu_ratio;   // patch page +0 for the set menus when step_store does not write it
 static uint64_t last_ns;
 static double samples[STEP_SAMPLES];
 static unsigned sample_count, sample_next;
@@ -90,6 +95,11 @@ void frame_step_init(void) {
         step_word = (_Atomic uint64_t *)rt_patch_page();
         step_fps = (_Atomic int32_t *)((uint8_t *)rt_patch_page() + 8);
         step_store((float)STEP_FIRST_S);
+    }
+    int menus = rt_patch_set("menus");
+    if (!step_word && rt_patch_enabled(menus)) {
+        menu_ratio = (float *)rt_patch_page();
+        *menu_ratio = 1.0f;
     }
     frame_limit_live();
     rt_log("frame rate: %s", step_word ? "real-time step (5-frame average of display intervals, at most 1/15 s)"
@@ -256,7 +266,15 @@ static int cutscene(void) {
     uint64_t obj = 0;
     uint32_t flags = 0;
     memcpy(&obj, (uint8_t *)rt_patch_page() + 0x70, 8);
-    return obj && plat_mem_read(obj + 0x1fc, &flags, 4) && (flags & 4);
+    if (obj && plat_mem_read(obj + 0x1fc, &flags, 4) && (flags & 4)) return 1;
+    // A story event playing: the play report's object (*[*main+0x1b4d688], read in main+0x325708, as Lucky7's
+    // runtime/hle/xc2.c xc3_event_tour reads it) holds the event's id at +0x1e0 until the event ends. Events between
+    // cutscenes (fades, staged moves) step without the fixed-step flag; at 120 fps the end of event 10005 waited for
+    // minutes and went on at once at 30.
+    uint64_t rep = 0;
+    uint32_t id = 0;
+    return plat_mem_read(MOD_MAIN_BASE + 0x1b4d688, &rep, 8) && rep && plat_mem_read(rep, &rep, 8) && rep &&
+           plat_mem_read(rep + 0x1e0, &id, 4) && id;
 }
 
 void frame_step_present(uint64_t display_ns, int interval) {
@@ -265,7 +283,7 @@ void frame_step_present(uint64_t display_ns, int interval) {
     if (cut != cut_now) {
         cut_now = cut;
         sample_count = sample_next = 0;   // the average starts again at the new rate
-        rt_log("frame rate: %s", cut ? "cutscene or title menu, 30 fps" : "play, the limit again");
+        rt_log("frame rate: %s", cut ? "cutscene, story event or title menu, 30 fps" : "play, the limit again");
     }
     if (vsyncs_word) vsyncs_store();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
@@ -283,6 +301,12 @@ void frame_step_present(uint64_t display_ns, int interval) {
             step = sum / sample_count;
             step_store((float)step);
         }
+    }
+    if (menu_ratio) {
+        float r = (interval > 0 ? interval : 1) * 0.5f;
+        uint32_t w;
+        memcpy(&w, &r, 4);
+        __atomic_store_n((uint32_t *)menu_ratio, w, __ATOMIC_RELAXED);
     }
     last_ns = display_ns;
     // The game clock of untimed script lines: what the game stepped this frame, the patch page's step with the
