@@ -472,6 +472,9 @@ NVN_API(nvnQueueFenceSync) {
     s->fence = nvn_fence_last();
 }
 // Syncs a command buffer fenced in the submit being replayed: the submit gives them its fence value once it has one.
+// The replay thread (XC3_REPLAY_ASYNC) gives them the value of the submit it replayed, right after replaying it: the
+// game thread's next submit came too late, after the replay of several queued submits during a load had registered
+// more than 256, and gave them a later submit's value.
 static sync_t *replayed_syncs[256];
 static int replayed_sync_count;
 static PlatMutex replayed_sync_lock = PLAT_MUTEX_INIT;
@@ -481,7 +484,7 @@ void nvn_fence_sync_replayed(sync_t *s) {
     replayed_syncs[replayed_sync_count++] = s;
     plat_mutex_unlock(&replayed_sync_lock);
 }
-static void replayed_syncs_fence(uint64_t f) {
+void nvn_replayed_syncs_fence(uint64_t f) {
     plat_mutex_lock(&replayed_sync_lock);
     for (int i = 0; i < replayed_sync_count; i++) {
         replayed_syncs[i]->fence = f;
@@ -630,7 +633,7 @@ NVN_API(nvnQueueSubmitCommands) {
         nvn_submit_prepare(h, n);
         f = gfx_backend()->submit(h, n);
     }
-    replayed_syncs_fence(f);
+    if (!gfx_replay_async()) nvn_replayed_syncs_fence(f);   // the replay thread does it (vk_backend.c replay_main)
     uint64_t prev = __atomic_load_n(&last_fence, __ATOMIC_RELAXED);
     while (f > prev && !__atomic_compare_exchange_n(&last_fence, &prev, f, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
     __atomic_store_n(&lod_fence[no % LOD_RING], f, __ATOMIC_RELAXED);
