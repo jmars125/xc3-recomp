@@ -1,7 +1,7 @@
 """Prepare the default variant of every game shader for a build, once, before play.
 
 tools/ard_shaders.py finds every shader in the game's .ard archives and the add-on content. Each shader gets its default
-variant: every texture slot a 2D texture, float vertex inputs and colour outputs. tools/data/shader-variants-xc3-2.2.1.bin
+variant: every texture slot a 2D texture, float vertex inputs and colour outputs. tools/data/shader-variants-xc3-2.2.1.bin.gz
 adds the variants met in play (a record file of runtime/gfx_shader.c: code hashes and bind-state answers, no game code);
 the translation adds those it can derive from each shader (gfx_shader.c derive_variants); --list adds the variants of a
 MacNativeGames-format shader list. The result goes next to the build's
@@ -13,7 +13,7 @@ xc3.exe in the record layouts of runtime/gfx_shader.c ("answers met in play"):
 Then it runs `xc3.exe --prepare-shaders`, which translates every record into shader-prepared.bin (one record per variant,
 in priority order) and builds every variant's stage library or compute pipeline once, so the GPU driver's own disk cache
 holds them (vk_pipeline.c "stage library prebuild"). The seed files are deleted after a successful run, and
-tools/pipeline_list.py install adds the pipelines met in play (tools/data/pipeline-keys-xc3-2.2.1.bin) to the build's
+tools/pipeline_list.py install adds the pipelines met in play (tools/data/pipeline-keys-xc3-2.2.1.bin.gz) to the build's
 pipeline-keys.bin, which the first start builds.
 
 Game-derived output stays in the build directory (ignored). Needs Python 3.14 (compression.zstd), so run it in .venv-py314:
@@ -23,6 +23,7 @@ Game-derived output stays in the build directory (ignored). Needs Python 3.14 (c
 --root is a folder with romfs/ and aoc/, as an install folder or build/extracted/<version> has them.
 """
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -51,7 +52,7 @@ TYPES = {'float': 0, 'sint': 1, 'uint': 2}
 DEFAULT = {'tex': {str(slot): '2d' for slot in range(32)}}   # answers outside a shader's use mask are dropped
 CONTROL = 0x880
 ANS_REC = 4 + 32 + 32 + 147 + 1
-PLAYED = ROOT / 'tools' / 'data' / 'shader-variants-xc3-2.2.1.bin'
+PLAYED = ROOT / 'tools' / 'data' / 'shader-variants-xc3-2.2.1.bin.gz'
 
 
 def parse_list(text):
@@ -147,7 +148,7 @@ def main():
         assert len(rec) == ANS_REC
         recs.append((prio.get(key, 2), rec))
     known = {h for h, _ in progs.values()}
-    played = PLAYED.read_bytes() if PLAYED.is_file() else b''
+    played = gzip.decompress(PLAYED.read_bytes()) if PLAYED.is_file() else b''
     n_played = 0
     for i in range(16, len(played) - ANS_REC + 1, ANS_REC):
         r = played[i:i + ANS_REC]

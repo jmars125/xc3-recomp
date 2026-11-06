@@ -6,10 +6,11 @@ in shader-answers.bin, next to its pipeline cache (runtime/vk_pipeline.c "pipeli
 id, a variant record a shader's code hash and bind-state answers. Merged from map-jump tours (docs/controls.md) and
 played installs, they become
 
-    tools/data/pipeline-keys-xc3-2.2.1.bin     the pipelines, built at first start by the boot prewarm
-    tools/data/shader-variants-xc3-2.2.1.bin   the variants, translated at install by tools/prepare_shaders.py
+    tools/data/pipeline-keys-xc3-2.2.1.bin.gz     the pipelines, built at first start by the boot prewarm
+    tools/data/shader-variants-xc3-2.2.1.bin.gz   the variants, translated at install by tools/prepare_shaders.py
 
-so a new install meets the first visit of a region with its shaders translated and its pipelines built.
+so a new install meets the first visit of a region with its shaders translated and its pipelines built. Both are
+gzip-compressed (a fifth of their size: the records are mostly zero bytes).
 
     pipeline_list.py merge [--keys <pipeline-keys.bin>...] [--answers <shader-answers.bin>...]
     pipeline_list.py install <build directory>
@@ -21,28 +22,34 @@ otherwise is dropped by the prewarm ("dropped (shader neither cached nor stored)
 the list. Stdlib only.
 """
 import argparse
+import gzip
 import struct
 import sys
 from pathlib import Path
 
 DATA = Path(__file__).resolve().parent / 'data'
-KEYS = DATA / 'pipeline-keys-xc3-2.2.1.bin'
-VARIANTS = DATA / 'shader-variants-xc3-2.2.1.bin'
+KEYS = DATA / 'pipeline-keys-xc3-2.2.1.bin.gz'
+VARIANTS = DATA / 'shader-variants-xc3-2.2.1.bin.gz'
 KEYS_MAGIC, KEYS_VERSION, KEY_REC = b'XC3PKEY\0', 3, 432        # vk_pipeline.c KeysHeader, KEYS_VERSION, KeyRec
 ANS_MAGIC, ANS_VERSION, ANS_REC = b'XC3SANS\0', 1, 4 + 32 + 32 + 147 + 1   # gfx_shader.c RecHeader, ANS_VERSION, ANS_REC
 
 
 def read(path, magic, version, size):
-    """The records of a record file, [] when it is missing or has another header; a torn tail is cut off."""
+    """The records of a record file, plain or gzip-compressed, [] when it is missing or has another header; a torn tail
+    is cut off."""
     data = Path(path).read_bytes() if Path(path).is_file() else b''
+    if data[:2] == bytes((0x1F, 0x8B)):   # gzip
+        data = gzip.decompress(data)
     if len(data) < 16 or data[:8] != magic or struct.unpack_from('<II', data, 8) != (version, size):
         return []
     return [data[i:i + size] for i in range(16, len(data) - size + 1, size)]
 
 
 def write(path, magic, version, size, recs):
+    """Gzip-compressed when the name ends in .gz (mtime 0: the same records make the same bytes)."""
     tmp = Path(str(path) + '.tmp')
-    tmp.write_bytes(magic + struct.pack('<II', version, size) + b''.join(recs))
+    data = magic + struct.pack('<II', version, size) + b''.join(recs)
+    tmp.write_bytes(gzip.compress(data, 9, mtime=0) if str(path).endswith('.gz') else data)
     tmp.replace(path)
 
 

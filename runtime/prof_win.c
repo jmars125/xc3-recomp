@@ -15,7 +15,8 @@
 // thread is in a long kernel call, is written as `tstall <tid> <ms into the window> <ms stopping> <rip>...` with the
 // chain where the thread stopped) and, after a present at least <ms> after the previous one, writes
 // that interval's samples (plus the 20 ms before) to <XC3_PROFILE>.f<frame>: the profile format, one `stack 1` line per
-// sample, and `tstack <tid> <ms into the window> <rip>...` lines that keep the thread and the time. At most 64 dumps.
+// sample, and `tstack <tid> <ms into the window> <rip>...` lines that keep the thread and the time. At most 64 dumps,
+// none before present XC3_PROFILE_SLOW_FROM (the title runs at 30 fps, and every frame of it would be one).
 #include <windows.h>
 #include <psapi.h>
 #include <tlhelp32.h>
@@ -75,6 +76,7 @@ static uint64_t ring_n;
 static Sample stalls[STALL_RING];   // t: when the stop began; rip[PROF_DEPTH - 1] holds the stop's ns
 static uint64_t stall_n;
 static uint64_t slow_ns;            // XC3_PROFILE_SLOW in ns, 0 off
+static uint64_t slow_from;          // XC3_PROFILE_SLOW_FROM: no dump before this present (the title and a load at 30 fps)
 static volatile LONG64 dump_lo, dump_hi, dump_frame;   // the render thread asks for a window, the sampler writes it
 
 static void count_rip(uint64_t rip) {
@@ -339,6 +341,8 @@ int prof_sampler_start(void) {
     const char *ch = cfg_get("XC3_PROFILE_CHAINS");
     const char *sl = cfg_get("XC3_PROFILE_SLOW");
     slow_ns = sl && atoi(sl) > 0 ? (uint64_t)atoi(sl) * 1000000ull : 0;
+    const char *sf = cfg_get("XC3_PROFILE_SLOW_FROM");
+    slow_from = sf ? strtoull(sf, NULL, 10) : 0;
     chains = only_render || only_main || slow_ns || (ch && *ch && strcmp(ch, "0"));
     const char *fr = cfg_get("XC3_PROFILE_FRAMES");
     double wl, wh;
@@ -363,7 +367,7 @@ int prof_sampler_start(void) {
 // dump of a present at least slow_ns after the previous one (d 0 on the first present).
 void prof_sampler_frame(uint64_t frame, uint64_t now, uint64_t d) {
     cur_frame = frame;
-    if (slow_ns && d >= slow_ns && !dump_hi) {
+    if (slow_ns && d >= slow_ns && frame >= slow_from && !dump_hi) {
         dump_lo = (LONG64)(now - d - 20000000ull);
         dump_frame = (LONG64)frame;
         InterlockedExchange64(&dump_hi, (LONG64)now);

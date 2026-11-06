@@ -57,6 +57,7 @@ static void present_main(void *arg) {
         busy = 1;
         plat_cond_broadcast(&pcv);
         plat_mutex_unlock(&pl);
+        uint64_t tb = kern_now_ns();
         if (flight_on) vk_thumbs_frame(j.frame);
         vk_present_blit(j.image, VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
         uint64_t f = vk_sync_submit(NULL, 0);   // a timeline value after the blit: deferred destruction waits for the blit too
@@ -71,13 +72,17 @@ static void present_main(void *arg) {
         wait_until(j.at);
         uint64_t t1 = kern_now_ns();
         vk_present_flip();
+        uint64_t t2 = kern_now_ns();
         // XC3_TRACE=present: one line per present: the host present's interval, the interval of the game's present
-        // calls (when the host present went out before back-edge pacing), the wait and how far past its target it went
+        // calls (when the host present went out before back-edge pacing), the wait, how far past its target it went,
+        // and the time the blit (with its fence wait and image acquire) and the host present call took
         if (rt_trace & RT_TRACE_PRESENT)
-            rt_log("present: frame %llu interval %.3f ms, game %.3f ms, waited %.3f ms, %.3f ms past target",
+            rt_log("present: frame %llu interval %.3f ms, game %.3f ms, waited %.3f ms, %.3f ms past target, taken %.3f ms "
+                   "after the game's present, blit %.3f ms, flip %.3f ms",
                    (unsigned long long)j.frame, last ? (t1 - last) / 1e6 : 0.0,
                    last_queued ? (j.queued - last_queued) / 1e6 : 0.0, (t1 - t0) / 1e6,
-                   j.at && t1 > j.at ? (t1 - j.at) / 1e6 : 0.0);
+                   j.at && t1 > j.at ? (t1 - j.at) / 1e6 : 0.0,
+                   j.queued && tb > j.queued ? (tb - j.queued) / 1e6 : 0.0, (t0 - tb) / 1e6, (t2 - t1) / 1e6);
         last = t1;
         last_queued = j.queued;
         vk_pipeline_autosave();   // starts the autosave thread once
