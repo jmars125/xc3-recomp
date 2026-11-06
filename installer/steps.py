@@ -749,8 +749,8 @@ class Prepare(Step):
         layout = ctx.layout
         return fingerprint('prepare-6', ctx.keys['compile'], ctx.keys['dlc'], layout.xlate,
                            layout.xlate.with_suffix('.id'), layout.tools / 'prepare_shaders.py',
-                           layout.tools / 'ard_shaders.py', layout.tools / 'data' / 'shader-variants-xc3-2.2.1.bin',
-                           layout.tools / 'pipeline_list.py', layout.tools / 'data' / 'pipeline-keys-xc3-2.2.1.bin')
+                           layout.tools / 'ard_shaders.py', layout.tools / 'data' / 'shader-variants-xc3-2.2.1.bin.gz',
+                           layout.tools / 'pipeline_list.py', layout.tools / 'data' / 'pipeline-keys-xc3-2.2.1.bin.gz')
 
     def current(self, ctx, record):
         xlate = ctx.dest / XLATE

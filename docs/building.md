@@ -98,6 +98,9 @@ From the repository root, in PowerShell. Every step that depends on the game ver
    ```
 
    Without this step the first launch compiles shaders and pipelines during play and stutters until the caches fill.
+   The step also appends the shipped pipeline list (`tools/data/pipeline-keys-xc3-2.2.1.bin.gz`, recorded by map-jump
+   tours, [controls.md](controls.md)) to the build's `pipeline-keys.bin`, so the first start builds those pipelines
+   at boot and first visits do not stop for them.
    The AMD driver keeps its pipeline cache per exe path and holds a limited amount: preparing another build folder can
    evict this one's. `xc3.exe --warm-shaders` rebuilds it from the shader cache.
 
