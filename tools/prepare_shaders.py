@@ -12,7 +12,9 @@ xc3.exe in the record layouts of runtime/gfx_shader.c ("answers met in play"):
 
 Then it runs `xc3.exe --prepare-shaders`, which translates every record into shader-prepared.bin (one record per variant,
 in priority order) and builds every variant's stage library or compute pipeline once, so the GPU driver's own disk cache
-holds them (vk_pipeline.c "stage library prebuild"). The seed files are deleted after a successful run.
+holds them (vk_pipeline.c "stage library prebuild"). The seed files are deleted after a successful run, and
+tools/pipeline_list.py install adds the pipelines met in play (tools/data/pipeline-keys-xc3-2.2.1.bin) to the build's
+pipeline-keys.bin, which the first start builds.
 
 Game-derived output stays in the build directory (ignored). Needs Python 3.14 (compression.zstd), so run it in .venv-py314:
 
@@ -35,6 +37,7 @@ while not (ROOT / 'tools' / 'ard_shaders.py').is_file() and ROOT != ROOT.parent:
     ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT / 'tools'))
 from ard_shaders import inventory  # noqa: E402
+import pipeline_list  # noqa: E402
 
 STAGES = {'vs': 0, 'gs': 3, 'ps': 4, 'cs': 5}              # runtime/gfx.h GFX_STAGE_*
 TEX = [None, '1d', '1darray', 'buffer', '2d', '2darray', '2dms', '2dmsarray', '3d', 'cube', 'cubearray']
@@ -175,6 +178,7 @@ def main():
     if not r.returncode:
         (out / 'seed-programs.bin').unlink()
         (out / 'seed-answers.bin').unlink()
+        pipeline_list.install(out)   # the pipelines met in play, built by the first start's prewarm
     return r.returncode
 
 

@@ -72,12 +72,16 @@ static uint32_t event_playing(void) {
     return rep ? *(volatile uint32_t *)(uintptr_t)(rep + 0x1e0) : 0;
 }
 
-// On the title, in a load, before the world is drawn, or in a story event.
+static int jumped;   // a tour jump has been made
+
+// On the title, in a load, before the world is drawn, or in a story event. The world-shown word guards the title and
+// the first load only: after a tour jump it stays 0 with the field on screen (Colony 9, line 0 from a save), and the
+// tour waited there for good.
 static int world_busy(const uint8_t *st) {
     if (!st) return 1;
     uint32_t word;
     memcpy(&word, st + 0xe8, 4);
-    return st[0xea] || (word & 3) != 3 || !*(volatile uint32_t *)(uintptr_t)(MOD_MAIN_BASE + WORLD_SHOWN) ||
+    return st[0xea] || (word & 3) != 3 || (!jumped && !*(volatile uint32_t *)(uintptr_t)(MOD_MAIN_BASE + WORLD_SHOWN)) ||
            event_playing();
 }
 
@@ -116,6 +120,7 @@ static void tour_tick(Cpu *c) {
         memcpy(req, w, sizeof w);
         rt_log("tour: line %u, jump %u to map %u at frame %llu", idx, ids[idx], maps[idx], (unsigned long long)frame);
         rt_call(c, MOD_MAIN_BASE + FN_JUMP, 2, self + 0x208, (uint64_t)(uintptr_t)req);
+        jumped = 1;
         t0 = now, phase = 2;
     } else if (phase == 2) {
         const uint8_t *st = world_state(c, self);
