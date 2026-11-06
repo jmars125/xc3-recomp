@@ -23,6 +23,7 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - Keyboard, mouse and gamepad
 - 60 fps and above (`fps_limit` up to 360 or the display's rate)
 - Any game resolution and aspect ratio, including ultrawide (`output_res` in `xc3.ini`)
+- Upscaling and anti-aliasing (`upscaler` in `xc3.ini`, or F1): NVIDIA DLSS and DLAA on RTX cards, AMD FSR 3 on any GPU, each in place of the game's own temporal reconstruction, with `render_scale` setting the share of the resolution the 3D scene draws in; FSR 1 for a window larger than the game resolution. `python tools/fetch_upscalers.py <folder of xc3.exe>` puts the NVIDIA and AMD libraries next to `xc3.exe`
 - RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
 
 ## Planned
@@ -54,7 +55,7 @@ XC3 Recomp builds on the projects below. What was taken from each, with its lice
 - [Ryujinx](https://github.com/Ryujinx/Ryujinx)
 - [deko3d](https://github.com/devkitPro/deko3d)
 - [hactool](https://github.com/SciresM/hactool)
-- [SDL 3](https://libsdl.org), [Dear ImGui](https://github.com/ocornut/imgui), [AMD FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR), [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator), [libopus](https://opus-codec.org), [libvpx](https://chromium.googlesource.com/webm/libvpx), [Zstandard](https://github.com/facebook/zstd)
+- [SDL 3](https://libsdl.org), [Dear ImGui](https://github.com/ocornut/imgui), [AMD FSR 1](https://github.com/GPUOpen-Effects/FidelityFX-FSR), [AMD FidelityFX SDK (FSR 3)](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), [NVIDIA Streamline (DLSS)](https://github.com/NVIDIA-RTX/Streamline), [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator), [libopus](https://opus-codec.org), [libvpx](https://chromium.googlesource.com/webm/libvpx), [Zstandard](https://github.com/facebook/zstd)
 - The [60FPS mod for XC3 1.0.1](https://github.com/Fl4sh9174/Switch-Emulator-Ultrawide-FPS-Mods) by Fl4sh_ and StevensND
 - [Switchbrew](https://switchbrew.org) and the Switch homebrew community
 

@@ -79,12 +79,22 @@ static void scene_scale(void) {
         R.scale = 0;
         return;
     }
-    if (R.scale >= 100) R.scale = 0;
+    // DLAA (vk_tup.c) wants the scene at the full game resolution, which only the scaled path gives: the game's own
+    // path draws it at half the size and reconstructs it 2x2. So upscaler = dlaa switches the set on at factor 1.
+    const char *up = cfg_value("XC3_UPSCALER");
+    if (up && !strcmp(up, "dlaa")) {
+        if (R.scale && R.scale < 100) rt_log("resolution: upscaler = dlaa draws the scene whole; render_scale %d %% left out", R.scale);
+        R.scale = 100;
+    } else if (R.scale >= 100) {
+        R.scale = 0;
+    }
     float f[2] = {R.scale / 100.0f, R.scale / 100.0f};
     memcpy(page + 0x58, f, sizeof f);
     rt_patch_switch(set, R.scale > 0);
     if (R.scale) rt_log("resolution: 3D render scale %d %%", R.scale);
 }
+
+int res_scene_on(void) { return R.scale > 0; }
 
 // World positions projected for the narrowed interface (patches-upd.txt, uifit) spread by the inverse of res_ui_fit.
 static void ui_fit_init(void) {

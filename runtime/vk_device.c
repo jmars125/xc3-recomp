@@ -9,6 +9,7 @@
 #include "cfg.h"
 #include "host.h"
 #include "vk.h"
+#include "vk_sl.h"
 #include "platform/platform.h"
 
 static VkCtx g_vk;
@@ -54,9 +55,16 @@ static void mesa_cache_beside_exe(void) {
     plat_setenv("MESA_SHADER_CACHE_DIR", dir);
 }
 
+// upscaler = dlss or dlaa: Streamline (vk_sl.cpp) starts before the instance, which then has the extensions DLSS asks
+// for. Switching to DLSS in the menu later takes a restart.
+static int wants_dlss(void) {
+    const char *u = cfg_value("XC3_UPSCALER");
+    return u && (!strcmp(u, "dlss") || !strcmp(u, "dlaa"));
+}
+
 static int create_instance(void) {
     mesa_cache_beside_exe();
-    const char *ext[8];
+    const char *ext[24];
     uint32_t n_ext = (uint32_t)gfx_window_vk_extensions(ext, 7);
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     int validate = cfg_bool("XC3_VK_VALIDATION");
@@ -65,6 +73,15 @@ static int create_instance(void) {
         validate = 0;
     }
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    if (wants_dlss() && vk_sl_start()) {
+        const char *sl[16];
+        uint32_t n = vk_sl_instance_exts(sl, 16);
+        for (uint32_t i = 0; i < n && n_ext < 23; i++) {
+            int dup = 0;
+            for (uint32_t j = 0; j < n_ext; j++) dup |= !strcmp(ext[j], sl[i]);
+            if (!dup) ext[n_ext++] = sl[i];
+        }
+    }
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .pApplicationName = "XC3 Recomp",
                              .pEngineName = "XC3 Recomp", .apiVersion = VK_API_VERSION_1_3};
     VkInstanceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, .pApplicationInfo = &app,
@@ -249,7 +266,7 @@ static int create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[28];
+    const char *ext[44];
     uint32_t n_ext = 0;
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext; i++) ext[n_ext++] = k_required_ext[i];
 
@@ -348,11 +365,33 @@ static int create_device(void) {
                                           .queueFamilyIndex = g_vk.xfer_family, .queueCount = 1, .pQueuePriorities = &prio};
         nqi = 2;
     }
+    // The extensions DLSS asks for (vk_sl_start), those the driver has; Streamline hears whether all were there.
+    int sl_exts_ok = 1;
+    {
+        const char *sl[16];
+        uint32_t n = vk_sl_device_exts(sl, 16), ne2 = 0;
+        vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne2, NULL);
+        VkExtensionProperties *ep2 = calloc(ne2 ? ne2 : 1, sizeof *ep2);
+        vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne2, ep2);
+        for (uint32_t i = 0; i < n; i++) {
+            int dup = 0;
+            for (uint32_t j = 0; j < n_ext; j++) dup |= !strcmp(ext[j], sl[i]);
+            if (dup) continue;
+            if (!has_ext(ep2, ne2, sl[i]) || n_ext >= 44) {
+                rt_log("vk: DLSS wants device extension %s, which %s lacks", sl[i], g_vk.props.deviceName);
+                sl_exts_ok = 0;
+                continue;
+            }
+            ext[n_ext++] = sl[i];
+        }
+        free(ep2);
+    }
     VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &c->f2, .queueCreateInfoCount = nqi,
                              .pQueueCreateInfos = qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
     VkResult r = vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.device);
     free(c);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateDevice failed (%d)", (int)r); return 0; }
+    vk_sl_device(g_vk.instance, g_vk.phys, g_vk.device, g_vk.gfx_family, sl_exts_ok);
     vkGetDeviceQueue(g_vk.device, g_vk.gfx_family, 0, &g_vk.gfx_queue);
     if (g_vk.xfer_family != g_vk.gfx_family) vkGetDeviceQueue(g_vk.device, g_vk.xfer_family, 0, &g_vk.xfer_queue);
     else { g_vk.xfer_queue = g_vk.gfx_queue; g_vk.xfer_shared = 1; }
@@ -394,6 +433,7 @@ static void destroy_all(void) {
     if (g_vk.vma) vmaDestroyAllocator(g_vk.vma);
     for (int i = 0; i < n_ballast; i++) vkFreeMemory(g_vk.device, ballast[i], NULL);
     n_ballast = 0;
+    vk_sl_shutdown();   // before the device and the instance it holds
     if (g_vk.device) vkDestroyDevice(g_vk.device, NULL);
     if (g_vk.messenger) {
         PFN_vkDestroyDebugUtilsMessengerEXT f =
