@@ -38,8 +38,16 @@
 #include "cfg.h"
 #include "host.h"
 #include "platform/platform.h"
+// ffx_api.h marks its entry points __declspec(dllexport) on every target; only the function pointer types are used
+// here (the DLL is loaded at run time), so elsewhere the attribute is dropped for the include.
+#ifndef _WIN32
+#define __declspec(x)
+#endif
 #include "third_party/ffx_api/ffx_api.h"
 #include "third_party/ffx_api/ffx_upscale.h"
+#ifndef _WIN32
+#undef __declspec
+#endif
 #include "tup_prep_spv.h"
 #include "vk_rec.h"
 #include "vk_sl.h"
