@@ -25,6 +25,7 @@
 #include "fs.h"
 #include "host.h"
 #include "platform/platform.h"
+#include "prompts.h"
 #include "romfs_path.h"
 
 #define XC3_APPLICATION_ID 0x010074f013262000ull   // XC3 (the name stays to keep the diff against XC3 Recomp small)
@@ -39,7 +40,8 @@ enum { M_FREE, M_SAVE, M_TEMP, M_CACHE, M_SAVE_RO, M_AOC };   // M_SAVE: the wor
                                                               // save; M_AOC: add-on content (read-only)
 
 typedef struct { int kind; char name[32]; char root[1024]; } Mount;
-typedef struct { PlatFile *h; int mode, save; } File;   // h NULL = free; save: on a save-data mount
+typedef struct { PlatFile *h; int mode, save; uint64_t aoc; } File;   // h NULL = free; save: on a save-data mount;
+                                                                       // aoc: an add-on file's key for prompts.c, or 0
 typedef struct { char *name; int kind; uint64_t size; } Listed;
 typedef struct { Listed *e; int n, next, mode, used; } Dir;   // the directory's entries at open; used 0 = free
 
@@ -732,13 +734,20 @@ static uint32_t commit(const char *name) {
 }
 
 // ---- files
+static File *file_key(uint64_t h, PlatFile **fh, int *mode, uint64_t *aoc);
+
 static File *file_of(uint64_t h, PlatFile **fh, int *mode) {
+    return file_key(h, fh, mode, NULL);
+}
+
+static File *file_key(uint64_t h, PlatFile **fh, int *mode, uint64_t *aoc) {
     if (h < FILE_BASE || h >= FILE_BASE + NFILES) return NULL;
     plat_mutex_lock_shared(&lock);
     File *f = &files[h - FILE_BASE];
     PlatFile *v = f->h;
     if (fh) *fh = f->h;
     if (mode) *mode = f->mode;
+    if (aoc) *aoc = f->aoc;
     plat_mutex_unlock_shared(&lock);
     return v ? f : NULL;
 }
@@ -766,10 +775,15 @@ static uint32_t open_file(uint64_t *out, const char *path, int mode) {
     int err = 0;
     PlatFile *f = plat_fs_open(p, (mode & FS_OPEN_WRITE) != 0, &err);
     if (!f) return fs_result(err);
+    // Add-on archives (DLC 3 brings its own battle HUD, mnu417_cont01) get prompts.c's read hooks, as RomFS files do;
+    // the key tells the files apart and has the top bit set, apart from the RomFS image offsets.
+    uint64_t aoc = 0;
+    PlatFileId id;
+    if (kind == M_AOC && plat_file_id(f, &id)) aoc = 1ull << 63 | ((id.volume * 0x9E3779B97F4A7C15ull) ^ id.file_id) >> 1;
     plat_mutex_lock(&lock);
     for (int i = 0; i < NFILES; i++)
         if (!files[i].h) {
-            files[i] = (File){f, mode, save_writer};
+            files[i] = (File){f, mode, save_writer, aoc};
             *out = FILE_BASE + (uint64_t)i;
             plat_mutex_unlock(&lock);
             if (save_writer) {
@@ -782,8 +796,8 @@ static uint32_t open_file(uint64_t *out, const char *path, int mode) {
     rt_fatal("fs: host file handle table full (%d)", NFILES);
 }
 
-static uint32_t read_file(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uint64_t size) {
-    if (romfs_handle(h)) return romfs_read(out, h, offset, buffer, size);
+// A host file read without prompts.c's hooks.
+static uint32_t read_plain(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uint64_t size) {
     PlatFile *f;
     int mode;
     if (!out || offset < 0 || (!buffer && size) || !file_of(h, &f, &mode)) return FS_R_INVALID_ARGUMENT;
@@ -798,6 +812,17 @@ static uint32_t read_file(uint64_t *out, uint64_t h, int64_t offset, void *buffe
     }
     *out = done;
     return 0;
+}
+
+static uint32_t read_file(uint64_t *out, uint64_t h, int64_t offset, void *buffer, uint64_t size) {
+    if (romfs_handle(h)) return romfs_read(out, h, offset, buffer, size);
+    uint64_t aoc = 0;
+    if (out && offset >= 0 && buffer && file_key(h, NULL, NULL, &aoc) && aoc &&
+        prompts_payload(aoc, offset, buffer, size, out))
+        return 0;
+    uint32_t r = read_plain(out, h, offset, buffer, size);
+    if (!r && aoc) prompts_header(h, aoc, offset, buffer, *out, read_plain);
+    return r;
 }
 
 static uint32_t read_exact(uint64_t h, int64_t off, void *buf, uint64_t size) {
