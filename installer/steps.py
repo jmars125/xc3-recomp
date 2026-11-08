@@ -669,9 +669,8 @@ class Compile(Step):
     def key(self, ctx):
         layout = ctx.layout
         clang = subprocess.run([str(layout.clang), '--version'], capture_output=True, text=True).stdout
-        tools = [layout.tools / n for n in ('build_game.py', 'build_shaders.py', 'romfs_index.py', 'check_content.py',
-                                            'game_icon.py')]
-        return fingerprint('compile-2', ctx.keys['lift'], layout.runtime, layout.runtime_lib, layout.deps or 'system',
+        tools = [layout.tools / n for n in ('build_game.py', 'build_shaders.py', 'romfs_index.py', 'check_content.py')]
+        return fingerprint('compile-3', ctx.keys['lift'], layout.runtime, layout.runtime_lib, layout.deps or 'system',
                            layout.sysroot or 'host', *tools, clang, *[d.name for d in layout.dlls])
 
     def current(self, ctx, record):
@@ -679,8 +678,6 @@ class Compile(Step):
         if not exe.is_file() or not (ctx.dest / 'romfs-index.bin').is_file():
             return False
         if not all((ctx.dest / d.name).is_file() for d in ctx.layout.dlls):
-            return False
-        if os.name == 'nt' and not record.get('game_icon'):   # an install that could not read the icon tries again
             return False
         return file_sha256(exe) == record.get('exe_sha256')
 
@@ -698,9 +695,7 @@ class Compile(Step):
                 rep.progress('compile', 'link', force=True)
 
         rep.progress('compile', 'compile', force=True)
-        icon = self.game_icon(ctx)
         code, log = run_tool(ctx, 'compile', layout.tools / 'build_game.py', [
-            *(['--icon', icon] if icon else []),
             '--gen', ctx.temp / 'gen', '--out', build, '--toolchain', layout.llvm,
             *(['--deps', layout.deps] if layout.deps else []), *(['--sysroot', layout.sysroot] if layout.sysroot else []),
             '--runtime', layout.runtime, '--runtime-lib', layout.runtime_lib, '--ninja', layout.ninja,
@@ -717,20 +712,7 @@ class Compile(Step):
         replace_file(build / 'romfs-index.bin', dest / 'romfs-index.bin')
         for dll in layout.dlls:
             replace_file(dll, dest / dll.name)
-        return {'exe_sha256': file_sha256(dest / GAME_EXE), 'game_icon': icon is not None}
-
-    @staticmethod
-    def game_icon(ctx):
-        """The game's own icon for xc3.exe, read from the player's files (tools/game_icon.py), or None: then xc3.exe
-        keeps the repository's mark, and the log says why."""
-        if os.name != 'nt':
-            return None
-        o = ctx.options
-        icon = ctx.temp / 'icon' / 'xc3-game.ico'
-        remove(icon)
-        code, _ = run_tool(ctx, 'compile', ctx.layout.tools / 'game_icon.py', [
-            '--base', o.base, *(['--update', o.update] if o.update else []), '--keys', o.keys, '--out', icon])
-        return icon if code == 0 and icon.is_file() else None
+        return {'exe_sha256': file_sha256(dest / GAME_EXE)}
 
 
 # ---- 5. prepare
@@ -811,7 +793,7 @@ class Cleanup(Step):
         rep.progress('cleanup', 'temp', force=True)
         for stale in dest.glob('update-merge-*'):
             remove(stale)
-        for name in ('gen', 'build', 'check', 'dlc', 'icon'):   # icon: the game's artwork (Compile.game_icon)
+        for name in ('gen', 'build', 'check', 'dlc', 'icon'):   # icon: the game's artwork older releases put on xc3.exe
             remove(ctx.temp / name)
         return {}
 

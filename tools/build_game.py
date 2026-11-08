@@ -138,7 +138,7 @@ LLVM_LINK_LIBS = ['-lpsapi', '-lbcrypt', '-luser32', '-lgdi32', '-ldwmapi', '-lw
 DEFAULT_DEPS = ROOT / 'toolchain' / 'deps-mingw'
 # Runtime sources compiled per install, not in the library: romfs.c includes romfs_config.h, patches.c and ov_zstd.c
 # the patches.h of the player's game version (its patch page is the page after that version's main; ov_zstd.c's host
-# functions sit on it), and xc3.rc takes the icon --icon names (the game's own, tools/game_icon.py).
+# functions sit on it), and xc3.rc takes the icon --icon names (default runtime/xc3.ico, the repository's mark).
 INSTALL_SIDE = {'romfs.c', 'patches.c', 'ov_zstd.c', 'xc3.rc'}
 LIB_NAME = 'libxc3rt.a'
 AR = UCRT / 'llvm-ar.exe' if WIN else on_path('llvm-ar')
