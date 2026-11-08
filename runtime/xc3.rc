@@ -1,5 +1,5 @@
-/* The application manifest of xc3.exe (xc3.manifest) and its icon (xc3.ico, also the icon of XC3-Setup.exe and of
-   the installer window). tools/build_game.py compiles it with the runtime objects. It is not in libxc3rt.a: the
-   installer compiles it per install with the game's own icon in place of xc3.ico (build_game.py --icon). */
+/* The application manifest of xc3.exe (xc3.manifest) and its icon (xc3.ico, the repository's gold 3, also the icon
+   of XC3-Setup.exe and of the installer window). tools/build_game.py compiles it with the runtime objects. It is not
+   in libxc3rt.a: build_game.py --icon can name another icon. */
 1 24 "xc3.manifest"
 1 ICON "xc3.ico"
