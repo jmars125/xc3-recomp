@@ -174,8 +174,9 @@
 # rumble_triggers = 0
 # Which gamepad button is Switch A: nintendo (by position: east A, south B, west Y, north X), xbox (south A, east B,
 # west X, north Y, as an Xbox pad labels them; cross A on a PlayStation pad) or auto (nintendo for every pad: XC3 lays
-# out its art palette by button position). The bind_ lines below apply on top. Changes while the game runs take effect
-# at once.
+# out its art palette by button position). With xbox the battle palette is redrawn to match (talent art at the bottom,
+# B right, X left, Y top). The bind_ lines below apply on top. Changes while the game runs take effect at once; the
+# palette moves at the next start.
 # pad_layout = auto
 # Button prompts the game draws: switch (the game's own letters), xbox (Xbox letters), playstation (cross, circle,
 # square, triangle) or auto (by the controller's labels: PlayStation glyphs for a pad with a cross button, Xbox letters

@@ -4,7 +4,9 @@
 // from bf3.ard as an xbc1 container: first the 48-byte header (magic, compression, decompressed size, compressed size,
 // hash, a 28-byte name), then the compressed bytes. romfs_read hands both reads to prompts_read: the header gets the
 // size of a recompressed patched file and the read after it gets that file. The add-on mounts' loose copies of these
-// paths, which the game asks for first, do not exist.
+// paths, which the game asks for first, do not exist. The same hooks serve the button diamonds palette.c moves under
+// pad_layout = xbox, read from bf3.ard or from an add-on archive (fs_host.c, read_file: DLC 3 has its own battle HUD).
+// A patched file must not grow past its stored compressed size, which the game reads it with.
 //
 // The texture is the file's one Mibl (footer magic LBIM: data size, alignment, width, height, depth, view dimension,
 // format, mip count, version), BC7 (format 77) in Tegra block-linear layout, mips one after another. Changed cells are
@@ -26,6 +28,7 @@
 #include "input.h"
 #include "input_map.h"
 #include "platform/platform.h"
+#include "palette.h"
 #include "prompts.h"
 
 enum { GLYPH_X, GLYPH_Y, GLYPH_A, GLYPH_B, GLYPH_TRIANGLE, GLYPH_SQUARE, GLYPH_CROSS, GLYPH_CIRCLE, GLYPH_KEEP };
@@ -400,9 +403,21 @@ static int patch_atlas(uint8_t *file, size_t size, const int glyph[4]) {
 }
 
 // ---------------------------------------------------------------- the read hook
+// Files patched as the game reads them: the two glyph atlases (glyphs picked once, at the first read) and the button
+// diamonds of palette.c (moved while pad_layout is xbox, looked at on every read of the file's header, so a change of
+// layout in the menu shows the next time the game loads that layout). Each patched file is built once per container
+// and kept; a read of the header under the other choice gets the original size, and the payload read after it is
+// left alone.
 static const char *const atlases[] = {"icon_button.wilay", "icon_button_y.wilay"};
-typedef struct { uint64_t file, at; uint8_t *z; size_t zn; int failed; } Patched;   // file: RomFS id; at: header offset
-static Patched patched[2];
+enum { ATLASES = 2, MAX_PATCHED = 8 };
+typedef struct {
+    char name[29];
+    uint64_t file, at;   // file: RomFS id; at: header offset
+    uint8_t *z;
+    size_t zn;
+    int failed, live;    // live: the last header read got the patched size
+} Patched;
+static Patched patched[MAX_PATCHED];   // [0], [1]: the atlases
 static PlatMutex lock = PLAT_MUTEX_INIT;
 static int glyphs[4] = {GLYPH_KEEP, GLYPH_KEEP, GLYPH_KEEP, GLYPH_KEEP}, picked;
 
@@ -433,8 +448,8 @@ static int any_change(void) {
     return 0;
 }
 
-// Builds the patched container of atlas i from its header and the compressed bytes after it; 0 on any failure.
-static int build(int i, const uint8_t hdr[48], uint64_t handle, uint64_t file, int64_t offset,
+// Builds p's patched container from its header and the compressed bytes after it; 0 on any failure.
+static int build(Patched *p, int atlas, const uint8_t hdr[48], uint64_t handle, uint64_t file, int64_t offset,
                  uint32_t (*raw)(uint64_t *, uint64_t, int64_t, void *, uint64_t)) {
     uint32_t comp, dsize, csize;
     memcpy(&comp, hdr + 4, 4), memcpy(&dsize, hdr + 8, 4), memcpy(&csize, hdr + 12, 4);
@@ -442,34 +457,46 @@ static int build(int i, const uint8_t hdr[48], uint64_t handle, uint64_t file, i
     uint8_t *z = malloc(csize), *d = malloc(dsize);
     if (!z || !d) rt_fatal("prompts: out of memory");
     uint64_t got = 0;
-    int ok = !raw(&got, handle, offset + 48, z, csize) && got == csize && ZSTD_decompress(d, dsize, z, csize) == dsize &&
-             patch_atlas(d, dsize, glyphs);
+    int moved = 0,
+        ok = !raw(&got, handle, offset + 48, z, csize) && got == csize && ZSTD_decompress(d, dsize, z, csize) == dsize &&
+             (atlas ? patch_atlas(d, dsize, glyphs) : (moved = palette_patch(d, dsize, p->name)) > 0);
     free(z);
     if (ok) {
         size_t cap = ZSTD_compressBound(dsize);
         uint8_t *out = malloc(cap);
         if (!out) rt_fatal("prompts: out of memory");
-        size_t zn = ZSTD_compress(out, cap, d, dsize, 9);
-        if (ZSTD_isError(zn)) ok = 0, free(out);
-        else patched[i] = (Patched){file, (uint64_t)offset, out, zn, 0};
+        // A patched file must not grow: the game reads it with the archive index's compressed size and cuts a longer
+        // stream short, then crashes as the HUD loads (the glyph atlases under pad_layout = nintendo grew by 3%, the
+        // shortcut menu's layout by 4%). Stronger levels until it fits.
+        static const int levels[] = {9, 19, 22};
+        size_t zn = 0;
+        for (int l = 0; l < 3; l++) {
+            zn = ZSTD_compress(out, cap, d, dsize, levels[l]);
+            if (ZSTD_isError(zn) || zn <= csize) break;
+        }
+        if (ZSTD_isError(zn) || zn > csize) ok = 0, free(out);
+        else p->file = file, p->at = (uint64_t)offset, p->z = out, p->zn = zn;
     }
     free(d);
-    if (!ok) rt_log("prompts: %s left as it is (unexpected layout)", atlases[i]);
-    else rt_log("prompts: %s patched (%u -> %zu compressed bytes)", atlases[i], csize, patched[i].zn);
+    if (!ok) rt_log("%s: %s left as it is (unexpected layout, or it would not fit)", atlas ? "prompts" : "palette", p->name);
+    else if (atlas) rt_log("prompts: %s patched (%u -> %zu compressed bytes)", p->name, csize, p->zn);
+    else rt_log("palette: %s moved to the xbox layout (%d keys; %u -> %zu compressed bytes)", p->name, moved, csize, p->zn);
     return ok;
 }
 
 int prompts_payload(uint64_t file, int64_t offset, void *buffer, uint64_t size, uint64_t *out) {
     int served = 0;
     plat_mutex_lock(&lock);
-    for (int i = 0; i < 2 && !served; i++)
-        if (patched[i].z && patched[i].file == file && (uint64_t)offset == patched[i].at + 48) {
-            uint64_t n = size < patched[i].zn ? size : patched[i].zn;
-            memcpy(buffer, patched[i].z, n);
-            if (size > n) memset((uint8_t *)buffer + n, 0, size - n);
-            *out = size;
-            served = 1;
-        }
+    for (int i = 0; i < MAX_PATCHED && !served; i++) {
+        Patched *p = &patched[i];
+        if (!p->z || !p->live || p->file != file || (uint64_t)offset < p->at + 48 || (uint64_t)offset >= p->at + 48 + p->zn)
+            continue;
+        uint64_t from = (uint64_t)offset - p->at - 48, n = size < p->zn - from ? size : p->zn - from;
+        memcpy(buffer, p->z + from, n);
+        if (size > n) memset((uint8_t *)buffer + n, 0, size - n);
+        *out = size;
+        served = 1;
+    }
     plat_mutex_unlock(&lock);
     return served;
 }
@@ -478,23 +505,36 @@ void prompts_header(uint64_t handle, uint64_t file, int64_t offset, void *buffer
                     uint32_t (*raw)(uint64_t *, uint64_t, int64_t, void *, uint64_t)) {
     uint8_t *b = buffer;
     if (size != 48 || memcmp(b, "xbc1", 4)) return;
-    for (int i = 0; i < 2; i++) {
-        if (strncmp((const char *)b + 20, atlases[i], 28)) continue;
-        plat_mutex_lock(&lock);
-        pick();
-        Patched *p = &patched[i];
-        if (any_change() && !p->failed) {
+    char name[29] = {0};
+    memcpy(name, b + 20, 28);
+    int atlas = -1;
+    for (int i = 0; i < ATLASES; i++)
+        if (!strcmp(name, atlases[i])) atlas = i;
+    if (atlas < 0 && !palette_file(name)) return;
+    plat_mutex_lock(&lock);
+    Patched *p = NULL;
+    if (atlas >= 0) p = &patched[atlas];
+    for (int i = ATLASES; i < MAX_PATCHED && !p; i++)
+        if (!strcmp(patched[i].name, name) || !patched[i].name[0]) p = &patched[i];
+    if (p) {
+        if (!p->name[0]) memcpy(p->name, name, sizeof name);
+        int want;
+        if (atlas >= 0) pick(), want = any_change();
+        else want = input_pad_layout_pick(cfg_value("XC3_PAD_LAYOUT")) == PAD_LAYOUT_XBOX;
+        p->live = 0;
+        if (want && !p->failed) {
             if (!p->z || p->at != (uint64_t)offset || p->file != file) {
                 free(p->z);
-                *p = (Patched){0};
-                p->failed = !build(i, b, handle, file, offset, raw);
+                p->z = NULL, p->zn = 0;
+                p->failed = !build(p, atlas >= 0, b, handle, file, offset, raw);
             }
             if (p->z) {
                 uint32_t zn = (uint32_t)p->zn;
                 memcpy(b + 12, &zn, 4);
+                p->live = 1;
             }
         }
-        plat_mutex_unlock(&lock);
-        return;
+        if (atlas < 0) rt_log("palette: %s read with %s places", name, p->live ? "xbox" : "Switch");
     }
+    plat_mutex_unlock(&lock);
 }
