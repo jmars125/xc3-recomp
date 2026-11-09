@@ -10,6 +10,7 @@ Release (docs/installer.md "Release layout"), root = the unpacked folder:
     runtime/                libxc3rt.a, the headers, install-side sources (romfs.c, patches.c, ov_zstd.c) and the icon; runtime/deps/ holds
                             include/ + lib/ of Vulkan, SDL3, Opus, libvpx and VMA (build_game.py --deps)
     bin/                    xc3_xlate.exe (+ xc3_xlate.id), hactool.exe, ninja.exe, SDL3.dll, libopus-0.dll
+    bin/upscalers/          AMD FSR 3 and NVIDIA Streamline (DLSS, DLSS Frame Generation) DLLs (tools/fetch_upscalers.py)
     xc3.ini.example
     VERSION                 the release version, one line
     temp/                   the default temp folder (created)
@@ -96,9 +97,11 @@ def is_release(root):
 
 
 def release_dlls(root):
-    """The DLLs xc3.exe loads: SDL3 and Opus, and the C++ runtime of the llvm-mingw it is linked with."""
+    """The DLLs xc3.exe loads: SDL3 and Opus, the C++ runtime of the llvm-mingw it is linked with, and the upscaler and
+    frame generation libraries in bin/upscalers (none in a release from before they were bundled)."""
     return (root / 'bin' / 'SDL3.dll', root / 'bin' / 'libopus-0.dll',
-            *(root / 'llvm' / 'bin' / n for n in ('libc++.dll', 'libunwind.dll', 'libwinpthread-1.dll')))
+            *(root / 'llvm' / 'bin' / n for n in ('libc++.dll', 'libunwind.dll', 'libwinpthread-1.dll')),
+            *sorted((root / 'bin' / 'upscalers').glob('*.dll')))
 
 
 def release_layout(root):

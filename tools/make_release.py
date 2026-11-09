@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_content  # noqa: E402
+import fetch_upscalers  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MAIN_ROOT = (ROOT / 'build').resolve().parent   # build/, generated/, toolchain/ and refs/ are junctions in a worktree
@@ -89,6 +90,8 @@ PINS = {
             '44c81162337915afecda3185f66fd98268a54454580b2717080c9dfef57fe781'),
     'zstd': (MSYS2 + 'mingw-w64-ucrt-x86_64-zstd-1.5.7-2-any.pkg.tar.zst',   # static libzstd.a (runtime/resolution.c)
              'dbdb8427280046a2b41697780aa4c52983b708082b0da4755951dc3bea96ca89'),
+    # the upscaler and frame generation libraries (bundle_upscalers): the same pins as tools/fetch_upscalers.py
+    'streamline': fetch_upscalers.SL_ZIP,
 }
 # The component MSI inside the python.org installer that carries Tcl/Tk and tkinter (Burn names its payloads a0..a27).
 TCLTK_PAYLOAD = ('a12', 'ac87609db3f715404dd41a989c2f1706ea1512f3d86217f938d11c63af8eb505')
@@ -361,6 +364,19 @@ def collect_licenses(out):
         shutil.copy2(out / 'llvm' / name, lic / 'llvm-mingw-LICENSE.txt')
 
 
+def bundle_upscalers(out):
+    """bin/upscalers/: AMD's signed amd_fidelityfx_vk.dll (FSR 3) and NVIDIA's signed Streamline DLLs with the DLSS and
+    frame generation models (DLSS, DLAA, DLSS Frame Generation), pinned by tools/fetch_upscalers.py; the installer puts
+    them next to xc3.exe (installer/layout.py release_dlls). Their licences go to licenses/."""
+    d = out / 'bin' / 'upscalers'
+    d.mkdir(parents=True, exist_ok=True)
+    run([sys.executable, ROOT / 'tools' / 'fetch_upscalers.py', d, '--streamline-zip', fetch('streamline')])
+    lic = out / 'licenses'
+    lic.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / 'runtime' / 'third_party' / 'streamline' / 'LICENSE.txt', lic / 'Streamline-LICENSE.txt')
+    shutil.copy2(ROOT / 'runtime' / 'third_party' / 'ffx_api' / 'LICENSE.txt', lic / 'FidelityFX-SDK-LICENSE.txt')
+
+
 def take_prebuilt(out, src):
     """python/, llvm/, runtime/deps/, bin/ and licenses/ copied from the unpacked release src. The translator is renamed
     to xc3_xlate when src is the XCX or TotK Recomp release; build/xlate's, when there is one, is taken instead."""
@@ -581,6 +597,7 @@ def main():
         build_bin(out)
         build_deps(out)
     runtime_lib(out, llvm)
+    bundle_upscalers(out)
     build_sources(out)
     build_launcher(out, llvm)
     if not args.src:

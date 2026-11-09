@@ -20,6 +20,7 @@ The install folder (`main.c` `portable_paths()` reads this layout; it stays port
 ```
 <install folder>/
   xc3.exe, SDL3.dll, libopus-0.dll, xc3_xlate.exe
+  amd_fidelityfx_vk.dll, sl.*.dll, nvngx_*.dll, NvLowLatencyVk.dll   FSR 3, DLSS and frame generation (bin/upscalers)
   xc3.ini                       language; the other keys as commented defaults (xc3.ini.example)
   exefs/, romfs/                 extracted from the player's files
   profile/                       saves
@@ -100,6 +101,8 @@ recomp/, tools/       the lifter and the build, extraction and shader scripts th
 llvm/                 llvm-mingw, x86_64-only subset (Apache-2.0 with LLVM exception; mingw-w64 parts permissive)
 runtime/              libxc3rt.a and the headers the generated code and modules.c/romfs.c/patches.c include
 bin/                  xc3_xlate.exe, hactool.exe, SDL3.dll, libopus-0.dll, ninja.exe
+bin/upscalers/        AMD FSR 3 (MIT) and NVIDIA Streamline DLLs (MIT) with the DLSS and frame generation models (NVIDIA's
+                      SDK licences), fetched and hash-checked by tools/fetch_upscalers.py
 data/                 shader_list.tsv (MacNativeGames, MIT)
 THIRD_PARTY_NOTICES.md
 xc3.ini.example, VERSION  the default ini; the release string (the repository's VERSION plus the commit)
