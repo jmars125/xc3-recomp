@@ -148,6 +148,7 @@ typedef struct {
     int kind, n, has_crop, crop[4];
     uint64_t value, submit_no, at, queued;
     uint64_t *h;
+    void *snap;         // RI_SUBMIT: its uniform blocks as of the submit call (vk_usnap_take)
     const tex_t *tex;   // RI_RELEASE: a copy the item owns (the game may reuse the object's memory)
 } ReplayItem;
 #define RQ_CAP 1024   // a frame queues 1 submit and 1 present, and up to a few hundred releases
@@ -214,6 +215,7 @@ static void replay_main(void *arg) {
         plat_cond_broadcast(&rcv);
         plat_mutex_unlock(&rl);
         if (it.kind == RI_SUBMIT) {
+            if (it.n > 0) vk_usnap_pending(it.snap);   // vk_exec_record's vk_usnap_begin takes it
             uint64_t f = submit_sync(it.h, it.n);
             if (f != it.value)
                 rt_fatal("vk: replayed submission signalled %llu, queued as %llu", (unsigned long long)f,
@@ -401,6 +403,7 @@ static uint64_t vk_be_submit(const uint64_t *handles, int n) {
         it.h = malloc(sizeof *it.h * (size_t)n);
         if (!it.h) rt_fatal("vk: out of memory (replay queue)");
         memcpy(it.h, handles, sizeof *it.h * (size_t)n);
+        it.snap = vk_usnap_take(handles, n);   // the game rewrites per-object uniform blocks before the replay records
     }
     return replay_enqueue(&it);
 }

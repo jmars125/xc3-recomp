@@ -212,6 +212,9 @@ void vk_mem_gpu_wrote(const VkMemSpan *sp, uint64_t size);
 // Uniform blocks as of the submit call (vk_usnap.c): vk_exec_record copies the uniform ranges a submission binds before
 // it records, ubo bindings take the copy (0: not copied, bind memory), GPU writes of the replay drop the copies they touch.
 void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence);
+void *vk_usnap_take(const uint64_t *handles, int n);   // XC3_REPLAY_ASYNC: the bytes at the submit call (queueing thread)
+void vk_usnap_pending(void *take);                     // the replay: the next begin copies from take, and frees it
+void vk_usnap_free(void *take);
 void vk_usnap_end(uint64_t fence);
 int vk_usnap_find(uint64_t addr, uint64_t n, uint64_t align, VkDescriptorBufferInfo *out);
 int vk_usnap_read(uint64_t addr, uint64_t n, void *out);   // the snapshot's bytes of [addr, addr+n); 0 if not held
