@@ -145,10 +145,13 @@ int vk_tup_role(const GfxShader *fs) {
     int role = VK_TUP_NONE;
     for (int r = 1; r < VK_TUP_ROLES; r++)
         if (h == ROLE_HASH[r]) role = r;
+    // The title screen's copy (and some cutscenes'): another shader doing the same job, the reconstruction's output
+    // halved into the frame (on the scaled path, into a target of the scene size).
+    if (h == 0xe98d22f95e30dbc6ull) role = VK_TUP_COPY;
     static unsigned logged;
     if (role && !(logged & 1u << role)) {
         logged |= 1u << role;
-        if (role == VK_TUP_COPY)
+        if (role == VK_TUP_COPY && h == ROLE_HASH[VK_TUP_COPY])
             rt_log("vk: temporal upscale: the game's copy of its reconstruction found (fragment shader %016llx)",
                    (unsigned long long)h);
         else
