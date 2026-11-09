@@ -75,6 +75,18 @@ typedef struct {
     VkImageView view;
 } Img;
 
+// Frame generation's picture without the interface: the upscaler's output is the frame before the game draws its
+// interface over it, so a copy of it per frame id (HL_RING of them, so the present of frame id reads its own while
+// later frames are recorded) is what the generators compare the back buffer with to keep the HUD out of the frames
+// they make (vk_tup_hudless; gfx_present.c scales it as it scales the picture).
+#define HL_RING 4
+
+static struct {
+    Img img[HL_RING];
+    uint64_t id[HL_RING];   // frame id + 1 whose picture img holds
+    uint32_t w, h;
+} HL;
+
 static struct {
     int tried, ok;                      // ok: the input pass exists
     int ffx_tried;                      // amd_fidelityfx_vk.dll looked for (lib: found)
@@ -85,7 +97,7 @@ static struct {
     PfnFfxDispatch dispatch;
     PfnFfxQuery query;
     ffxContext ctx;
-    uint32_t rw, rh, ow, oh;            // our images' sizes
+    uint32_t rw, rh, ow, oh;            // our images' sizes: the largest render size seen, the output size
     uint32_t crw, crh, cow, coh;        // the FSR context's sizes
     int reset;
     PFN_vkCmdPushDescriptorSetKHR push;
@@ -285,10 +297,12 @@ static PFN_vkVoidFunction VKAPI_PTR ffx_proc(VkDevice d, const char *name) {
     return NULL;
 }
 
-// Our images at these sizes. A size change waits for the device: earlier frames may still read the old images and the
-// old FSR context's resources.
+// Our images for a render size of rw x rh and an output of ow x oh. The render images only grow: a smaller render size
+// (a scene drawn smaller than before) uses their top left part, so the upscaler keeps its context and its history. A new
+// size waits for the device: earlier frames may still read the old images and the old FSR context's resources.
 static int ensure_images(VkCtx *c, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
-    if (T.color.image && T.rw == rw && T.rh == rh && T.ow == ow && T.oh == oh) return 1;
+    if (T.color.image && rw <= T.rw && rh <= T.rh && T.ow == ow && T.oh == oh) return 1;
+    if (T.color.image && T.ow == ow && T.oh == oh) rw = rw > T.rw ? rw : T.rw, rh = rh > T.rh ? rh : T.rh;
     vk_queue_lock();
     vkDeviceWaitIdle(c->device);
     vk_queue_unlock();
@@ -362,6 +376,39 @@ static struct FfxApiResource res(const Img *i, uint32_t fmt, uint32_t w, uint32_
     return r;
 }
 
+// T.out (ow x oh, just written by the upscaler, GENERAL) copied into the ring slot of frame id.
+static void hudless_keep(VkCtx *c, VkCommandBuffer cb, uint64_t id, uint32_t ow, uint32_t oh) {
+    if (HL.w != ow || HL.h != oh) {   // a new frame size: earlier presents may still read the old images
+        vk_queue_lock();
+        vkDeviceWaitIdle(c->device);
+        vk_queue_unlock();
+        for (int i = 0; i < HL_RING; i++) img_free(c, &HL.img[i]), HL.id[i] = 0;
+        HL.w = HL.h = 0;
+        for (int i = 0; i < HL_RING; i++)
+            if (!img_make(c, &HL.img[i], VK_FORMAT_R8G8B8A8_UNORM, ow, oh)) {
+                rt_log("vk: frame generation: the HUD-less picture's images could not be created");
+                for (int k = 0; k < HL_RING; k++) img_free(c, &HL.img[k]);
+                return;
+            }
+        HL.w = ow, HL.h = oh;
+        rt_log("vk: the picture without the HUD is kept for frame generation and HDR (%ux%u)", ow, oh);
+    }
+    unsigned s = (unsigned)(id % HL_RING);
+    const VkImageLayout G = VK_IMAGE_LAYOUT_GENERAL;
+    const VkPipelineStageFlags2 ALL = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, XF = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, ALL, VK_ACCESS_2_MEMORY_WRITE_BIT, XF,
+            VK_ACCESS_2_TRANSFER_READ_BIT);
+    barrier(cb, HL.img[s].image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, G, ALL,
+            VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .extent = {ow, oh, 1}};
+    vkCmdCopyImage(cb, T.out.image, G, HL.img[s].image, G, 1, &cp);
+    barrier(cb, HL.img[s].image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL,
+            VK_ACCESS_2_MEMORY_READ_BIT);
+    barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, XF, 0, ALL, 0);   // the next frame's writes wait for the read
+    HL.id[s] = id + 1;
+}
+
 int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     VkCtx *c = vk_ctx();
     if (!T.tried) init(c);
@@ -425,9 +472,9 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     if (sharp < 0) sharp = 0;
     if (sharp > 100) sharp = 100;
     struct ffxDispatchDescUpscale d = {.header = {.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE}, .commandList = (void *)cb};
-    d.color = res(&T.color, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, rw, rh, 0);
-    d.depth = res(&T.depth, FFX_API_SURFACE_FORMAT_R32_FLOAT, rw, rh, 0);
-    d.motionVectors = res(&T.motion, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, rw, rh, 0);
+    d.color = res(&T.color, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, T.rw, T.rh, 0);   // renderSize: the part in use
+    d.depth = res(&T.depth, FFX_API_SURFACE_FORMAT_R32_FLOAT, T.rw, T.rh, 0);
+    d.motionVectors = res(&T.motion, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, T.rw, T.rh, 0);
     d.output = res(&T.out, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, ow, oh, 1);
     d.jitterOffset.x = f->jitter[0], d.jitterOffset.y = f->jitter[1];
     d.motionVectorScale.x = (float)rw, d.motionVectorScale.y = (float)rh;
@@ -467,10 +514,10 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     } else {
         const VkImageUsageFlags u = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VkSlImage ci = {T.color.image, T.color.view, VK_FORMAT_R8G8B8A8_UNORM, rw, rh, u},
-                  di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u},
-                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u},
-                  oi = {T.out.image, T.out.view, VK_FORMAT_R8G8B8A8_UNORM, ow, oh, u};
+        VkSlImage ci = {T.color.image, T.color.view, VK_FORMAT_R8G8B8A8_UNORM, rw, rh, u, T.rw, T.rh},
+                  di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u, T.rw, T.rh},
+                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u, T.rw, T.rh},
+                  oi = {T.out.image, T.out.view, VK_FORMAT_R8G8B8A8_UNORM, ow, oh, u, 0, 0};
         rec_drain();   // as for FSR: Streamline records straight into the command buffer
         ok = dlss_tagged = vk_sl_evaluate(cb, vk_fg_frame(), &ci, &di, &mi, &oi, f->jitter, d.cameraNear,
                                           d.cameraFovAngleVertical, T.reset, mode == VK_TUP_DLAA);
@@ -479,8 +526,8 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
         // Frame generation reads the same prepared depth and motion (vk_fg.c), recorded after the upscaler's reads.
         const VkImageUsageFlags u = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VkSlImage di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u},
-                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u};
+        VkSlImage di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u, T.rw, T.rh},
+                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u, T.rw, T.rh};
         rec_drain();
         vk_fg_inputs(cb, &di, &mi, f->jitter, d.cameraNear, d.cameraFovAngleVertical, T.reset, dt, dlss_tagged);
     }
@@ -502,11 +549,19 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     }
     // later passes that write the game's inputs wait for the input pass
     barrier(cb, f->color.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, CS, 0, ALL, 0);
+    if (vk_fg_mode() != VK_FG_OFF || vk_hdr_active()) hudless_keep(c, cb, vk_fg_frame(), ow, oh);
     T.frames++;
     if (T.logged_mode != mode) {
         T.logged_mode = mode;
         rt_log("vk: %s runs in place of the game's reconstruction, %ux%u to %ux%u", mode_name(mode), rw, rh, ow, oh);
     }
+    return 1;
+}
+
+int vk_tup_hudless(uint64_t id, VkImage *img, uint32_t *w, uint32_t *h) {
+    unsigned s = (unsigned)(id % HL_RING);
+    if (HL.id[s] != id + 1 || !HL.img[s].image) return 0;
+    *img = HL.img[s].image, *w = HL.w, *h = HL.h;
     return 1;
 }
 
@@ -536,6 +591,8 @@ void vk_tup_release(void) {
     VkCtx *c = vk_ctx();
     if (!c || !T.tried) return;
     ctx_free(c);
+    for (int i = 0; i < HL_RING; i++) img_free(c, &HL.img[i]);
+    memset(&HL, 0, sizeof HL);
     for (int s = 0; s < SLOTS; s++)
         for (int k = 0; k < 3; k++)
             if (T.src_view[s][k]) vkDestroyImageView(c->device, T.src_view[s][k], NULL);

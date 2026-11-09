@@ -36,7 +36,10 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - Frame generation (`frame_gen`; takes a restart): NVIDIA DLSS Frame Generation on RTX 40 and 50 cards, AMD FSR 3 frame
   generation on any GPU, a generated frame between every two the game draws. It needs a temporal upscaler (`fsr3`,
   `dlss` or `dlaa`). The frame limit counts the frames on screen, so 120 draws 60 and shows 120; the overlay counts
-  the frames on screen too
+  the frames on screen too. The game's interface is kept out of the generated frames
+- DLSS model choice (`dlss_preset`) and NVIDIA Reflex low latency (`reflex`) with DLSS or DLAA
+- HDR10 output (`hdr`; Windows' HDR on): the scene's highlights expanded towards the display's peak, the interface
+  kept at its own brightness
 - Variable refresh rate (`vrr`): for G-SYNC and FreeSync monitors, each frame shows when it is ready and the frame
   rate stays a little under the refresh rate (116 at 120 Hz), inside the monitor's range
 - RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
@@ -47,7 +50,7 @@ the NVIDIA (Streamline, DLSS) and AMD (FidelityFX) libraries next to `xc3.exe`.
 ## Planned
 
 - Linux and the Steam Deck tested on real hardware
-- The game's interface kept out of frame generation (it is interpolated with the picture today)
+- Dynamic resolution (the game's own scaling needs more reverse engineering)
 
 ## Installing
 

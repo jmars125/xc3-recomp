@@ -38,9 +38,10 @@ VkResult vk_fg_fsr_swapchain(const VkSwapchainCreateInfoKHR *ci, VkSwapchainKHR 
 void vk_fg_fsr_swapchain_destroy(VkSwapchainKHR sc);   // the device release
 
 // The present thread around frame id's present into sc (w x h of fmt, images images; the picture in rect {x, y, w,
-// h}); allow: no overlay menu covers the picture.
+// h}); allow: no overlay menu covers the picture. hudless: the frame without the interface at the swapchain's size
+// and format, placed as the picture is (gfx_present.c hudless_record), or NULL.
 void vk_fg_present(uint64_t id, VkSwapchainKHR sc, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images,
-                   const int rect[4], int allow);
+                   const int rect[4], int allow, const VkSlImage *hudless);
 void vk_fg_present_end(uint64_t id);
 void vk_fg_release(void);   // before the device goes away
 

@@ -96,6 +96,7 @@ static void scene_scale(void) {
 
 int res_scene_on(void) { return R.scale > 0; }
 
+
 // World positions projected for the narrowed interface (patches-upd.txt, uifit) spread by the inverse of res_ui_fit.
 static void ui_fit_init(void) {
     int set = rt_patch_set("uifit");

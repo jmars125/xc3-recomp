@@ -1,0 +1,46 @@
+#version 450
+// The overlay (this port's settings menu and performance overlay) over the HDR picture (runtime/vk_hdr.c
+// vk_hdr_overlay): ImGui draws into an RGBA8 image of the window's size, cleared to transparent, as it would into an
+// SDR swapchain; this blends it onto the PQ picture at the interface's white. The picture is decoded from PQ to nits,
+// the overlay's sRGB colour is decoded and scaled to ui nits, the two are mixed by the overlay's alpha (in light, as
+// the SDR blend would mix them in display light near enough) and the result is encoded to PQ again.
+// p.x: ui nits; p.y: peak nits.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D ui;
+layout(binding = 2, rgba16f) uniform image2D pic;   // binding 1 (a second sampled image) is the encode's
+layout(push_constant) uniform P {
+    ivec2 offset;
+    ivec2 size;
+    vec4 p;
+    vec4 unused;
+} pc;
+
+vec3 srgb_decode(vec3 c) {
+    return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, lessThanEqual(c, vec3(0.04045)));
+}
+
+const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+
+vec3 pq(vec3 nits) {
+    vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));
+    return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2));
+}
+
+vec3 pq_decode(vec3 e) {
+    vec3 p = pow(clamp(e, 0.0, 1.0), vec3(1.0 / m2));
+    return 10000.0 * pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1));
+}
+
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(at, pc.size))) return;
+    vec4 o = texelFetch(ui, at, 0);
+    if (o.a <= 0.0) return;
+    vec3 rec709 = srgb_decode(clamp(o.rgb, 0.0, 1.0)) * pc.p.x;
+    // Rec. 709 to Rec. 2020 (rows)
+    vec3 over = rec709 * mat3(0.6274038960, 0.3292830384, 0.0433130657,
+                              0.0690972894, 0.9195403951, 0.0113623156,
+                              0.0163914388, 0.0880133078, 0.8955952532);
+    vec3 under = pq_decode(imageLoad(pic, at).rgb);
+    imageStore(pic, at, vec4(pq(min(mix(under, over, o.a), vec3(pc.p.y))), 1.0));
+}

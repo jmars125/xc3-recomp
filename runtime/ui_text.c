@@ -63,6 +63,11 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                   "For supersampling, set the game resolution above the window's. Takes effect after "
                                   "a restart.",
     [UI_MENU_RENDER_SCALE_GAME] = "Game (whole)",
+    [UI_MENU_RENDER_SCALE_MODE] = "%s (%d %%)",
+    [UI_MENU_MODE_ULTRA_PERF] = "Ultra performance",
+    [UI_MENU_MODE_PERF] = "Performance",
+    [UI_MENU_MODE_BALANCED] = "Balanced",
+    [UI_MENU_MODE_QUALITY] = "Quality",
     [UI_MENU_UPSCALER] = "Upscaler",
     [UI_MENU_UPSCALER_DESC] = "FSR 1 and bilinear scale the picture to the window when the window is larger than the "
                               "game resolution; FSR 1 keeps edges and detail sharper. The temporal upscalers rebuild the "
@@ -90,6 +95,32 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_PICTURE_FIT_KEEP] = "Keep (bars)", [UI_MENU_PICTURE_FIT_STRETCH] = "Stretch",
     [UI_MENU_SHARPNESS] = "FSR sharpness",
     [UI_MENU_SHARPNESS_DESC] = "Sharpening after FSR scaling; 0 turns it off.",
+    [UI_MENU_DLSS_PRESET] = "DLSS model",
+    [UI_MENU_DLSS_PRESET_DESC] = "The DLSS model. Default is NVIDIA's choice per mode (K for DLAA, quality and balanced, M for "
+                                 "performance, L for ultra performance); K, J, L or M takes that model in every mode. J "
+                                 "ghosts a little less behind moving characters and flickers a little more than K.",
+    [UI_MENU_DLSS_PRESET_DEFAULT] = "Default",
+    [UI_MENU_REFLEX] = "NVIDIA Reflex",
+    [UI_MENU_REFLEX_DESC] = "Low latency with DLSS or DLAA: the game starts each frame as late as the GPU allows, so the "
+                            "picture is closer to your input. Boost also keeps the GPU clocks up. DLSS Frame Generation "
+                            "always keeps it on.",
+    [UI_MENU_REFLEX_BOOST] = "On + boost",
+    [UI_MENU_HDR] = "HDR",
+    [UI_MENU_HDR_DESC] = "HDR10 output: the game's picture expanded to your display's range. Needs Windows' HDR on. "
+                         "Takes a restart.",
+    [UI_MENU_HDR_PEAK] = "HDR peak brightness",
+    [UI_MENU_HDR_PEAK_DESC] = "Your display's peak brightness in nits; the brightest highlights reach it.",
+    [UI_MENU_HDR_GAME] = "HDR scene white",
+    [UI_MENU_HDR_GAME_DESC] = "The brightness in nits of the scene's white before the highlights are expanded.",
+    [UI_MENU_HDR_UI] = "HDR interface brightness",
+    [UI_MENU_HDR_UI_DESC] = "The brightness in nits of the game's interface and this menu.",
+    [UI_MENU_HDR_HIGHLIGHTS] = "HDR highlights",
+    [UI_MENU_HDR_HIGHLIGHTS_DESC] = "How far the scene's bright parts are taken towards the peak; 0 keeps the SDR "
+                                    "picture.",
+    [UI_MENU_HDR_SATURATION] = "HDR saturation",
+    [UI_MENU_HDR_SATURATION_DESC] = "Colour strength of the scene; 100 % leaves it as the game made it.",
+    [UI_MENU_HDR_GAMMA] = "HDR gamma",
+    [UI_MENU_HDR_GAMMA_DESC] = "How the game's colours are decoded: 2.2 matches most SDR displays, sRGB lifts the darks.",
 
     [UI_MENU_FPS_LIMIT] = "Frame rate limit",
     [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws; the game's clock follows it. Above 60 is "
@@ -325,6 +356,11 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                   "Для суперсэмплинга задайте разрешение игры выше разрешения окна. Применяется после "
                                   "перезапуска.",
     [UI_MENU_RENDER_SCALE_GAME] = "Как в игре (целиком)",
+    [UI_MENU_RENDER_SCALE_MODE] = "%s (%d %%)",
+    [UI_MENU_MODE_ULTRA_PERF] = "Макс. производительность",
+    [UI_MENU_MODE_PERF] = "Производительность",
+    [UI_MENU_MODE_BALANCED] = "Баланс",
+    [UI_MENU_MODE_QUALITY] = "Качество",
     [UI_MENU_UPSCALER] = "Масштабирование",
     [UI_MENU_UPSCALER_DESC] = "FSR 1 и билинейное растягивают картинку под окно, когда окно больше разрешения игры; "
                               "FSR 1 сохраняет края и детали чётче. Временные апскейлеры восстанавливают 3D-сцену "
@@ -351,6 +387,32 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_PICTURE_FIT_KEEP] = "Сохранять (полосы)", [UI_MENU_PICTURE_FIT_STRETCH] = "Растягивать",
     [UI_MENU_SHARPNESS] = "Резкость FSR",
     [UI_MENU_SHARPNESS_DESC] = "Повышение резкости после масштабирования FSR; 0 выключает его.",
+    [UI_MENU_DLSS_PRESET] = "Модель DLSS",
+    [UI_MENU_DLSS_PRESET_DESC] = "Модель DLSS. По умолчанию — выбор NVIDIA для каждого режима (K для DLAA, качества и "
+                                 "баланса, M для производительности, L для макс. производительности); K, J, L или M "
+                                 "задают одну модель во всех режимах. J оставляет чуть меньше шлейфов за движущимися "
+                                 "персонажами и чуть сильнее мерцает, чем K.",
+    [UI_MENU_DLSS_PRESET_DEFAULT] = "По умолчанию",
+    [UI_MENU_REFLEX] = "NVIDIA Reflex",
+    [UI_MENU_REFLEX_DESC] = "Низкая задержка с DLSS или DLAA: игра начинает каждый кадр так поздно, как позволяет GPU, и "
+                            "картинка ближе к вводу. Ускорение также держит частоты GPU высокими. С генерацией кадров "
+                            "DLSS он всегда включён.",
+    [UI_MENU_REFLEX_BOOST] = "Вкл. + ускорение",
+    [UI_MENU_HDR] = "HDR",
+    [UI_MENU_HDR_DESC] = "Вывод HDR10: картинка игры расширяется до диапазона вашего дисплея. Нужен включённый HDR "
+                         "в Windows. Требует перезапуска.",
+    [UI_MENU_HDR_PEAK] = "Пиковая яркость HDR",
+    [UI_MENU_HDR_PEAK_DESC] = "Пиковая яркость дисплея в нитах; её достигают самые яркие блики.",
+    [UI_MENU_HDR_GAME] = "Белый сцены HDR",
+    [UI_MENU_HDR_GAME_DESC] = "Яркость белого сцены в нитах до расширения бликов.",
+    [UI_MENU_HDR_UI] = "Яркость интерфейса HDR",
+    [UI_MENU_HDR_UI_DESC] = "Яркость интерфейса игры и этого меню в нитах.",
+    [UI_MENU_HDR_HIGHLIGHTS] = "Блики HDR",
+    [UI_MENU_HDR_HIGHLIGHTS_DESC] = "Насколько яркие части сцены поднимаются к пику; 0 оставляет картинку SDR.",
+    [UI_MENU_HDR_SATURATION] = "Насыщенность HDR",
+    [UI_MENU_HDR_SATURATION_DESC] = "Насыщенность цветов сцены; 100 % оставляет их как в игре.",
+    [UI_MENU_HDR_GAMMA] = "Гамма HDR",
+    [UI_MENU_HDR_GAMMA_DESC] = "Как декодируются цвета игры: 2.2 как у большинства SDR-дисплеев, sRGB светлее в тенях.",
 
     [UI_MENU_FPS_LIMIT] = "Ограничение частоты кадров",
     [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду; часы игры идут по нему. Выше 60 — экспериментальный "
