@@ -1971,6 +1971,10 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
     if (!role) return 0;
     if (role == VK_TUP_COPY) {   // the scene-size copy on the scaled path, or our result, goes into the frame next
         const VkExecTarget *t = &ex->color[0];
+        static int n;
+        if (t->img && cfg_get("XC3_TUP_DEBUG") && n++ < 20)
+            rt_log("vk: game copy into %ux%u fmt %d (done %d)", t->img->width, t->img->height, (int)t->img->format,
+                   TU.done.image != VK_NULL_HANDLE);
         if (res_scene_on() && t->image && t->img) {
             TU.copy_dst = t->image;
             TU.fix = TU.done.image ? TU.done
@@ -2050,8 +2054,14 @@ static void tup_fixup(VkExec *ex) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
     if (!t->image || !t->img || t->image == TU.fix.image || t->image == TU.copy_dst || t->img->width != out[0] ||
-        t->img->height != out[1] || t->img->format != TU.fix.format)
+        t->img->height != out[1] || t->img->format != TU.fix.format) {
+        static int n;
+        if (t->img && cfg_get("XC3_TUP_DEBUG") && n++ < 40)
+            rt_log("vk: fixup waits: target %ux%u fmt %d (fix %ux%u fmt %d, out %ux%u)%s", t->img->width, t->img->height,
+                   (int)t->img->format, TU.fix.w, TU.fix.h, (int)TU.fix.format, out[0], out[1],
+                   t->image == TU.copy_dst ? " the copy's own" : "");
         return;
+    }
     VkTupImage dst = {t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width, t->img->height};
     if (ex->in_pass) vk_exec_pass_end(ex);
     vk_tup_copy(ex->cb, &TU.fix, &dst);

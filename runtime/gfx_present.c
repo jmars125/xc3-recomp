@@ -862,6 +862,26 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0);
     }
     }
+    // DLSS Frame Generation, once it had a HUD-less picture, gets one with every frame: a frame without (a loading
+    // screen, a frame the upscaler did not draw) hands it the back buffer itself, which differs from itself nowhere. A
+    // frame left untagged made DLSS-G read the last one's freed tag and crash (nvngx_dlssg.dll, an access at 0x48).
+    if (!hl && g_hl && vk_fg_mode() == VK_FG_DLSS && g_hl_w == g_sc_ext.width && g_hl_h == g_sc_ext.height &&
+        g_hl_fmt == g_sc_fmt) {
+        const VkPipelineStageFlags2 XF = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        sync_barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, XF,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_READ_BIT);
+        sync_barrier(cb, g_hl, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                     VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .extent = {g_sc_ext.width, g_sc_ext.height, 1}};
+        vkCmdCopyImage(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, g_hl, VK_IMAGE_LAYOUT_GENERAL, 1, &cp);
+        sync_barrier(cb, g_hl, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
+        sync_barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, XF,
+                     VK_ACCESS_2_TRANSFER_READ_BIT, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        hl = 1;
+    }
     // last: the image's layout, and the stage and access of its last write, as each step leaves it
     VkImageLayout last = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     VkPipelineStageFlags2 last_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -922,7 +942,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         g_flip_fg = g_fg_next;
         memcpy(g_flip_rect, to, sizeof to);
         g_flip_allow = !menu_is_open();
-        g_flip_hl = hl;
+        g_flip_hl = hl && !cfg_get("XC3_FG_NO_HUDLESS");   // (a test switch)
         if (!defer) flip_locked();
     } else {
         vk_device_fault_report(r);
