@@ -136,6 +136,7 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                "experimental.",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
+    [UI_MENU_FPS_165] = "165 FPS", [UI_MENU_FPS_240] = "240 FPS", [UI_MENU_FPS_360] = "360 FPS",
     // the monitor's refresh rate; printf format with the rate in Hz when it is known
     [UI_MENU_FPS_DISPLAY] = "Monitor rate", [UI_MENU_FPS_DISPLAY_HZ] = "Monitor rate (%.0f Hz)",
     [UI_MENU_FRAME_QUEUE] = "Frame queue",
@@ -436,6 +437,7 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                "режим.",
     [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
     [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS", [UI_MENU_FPS_144] = "144 FPS",
+    [UI_MENU_FPS_165] = "165 FPS", [UI_MENU_FPS_240] = "240 FPS", [UI_MENU_FPS_360] = "360 FPS",
     [UI_MENU_FPS_DISPLAY] = "Как у монитора", [UI_MENU_FPS_DISPLAY_HZ] = "Как у монитора (%.0f Гц)",
     [UI_MENU_FRAME_QUEUE] = "Очередь кадров",
     [UI_MENU_FRAME_QUEUE_DESC] = "Игра начинает кадр, пока предыдущий ждёт показа: намного меньше пропущенных кадров на "

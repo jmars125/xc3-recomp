@@ -108,7 +108,7 @@ void frame_step_init(void) {
 
 int frame_step_realtime(void) { return step_word != NULL; }
 
-// The frame limit (menu, XC3_FPS_LIMIT, live): 30, 60, 120, 144, any whole rate from 30 to 360, or display (the
+// The frame limit (menu, XC3_FPS_LIMIT, live): 30 to 360 in the menu's steps, any whole rate from 30 to 360, or display (the
 // refresh rate of the window's monitor). Unset, the older XC3_FPS60=0 still means 30. Without the real-time step the
 // limit stops at 60.
 #define LIMIT_MIN_HZ 30
