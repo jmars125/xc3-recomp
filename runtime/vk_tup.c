@@ -49,6 +49,7 @@
 #undef __declspec
 #endif
 #include "tup_prep_spv.h"
+#include "vk_fg.h"
 #include "vk_rec.h"
 #include "vk_sl.h"
 
@@ -443,7 +444,7 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     d.viewSpaceToMetersFactor = 1.0f;
     if (knob("XC3_TUP_DEBUG_VIEW")) d.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
     ffxReturnCode_t rc = FFX_API_RETURN_OK;
-    int ok = 1;
+    int ok = 1, dlss_tagged = 0;
     if (knob("XC3_TUP_BYPASS")) {
         // test: our prepared colour, stretched, in place of FSR's output
         VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0}, {(int32_t)rw, (int32_t)rh, 1}},
@@ -471,8 +472,17 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
                   mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u},
                   oi = {T.out.image, T.out.view, VK_FORMAT_R8G8B8A8_UNORM, ow, oh, u};
         rec_drain();   // as for FSR: Streamline records straight into the command buffer
-        ok = vk_sl_evaluate(cb, &ci, &di, &mi, &oi, f->jitter, d.cameraNear, d.cameraFovAngleVertical, T.reset,
-                            mode == VK_TUP_DLAA);
+        ok = dlss_tagged = vk_sl_evaluate(cb, vk_fg_frame(), &ci, &di, &mi, &oi, f->jitter, d.cameraNear,
+                                          d.cameraFovAngleVertical, T.reset, mode == VK_TUP_DLAA);
+    }
+    if (ok && vk_fg_mode() != VK_FG_OFF) {
+        // Frame generation reads the same prepared depth and motion (vk_fg.c), recorded after the upscaler's reads.
+        const VkImageUsageFlags u = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        VkSlImage di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u},
+                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u};
+        rec_drain();
+        vk_fg_inputs(cb, &di, &mi, f->jitter, d.cameraNear, d.cameraFovAngleVertical, T.reset, dt, dlss_tagged);
     }
     T.reset = 0;
     if (!ok) return 0;

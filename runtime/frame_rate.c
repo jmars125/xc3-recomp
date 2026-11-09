@@ -143,12 +143,18 @@ static void frame_limit_live(void) {
     else rt_log("frame rate: limit at the monitor's refresh rate (60 until the window measures it)");
 }
 
+// Shown frames per drawn frame; the Vulkan back end's frame generation (vk_fg.c) overrides this.
+__attribute__((weak)) int gfx_frame_gen_factor(void) { return 1; }
+
 uint64_t frame_step_cap_ns(void) {
     frame_limit_live();
     if (cut_now) return (uint64_t)(1e9 / 30 + 0.5);
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
+    // With frame generation running (vk_fg.c) the limit counts the frames shown: a drawn and a generated one per
+    // drawn frame, so the game draws half of it.
+    hz /= gfx_frame_gen_factor();
     return (uint64_t)(1e9 / hz + 0.5);
 }
 

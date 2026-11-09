@@ -28,11 +28,12 @@
 #include "nvn_api.h"
 #include "vk.h"
 #include "vk_exec.h"
+#include "vk_fg.h"
 #include "platform/platform.h"
 
 #define WEAK __attribute__((weak))
 
-typedef struct { VkImage image; VkFormat format; int w, h, has_crop, crop[4]; uint64_t frame, at, queued, value; } PresentJob;
+typedef struct { VkImage image; VkFormat format; int w, h, has_crop, crop[4]; uint64_t frame, at, queued, value, fg; } PresentJob;
 
 static PlatMutex pl = PLAT_MUTEX_INIT;
 static PlatCond pcv = PLAT_COND_INIT;   // job queued, job taken, job submitted
@@ -59,6 +60,7 @@ static void present_main(void *arg) {
         plat_mutex_unlock(&pl);
         uint64_t tb = kern_now_ns();
         if (flight_on) vk_thumbs_frame(j.frame);
+        vk_present_frame_id(j.fg);   // frame generation matches the present to the frame's inputs by it
         vk_present_blit(j.image, VK_IMAGE_LAYOUT_GENERAL, j.format, j.w, j.h, j.has_crop ? j.crop : NULL);
         uint64_t f = vk_sync_submit(NULL, 0);   // a timeline value after the blit: deferred destruction waits for the blit too
         if (j.value && f != j.value)
@@ -104,6 +106,7 @@ void vk_present_drain(void) {
 static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uint64_t queued, uint64_t frame,
                           uint64_t value) {
     static volatile int32_t n_skipped;
+    uint64_t fg = vk_fg_frame_close();   // the frame's recording is done (vk_fg.c); a skipped present uses its id up too
     vk_exec_frame_log(t, frame);
     vk_mem_census(frame);
     if (vk_dump_armed) vk_dump_present(frame);
@@ -120,7 +123,7 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
         return;
     }
     PresentJob j = {.image = img->image, .format = img->format, .w = (int)img->width, .h = (int)img->height, .frame = frame,
-                    .at = at_ns, .queued = queued, .value = value};
+                    .at = at_ns, .queued = queued, .value = value, .fg = fg};
     if (crop) {
         j.has_crop = 1;
         for (int i = 0; i < 4; i++) j.crop[i] = crop[i];
@@ -536,6 +539,12 @@ void vk_backend_shutdown(void) {
     replay_drain(DR_FINISH);
     gfx_exit_log();
     vk_present_drain();
+    // DLSS Frame Generation's present thread may still read the last frames' images: it stops before their memory goes.
+    if (vk_fg_mode() == VK_FG_DLSS && vk_ctx()) {
+        vk_queue_lock();
+        vk_sl_fg_release(vk_ctx()->device);
+        vk_queue_unlock();
+    }
     vk_sync_shutdown();
     vk_mem_shutdown();
     vk_shutdown();

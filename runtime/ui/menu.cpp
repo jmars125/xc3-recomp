@@ -544,6 +544,8 @@ static void tab_screen(float scale) {
     static const UiTextId up[] = {UI_MENU_UPSCALER_FSR, UI_MENU_UPSCALER_BILINEAR, UI_MENU_UPSCALER_FSR3,
                                   UI_MENU_UPSCALER_DLSS, UI_MENU_UPSCALER_DLAA};
     opt_choice("XC3_UPSCALER", UI_MENU_UPSCALER, up, 5, UI_MENU_UPSCALER_DESC);
+    static const UiTextId fg[] = {UI_MENU_FRAME_GEN_OFF, UI_MENU_FRAME_GEN_DLSS, UI_MENU_FRAME_GEN_FSR};
+    opt_choice("XC3_FRAME_GEN", UI_MENU_FRAME_GEN, fg, 3, UI_MENU_FRAME_GEN_DESC);
     static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};
     opt_choice("XC3_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
     opt_slider("XC3_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");

@@ -304,6 +304,31 @@ static LONG CALLBACK diag_handler(EXCEPTION_POINTERS *ep) {
                     code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2 ? ", address " : "",
                     code == EXCEPTION_ACCESS_VIOLATION && ep->ExceptionRecord->NumberParameters >= 2
                         ? (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1] : 0ull);
+            // The callers, unwound from the faulting context by the modules' unwind tables: a fault in a driver says
+            // little without the call into it. The first 3 faults only.
+            if (foreign <= 3) {
+                CONTEXT cx = *ep->ContextRecord;
+                for (int i = 0; i < 24 && (cx.Rip || !i); i++) {   // !i: a call through a null pointer starts at Rip 0
+                    DWORD64 img = 0;
+                    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(cx.Rip, &img, NULL);
+                    if (!fn) {   // a leaf function: the return address is on top of the stack
+                        cx.Rip = *(DWORD64 *)cx.Rsp;
+                        cx.Rsp += 8;
+                    } else {
+                        void *hd;
+                        DWORD64 fr;
+                        RtlVirtualUnwind(UNW_FLAG_NHANDLER, img, cx.Rip, fn, &cx, &hd, &fr, NULL);
+                    }
+                    if (!cx.Rip) break;
+                    HMODULE cm = NULL;
+                    wchar_t cn[MAX_PATH] = L"?";
+                    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           (LPCWSTR)(uintptr_t)cx.Rip, &cm))
+                        GetModuleFileNameW(cm, cn, MAX_PATH);
+                    const wchar_t *cb = wcsrchr(cn, L'\\');
+                    rt_logf("  called from %ls+%#llx\n", cb ? cb + 1 : cn, (unsigned long long)(cx.Rip - (uintptr_t)cm));
+                }
+            }
             fflush(stderr);
         }
         return EXCEPTION_CONTINUE_SEARCH;

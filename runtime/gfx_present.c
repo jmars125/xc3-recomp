@@ -25,6 +25,7 @@
 #include "nvn_api.h"
 #include "ui/menu.h"
 #include "vk.h"
+#include "vk_fg.h"
 #include "vk_sl.h"
 #include "platform/platform.h"
 
@@ -135,6 +136,11 @@ static VkDeviceSize g_cap_size;
 static int g_cap_w, g_cap_h, g_cap_valid;
 static int g_flip_on;            // vk_present_blit submitted the blit of swapchain image g_flip_idx; vk_present_flip presents it
 static uint32_t g_flip_idx;
+// Frame generation (vk_fg.c): the frame id the next blit presents (vk_present_frame_id), the one waiting to flip, and
+// what the flip tells the generator: the picture's rectangle and whether a menu covers it.
+static uint64_t g_fg_next, g_flip_fg;
+static int g_flip_rect[4], g_flip_allow;
+static int g_sc_fsr;   // g_sc is FSR 3 frame generation's swapchain
 
 // ---- XC3_FLIGHT thumbnails (flight.c; g_pl): each present also blits the swapchain image down into slot frame % g_th_n
 // of a host-visible ring. A slot's tag names the frame it holds complete; recording a new frame clears the tag first,
@@ -283,7 +289,9 @@ static void flip_locked(void) {
                            .pImageIndices = &g_flip_idx};
     vk_queue_lock();
     sc_fns(vk_ctx()->device);
+    vk_fg_present(g_flip_fg, g_sc, g_sc_ext.width, g_sc_ext.height, g_sc_fmt, g_sc_n, g_flip_rect, g_flip_allow);
     VkResult r = SC.present(vk_ctx()->gfx_queue, &pi);
+    vk_fg_present_end(g_flip_fg);
     vk_queue_unlock();
     vk_device_fault_report(r);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) plat_xchg32(&g_dirty, 1);
@@ -338,7 +346,21 @@ static int create_swapchain(void) {
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = pick_present_mode(c->phys), .clipped = VK_TRUE,
         .oldSwapchain = old};
     sc_fns(c->device);
-    VkResult r = SC.create(c->device, &ci, NULL, &g_sc);
+    VkResult r = VK_ERROR_FEATURE_NOT_PRESENT;
+    int fsr_fg = vk_fg_mode() == VK_FG_FSR;
+    if (fsr_fg) {
+        // FSR 3 frame generation's swapchain (vk_fg.c), which also takes over the images, the acquire and the present.
+        // It destroys the old swapchain first, whatever the outcome.
+        r = vk_fg_fsr_swapchain(&ci, old, &g_sc, &SC.images, &SC.acquire, &SC.present);
+        if (r != VK_SUCCESS) {   // generation stays off for the session: a plain swapchain with the usual functions
+            old = g_sc = VK_NULL_HANDLE;
+            ci.oldSwapchain = VK_NULL_HANDLE;
+            fsr_fg = 0;
+            SC.done = 0;
+            sc_fns(c->device);
+        }
+    }
+    if (!fsr_fg) r = SC.create(c->device, &ci, NULL, &g_sc);
     if (r != VK_SUCCESS) {
         rt_log("gfx: vkCreateSwapchainKHR failed (%d)", (int)r);
         g_sc = old;
@@ -350,11 +372,19 @@ static int create_swapchain(void) {
         if (g_sc_view[i]) vkDestroyImageView(c->device, g_sc_view[i], NULL);
         g_sc_view[i] = VK_NULL_HANDLE;
     }
-    if (old) SC.destroy(c->device, old, NULL);
+    if (old && !fsr_fg) SC.destroy(c->device, old, NULL);
+    g_sc_fsr = fsr_fg;
     g_sc_fmt = sf.format;
     g_sc_ext = ext;
-    g_sc_n = MAX_IMAGES;
-    SC.images(c->device, g_sc, &g_sc_n, g_sc_img);
+    // The count first, then the images: DLSS Frame Generation's hook makes its own images in the first call and hands
+    // them out in the second.
+    g_sc_n = 0;
+    SC.images(c->device, g_sc, &g_sc_n, NULL);
+    if (g_sc_n > MAX_IMAGES) g_sc_n = MAX_IMAGES;
+    VkResult ri = SC.images(c->device, g_sc, &g_sc_n, g_sc_img);
+    if (cfg_get("XC3_TUP_DEBUG"))
+        for (uint32_t i = 0; i < g_sc_n; i++)
+            rt_log("gfx: swapchain image %u of %u: %p (%d)", i, g_sc_n, (void *)g_sc_img[i], (int)ri);
     VkSemaphoreCreateInfo semi = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (uint32_t i = 0; i < g_sc_n; i++) {
         vkCreateSemaphore(c->device, &semi, NULL, &g_render_done[i]);
@@ -712,6 +742,9 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     if (r == VK_SUCCESS) {
         g_flip_on = 1;
         g_flip_idx = idx;
+        g_flip_fg = g_fg_next;
+        memcpy(g_flip_rect, to, sizeof to);
+        g_flip_allow = !menu_is_open();
         if (!defer) flip_locked();
     } else {
         vk_device_fault_report(r);
@@ -738,6 +771,12 @@ void vk_present_blit(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int
     present_image(src, layout, fmt, w, h, crop, 1);
 }
 
+void vk_present_frame_id(uint64_t id) {
+    plat_rmutex_lock(&g_pl);
+    g_fg_next = id;
+    plat_rmutex_unlock(&g_pl);
+}
+
 void vk_present_flip(void) {
     plat_rmutex_lock(&g_pl);
     flip_locked();
@@ -758,12 +797,14 @@ void gfx_window_release_vk(void) {
     plat_rmutex_lock(&g_pl);
     if (c && g_started) {
         vk_queue_lock();
-        vkDeviceWaitIdle(c->device);
+        if (vk_fg_mode() == VK_FG_DLSS) vk_sl_fg_release(c->device);
+        else vkDeviceWaitIdle(c->device);
         vk_queue_unlock();
         g_flip_on = 0;   // its blit is done (device idle); the swapchain goes away unpresented
         menu_vk_release();
         vk_fsr_release();
         vk_tup_release();
+        vk_fg_release();
         free_capture();
         free_thumbs();
         for (int i = 0; i < FRAMES; i++) {
@@ -776,8 +817,12 @@ void gfx_window_release_vk(void) {
             g_sc_view[i] = VK_NULL_HANDLE;
         }
         if (g_pool) vkDestroyCommandPool(c->device, g_pool, NULL);
-        if (g_sc) sc_fns(c->device), SC.destroy(c->device, g_sc, NULL);
-        if (g_surface) vkDestroySurfaceKHR(c->instance, g_surface, NULL);
+        if (g_sc && g_sc_fsr) vk_fg_fsr_swapchain_destroy(g_sc);
+        else if (g_sc) sc_fns(c->device), SC.destroy(c->device, g_sc, NULL);
+        if (g_surface) {   // through Streamline's proxy when the surface was made through it (gfx_window_win.c)
+            PFN_vkDestroySurfaceKHR destroy = (PFN_vkDestroySurfaceKHR)vk_sl_instance_proc(c->instance, "vkDestroySurfaceKHR");
+            (destroy ? destroy : vkDestroySurfaceKHR)(c->instance, g_surface, NULL);
+        }
         g_sc = VK_NULL_HANDLE; g_surface = VK_NULL_HANDLE; g_pool = VK_NULL_HANDLE; g_sc_n = 0;
         SC.done = 0;       // a new device has its own proxies
         g_started = 0;     // the window and its thread stay; the next gfx_window_start makes a new surface
