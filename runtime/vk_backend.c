@@ -107,7 +107,6 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
                           uint64_t value) {
     static volatile int32_t n_skipped;
     uint64_t fg = vk_fg_frame_close();   // the frame's recording is done (vk_fg.c); a skipped present uses its id up too
-    dynres_frame();                      // dynamic resolution (dynres.c) steps from the GPU time so far
     vk_exec_frame_log(t, frame);
     vk_mem_census(frame);
     if (vk_dump_armed) vk_dump_present(frame);

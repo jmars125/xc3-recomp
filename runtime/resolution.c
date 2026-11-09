@@ -96,17 +96,6 @@ static void scene_scale(void) {
 
 int res_scene_on(void) { return R.scale > 0; }
 
-int res_scene_base(void) { return R.scale; }
-
-// A scale of the scaled scene while the game runs (dynres.c): the game reads both factors from the patch page at every
-// frame's setup (patches-upd.txt, scene), so the next frame draws at it. Only while the set is on.
-void res_scene_live(int pct) {
-    uint8_t *page = rt_patch_page();
-    if (!R.scale || !page || pct < 25 || pct > 100) return;
-    float f[2] = {pct / 100.0f, pct / 100.0f};
-    __atomic_store_n((uint32_t *)(page + 0x58), *(uint32_t *)&f[0], __ATOMIC_RELAXED);
-    __atomic_store_n((uint32_t *)(page + 0x5c), *(uint32_t *)&f[1], __ATOMIC_RELAXED);
-}
 
 // World positions projected for the narrowed interface (patches-upd.txt, uifit) spread by the inverse of res_ui_fit.
 static void ui_fit_init(void) {
@@ -188,8 +177,7 @@ void res_init(void) {
 void res_sizes(unsigned out[2], unsigned scene[2]) {
     decide();
     out[0] = R.on ? R.ow : BASE_W, out[1] = R.on ? R.oh : BASE_H;
-    int live = dynres_scale();
-    float f = R.scale ? (live ? live : R.scale) / 100.0f : 1.0f;
+    float f = R.scale ? R.scale / 100.0f : 1.0f;
     scene[0] = (unsigned)(out[0] * f), scene[1] = (unsigned)(out[1] * f);
 }
 

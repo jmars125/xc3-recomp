@@ -16,7 +16,7 @@ typedef struct {
     VkFormat format;
     uint32_t w, h;          // the part in use, from the top left
     VkImageUsageFlags usage;
-    uint32_t iw, ih;        // the image's own size when larger (dynamic resolution); 0: w x h
+    uint32_t iw, ih;        // the image's own size when larger than the part in use; 0: w x h
 } VkSlImage;   // in VK_IMAGE_LAYOUT_GENERAL
 
 // Before vkCreateInstance, with the features wanted (dlss: DLSS for the upscaler, fg: DLSS Frame Generation);

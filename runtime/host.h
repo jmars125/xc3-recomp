@@ -62,9 +62,7 @@ extern void (*perf_gpu_stats)(PerfGpu *out);
 // The performance overlay (perfmon.c): mode 0 off, 1 fps, 2 full. While it is on, perf_present hands every frame to
 // perfmon_frame; full also takes the event counts (perf_count) and the GPU timestamps as XC3_TRACE=perf does.
 void perf_set_overlay(int mode);
-int perf_gpu_timing(void);                      // GPU timestamps wanted: XC3_TRACE=perf, the full overlay or a
-                                                // feature that asked (perf_gpu_timing_want)
-void perf_gpu_timing_want(int on);              // dynres.c: GPU timestamps while dynamic resolution runs
+int perf_gpu_timing(void);                      // GPU timestamps wanted: XC3_TRACE=perf or the full overlay
 void perf_gpu_busy(uint64_t ns);                // GPU busy time of a timed submission part (vk_sync.c, any thread)
 uint64_t perf_gpu_busy_total(void);             // its running total (the overlay's GPU time per frame)
 #define RT_RESULT(module, desc) ((uint32_t)(module) | ((uint32_t)(desc) << 9))
@@ -255,10 +253,6 @@ int res_heapdef_build(const void *in, size_t n, void **out, size_t *out_n);   //
                                                            // the grown heaps, malloc'd; 0 = cannot (logged)
 void res_heapdef_served(void);                             // romfs.c serves the grown table
 int res_scene_on(void);                                    // the scaled-scene path is on (render_scale, dlaa)
-int res_scene_base(void);                                  // its scale in percent as set, 0 when off
-void res_scene_live(int pct);                              // dynres.c: the scale the next frames draw at
-void dynres_frame(void);                                   // dynamic resolution: one drawn frame (vk_backend.c)
-int dynres_scale(void);                                    // the scale dynamic resolution uses now, 0 when off
 float res_ui_fit(void);                                    // horizontal scale of the interface, 1 at 16:9 or narrower
 void res_init(void);                                       // after rt_patches_init: the patch page and the sets
 void res_sizes(unsigned out[2], unsigned scene[2]);      // the output and scene sizes in effect (the game's own

@@ -286,7 +286,7 @@ static PFN_vkVoidFunction VKAPI_PTR ffx_proc(VkDevice d, const char *name) {
 }
 
 // Our images for a render size of rw x rh and an output of ow x oh. The render images only grow: a smaller render size
-// (dynamic resolution, dynres.c) uses their top left part, so the upscaler keeps its context and its history. A new
+// (a scene drawn smaller than before) uses their top left part, so the upscaler keeps its context and its history. A new
 // size waits for the device: earlier frames may still read the old images and the old FSR context's resources.
 static int ensure_images(VkCtx *c, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
     if (T.color.image && rw <= T.rw && rh <= T.rh && T.ow == ow && T.oh == oh) return 1;

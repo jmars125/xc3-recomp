@@ -105,10 +105,6 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                             "picture is closer to your input. Boost also keeps the GPU clocks up. DLSS Frame Generation "
                             "always keeps it on.",
     [UI_MENU_REFLEX_BOOST] = "On + boost",
-    [UI_MENU_DYN_RES] = "Dynamic resolution",
-    [UI_MENU_DYN_RES_DESC] = "Lowers the 3D render scale in steps (quality, balanced, performance) when the GPU cannot keep "
-                             "the frame limit, and raises it back to your render scale when it can. Needs a render scale "
-                             "below 100 % (or DLAA) and FSR 3, DLSS or DLAA.",
 
     [UI_MENU_FPS_LIMIT] = "Frame rate limit",
     [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws; the game's clock follows it. Above 60 is "
@@ -386,10 +382,6 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                             "картинка ближе к вводу. Ускорение также держит частоты GPU высокими. С генерацией кадров "
                             "DLSS он всегда включён.",
     [UI_MENU_REFLEX_BOOST] = "Вкл. + ускорение",
-    [UI_MENU_DYN_RES] = "Динамическое разрешение",
-    [UI_MENU_DYN_RES_DESC] = "Понижает масштаб 3D-отрисовки по шагам (качество, баланс, производительность), когда GPU не "
-                             "успевает за ограничением кадров, и возвращает ваш масштаб, когда успевает. Нужны масштаб "
-                             "ниже 100 % (или DLAA) и FSR 3, DLSS или DLAA.",
 
     [UI_MENU_FPS_LIMIT] = "Ограничение частоты кадров",
     [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду; часы игры идут по нему. Выше 60 — экспериментальный "

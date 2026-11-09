@@ -567,7 +567,6 @@ static void tab_screen(float scale) {
     row_dlss_preset();
     static const UiTextId reflex[] = {UI_MENU_OFF, UI_MENU_ON, UI_MENU_REFLEX_BOOST};
     opt_choice("XC3_REFLEX", UI_MENU_REFLEX, reflex, 3, UI_MENU_REFLEX_DESC);
-    opt_toggle("XC3_DYN_RES", UI_MENU_DYN_RES, UI_MENU_DYN_RES_DESC);
     opt_end();
 }
 
