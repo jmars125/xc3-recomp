@@ -620,7 +620,12 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
     if (!S.fg) return;
     sl::FrameToken *ft = token(id);
     if (!ft) return;
-    int on = allow && was_tagged(id) && id > 0 && was_tagged(id - 1);
+    // Generation turns on once this frame and the one before have their inputs and allow is set, and then stays on
+    // while allow is: XC3 skips its reconstruction (our inputs) for a frame at each new speech bubble and camera cut,
+    // and for longer at cutscene starts and fades, and every switch of the mode to off and back shows a black frame.
+    // A frame without inputs goes out with the last constants marked reset (below), so nothing is generated across it.
+    int fresh = was_tagged(id) && id > 0 && was_tagged(id - 1);
+    int on = allow && (fresh || S.fg_on);
     if (!had_constants(id) && InterlockedCompareExchange((volatile LONG *)&S.have_last_k, 0, 0)) {
         sl::Constants k = S.last_k;
         k.reset = sl::Boolean::eTrue;
