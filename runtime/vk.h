@@ -124,6 +124,23 @@ int vk_tup_mode(void);                           // XC3_UPSCALER as a VK_TUP_* m
 int vk_tup_role(const GfxShader *fs);            // VK_TUP_FIRST..LAST for the game's reconstruction draws
 int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f);   // outside a pass; 0 = nothing recorded
 int vk_tup_result(VkTupImage *o);                // the image vk_tup_record wrote for own_out
+// Frame id's picture before the interface (RGBA8, GENERAL, w x h: the game resolution) while frame generation or HDR
+// runs.
+int vk_tup_hudless(uint64_t id, VkImage *img, uint32_t *w, uint32_t *h);
+
+// HDR output (vk_hdr.c).
+int vk_hdr_wanted(void);            // XC3_HDR, read at start: the swapchain is asked for in HDR10
+void vk_hdr_set_active(int on);     // the swapchain is HDR10 (create_swapchain)
+int vk_hdr_active(void);
+// The crop rect of src (GENERAL, fmt: 8-bit sRGB-encoded values) encoded to PQ in an RGBA16F image of the rect's size
+// (GENERAL), returned with its format; bare: the same frame without the interface, or NULL. which: 0 the picture, 1
+// the picture without the interface (an image each). NULL when HDR is not running.
+VkImage vk_hdr_encode(VkCommandBuffer cb, unsigned slot, int which, VkImage src, VkFormat fmt, VkImage bare,
+                      const int rect[4], VkFormat *out_fmt);
+VkImage vk_hdr_full(uint32_t w, uint32_t h);   // the window-size RGBA16F picture the present scales into
+int vk_hdr_overlay_target(uint32_t w, uint32_t h, VkImage *img, VkImageView *view);   // RGBA8, for the menu to draw into
+void vk_hdr_overlay(VkCommandBuffer cb);       // the overlay (COLOR_ATTACHMENT) blended onto the full picture (GENERAL)
+void vk_hdr_release(void);
 void vk_tup_copy(VkCommandBuffer cb, const VkTupImage *src, const VkTupImage *dst);   // outside a pass, GENERAL; scales
 void vk_tup_release(void);                       // before the device goes away
 void vk_present_flip(void);

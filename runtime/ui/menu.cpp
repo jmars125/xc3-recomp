@@ -459,6 +459,21 @@ static void row_render_scale(void) {
     opt_choice_list("XC3_RENDER_SCALE", UI_MENU_RENDER_SCALE, vals, names, N, UI_MENU_RENDER_SCALE_DESC);
 }
 
+// HDR output (vk_hdr.c); its levels only while it is on.
+static void row_hdr(void) {
+    static const UiTextId onoff[] = {UI_MENU_OFF, UI_MENU_ON};
+    opt_choice("XC3_HDR", UI_MENU_HDR, onoff, 2, UI_MENU_HDR_DESC);
+    if (!cfg_bool("XC3_HDR")) return;
+    opt_slider("XC3_HDR_PEAK_NITS", UI_MENU_HDR_PEAK, 400, 4000, UI_MENU_HDR_PEAK_DESC, 50, "%.0f nits");
+    opt_slider("XC3_HDR_GAME_NITS", UI_MENU_HDR_GAME, 80, 500, UI_MENU_HDR_GAME_DESC, 5, "%.0f nits");
+    opt_slider("XC3_HDR_UI_NITS", UI_MENU_HDR_UI, 80, 500, UI_MENU_HDR_UI_DESC, 5, "%.0f nits");
+    opt_slider("XC3_HDR_HIGHLIGHTS", UI_MENU_HDR_HIGHLIGHTS, 0, 100, UI_MENU_HDR_HIGHLIGHTS_DESC, 5, "%.0f %%");
+    opt_slider("XC3_HDR_SATURATION", UI_MENU_HDR_SATURATION, 0, 200, UI_MENU_HDR_SATURATION_DESC, 5, "%.0f %%");
+    static const char *const gv[] = {"srgb", "2.2", "2.4"};
+    static const char *const gn[] = {"sRGB", "2.2", "2.4"};
+    opt_choice_list("XC3_HDR_GAMMA", UI_MENU_HDR_GAMMA, gv, gn, 3, UI_MENU_HDR_GAMMA_DESC);
+}
+
 // The DLSS model (vk_sl.cpp dlss_preset).
 static void row_dlss_preset(void) {
     static const char *const vals[] = {"default", "k", "j", "l", "m"};
@@ -567,6 +582,7 @@ static void tab_screen(float scale) {
     row_dlss_preset();
     static const UiTextId reflex[] = {UI_MENU_OFF, UI_MENU_ON, UI_MENU_REFLEX_BOOST};
     opt_choice("XC3_REFLEX", UI_MENU_REFLEX, reflex, 3, UI_MENU_REFLEX_DESC);
+    row_hdr();
     opt_end();
 }
 

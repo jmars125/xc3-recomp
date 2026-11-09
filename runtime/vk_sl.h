@@ -53,7 +53,7 @@ void vk_sl_fg_frame_end(uint64_t id);     // replay: frame id's recording is don
 // Present thread, right before frame id's present: the w x h back buffer of fmt and its image count, the picture's
 // rectangle {x, y, w, h} in it, the render size of the inputs; allow: generation may run (no menu over the picture).
 void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images, const int rect[4],
-                      uint32_t render_w, uint32_t render_h, int allow);
+                      uint32_t render_w, uint32_t render_h, int allow, const VkSlImage *hudless);
 void vk_sl_fg_present_end(uint64_t id);   // right after it
 int vk_sl_reflex_ready(void);              // Reflex runs without DLSS-G: the frame and present calls are for it
 void vk_sl_reflex_present(uint64_t id);    // the present thread, before frame id's present, without DLSS-G

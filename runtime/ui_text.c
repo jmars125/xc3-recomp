@@ -105,6 +105,22 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                             "picture is closer to your input. Boost also keeps the GPU clocks up. DLSS Frame Generation "
                             "always keeps it on.",
     [UI_MENU_REFLEX_BOOST] = "On + boost",
+    [UI_MENU_HDR] = "HDR",
+    [UI_MENU_HDR_DESC] = "HDR10 output: the game's picture expanded to your display's range. Needs Windows' HDR on. "
+                         "Takes a restart.",
+    [UI_MENU_HDR_PEAK] = "HDR peak brightness",
+    [UI_MENU_HDR_PEAK_DESC] = "Your display's peak brightness in nits; the brightest highlights reach it.",
+    [UI_MENU_HDR_GAME] = "HDR scene white",
+    [UI_MENU_HDR_GAME_DESC] = "The brightness in nits of the scene's white before the highlights are expanded.",
+    [UI_MENU_HDR_UI] = "HDR interface brightness",
+    [UI_MENU_HDR_UI_DESC] = "The brightness in nits of the game's interface and this menu.",
+    [UI_MENU_HDR_HIGHLIGHTS] = "HDR highlights",
+    [UI_MENU_HDR_HIGHLIGHTS_DESC] = "How far the scene's bright parts are taken towards the peak; 0 keeps the SDR "
+                                    "picture.",
+    [UI_MENU_HDR_SATURATION] = "HDR saturation",
+    [UI_MENU_HDR_SATURATION_DESC] = "Colour strength of the scene; 100 % leaves it as the game made it.",
+    [UI_MENU_HDR_GAMMA] = "HDR gamma",
+    [UI_MENU_HDR_GAMMA_DESC] = "How the game's colours are decoded: 2.2 matches most SDR displays, sRGB lifts the darks.",
 
     [UI_MENU_FPS_LIMIT] = "Frame rate limit",
     [UI_MENU_FPS_LIMIT_DESC] = "The most frames per second the game draws; the game's clock follows it. Above 60 is "
@@ -382,6 +398,21 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                             "картинка ближе к вводу. Ускорение также держит частоты GPU высокими. С генерацией кадров "
                             "DLSS он всегда включён.",
     [UI_MENU_REFLEX_BOOST] = "Вкл. + ускорение",
+    [UI_MENU_HDR] = "HDR",
+    [UI_MENU_HDR_DESC] = "Вывод HDR10: картинка игры расширяется до диапазона вашего дисплея. Нужен включённый HDR "
+                         "в Windows. Требует перезапуска.",
+    [UI_MENU_HDR_PEAK] = "Пиковая яркость HDR",
+    [UI_MENU_HDR_PEAK_DESC] = "Пиковая яркость дисплея в нитах; её достигают самые яркие блики.",
+    [UI_MENU_HDR_GAME] = "Белый сцены HDR",
+    [UI_MENU_HDR_GAME_DESC] = "Яркость белого сцены в нитах до расширения бликов.",
+    [UI_MENU_HDR_UI] = "Яркость интерфейса HDR",
+    [UI_MENU_HDR_UI_DESC] = "Яркость интерфейса игры и этого меню в нитах.",
+    [UI_MENU_HDR_HIGHLIGHTS] = "Блики HDR",
+    [UI_MENU_HDR_HIGHLIGHTS_DESC] = "Насколько яркие части сцены поднимаются к пику; 0 оставляет картинку SDR.",
+    [UI_MENU_HDR_SATURATION] = "Насыщенность HDR",
+    [UI_MENU_HDR_SATURATION_DESC] = "Насыщенность цветов сцены; 100 % оставляет их как в игре.",
+    [UI_MENU_HDR_GAMMA] = "Гамма HDR",
+    [UI_MENU_HDR_GAMMA_DESC] = "Как декодируются цвета игры: 2.2 как у большинства SDR-дисплеев, sRGB светлее в тенях.",
 
     [UI_MENU_FPS_LIMIT] = "Ограничение частоты кадров",
     [UI_MENU_FPS_LIMIT_DESC] = "Наибольшее число кадров в секунду; часы игры идут по нему. Выше 60 — экспериментальный "

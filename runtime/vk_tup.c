@@ -75,6 +75,18 @@ typedef struct {
     VkImageView view;
 } Img;
 
+// Frame generation's picture without the interface: the upscaler's output is the frame before the game draws its
+// interface over it, so a copy of it per frame id (HL_RING of them, so the present of frame id reads its own while
+// later frames are recorded) is what the generators compare the back buffer with to keep the HUD out of the frames
+// they make (vk_tup_hudless; gfx_present.c scales it as it scales the picture).
+#define HL_RING 4
+
+static struct {
+    Img img[HL_RING];
+    uint64_t id[HL_RING];   // frame id + 1 whose picture img holds
+    uint32_t w, h;
+} HL;
+
 static struct {
     int tried, ok;                      // ok: the input pass exists
     int ffx_tried;                      // amd_fidelityfx_vk.dll looked for (lib: found)
@@ -364,6 +376,39 @@ static struct FfxApiResource res(const Img *i, uint32_t fmt, uint32_t w, uint32_
     return r;
 }
 
+// T.out (ow x oh, just written by the upscaler, GENERAL) copied into the ring slot of frame id.
+static void hudless_keep(VkCtx *c, VkCommandBuffer cb, uint64_t id, uint32_t ow, uint32_t oh) {
+    if (HL.w != ow || HL.h != oh) {   // a new frame size: earlier presents may still read the old images
+        vk_queue_lock();
+        vkDeviceWaitIdle(c->device);
+        vk_queue_unlock();
+        for (int i = 0; i < HL_RING; i++) img_free(c, &HL.img[i]), HL.id[i] = 0;
+        HL.w = HL.h = 0;
+        for (int i = 0; i < HL_RING; i++)
+            if (!img_make(c, &HL.img[i], VK_FORMAT_R8G8B8A8_UNORM, ow, oh)) {
+                rt_log("vk: frame generation: the HUD-less picture's images could not be created");
+                for (int k = 0; k < HL_RING; k++) img_free(c, &HL.img[k]);
+                return;
+            }
+        HL.w = ow, HL.h = oh;
+        rt_log("vk: the picture without the HUD is kept for frame generation and HDR (%ux%u)", ow, oh);
+    }
+    unsigned s = (unsigned)(id % HL_RING);
+    const VkImageLayout G = VK_IMAGE_LAYOUT_GENERAL;
+    const VkPipelineStageFlags2 ALL = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, XF = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, ALL, VK_ACCESS_2_MEMORY_WRITE_BIT, XF,
+            VK_ACCESS_2_TRANSFER_READ_BIT);
+    barrier(cb, HL.img[s].image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, G, ALL,
+            VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkImageCopy cp = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .extent = {ow, oh, 1}};
+    vkCmdCopyImage(cb, T.out.image, G, HL.img[s].image, G, 1, &cp);
+    barrier(cb, HL.img[s].image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL,
+            VK_ACCESS_2_MEMORY_READ_BIT);
+    barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, XF, 0, ALL, 0);   // the next frame's writes wait for the read
+    HL.id[s] = id + 1;
+}
+
 int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     VkCtx *c = vk_ctx();
     if (!T.tried) init(c);
@@ -504,11 +549,19 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     }
     // later passes that write the game's inputs wait for the input pass
     barrier(cb, f->color.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, CS, 0, ALL, 0);
+    if (vk_fg_mode() != VK_FG_OFF || vk_hdr_active()) hudless_keep(c, cb, vk_fg_frame(), ow, oh);
     T.frames++;
     if (T.logged_mode != mode) {
         T.logged_mode = mode;
         rt_log("vk: %s runs in place of the game's reconstruction, %ux%u to %ux%u", mode_name(mode), rw, rh, ow, oh);
     }
+    return 1;
+}
+
+int vk_tup_hudless(uint64_t id, VkImage *img, uint32_t *w, uint32_t *h) {
+    unsigned s = (unsigned)(id % HL_RING);
+    if (HL.id[s] != id + 1 || !HL.img[s].image) return 0;
+    *img = HL.img[s].image, *w = HL.w, *h = HL.h;
     return 1;
 }
 
@@ -538,6 +591,8 @@ void vk_tup_release(void) {
     VkCtx *c = vk_ctx();
     if (!c || !T.tried) return;
     ctx_free(c);
+    for (int i = 0; i < HL_RING; i++) img_free(c, &HL.img[i]);
+    memset(&HL, 0, sizeof HL);
     for (int s = 0; s < SLOTS; s++)
         for (int k = 0; k < 3; k++)
             if (T.src_view[s][k]) vkDestroyImageView(c->device, T.src_view[s][k], NULL);

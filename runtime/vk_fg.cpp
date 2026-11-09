@@ -306,7 +306,8 @@ static int ensure_ctx(uint32_t rw, uint32_t rh) {
                                  .vkPhysicalDevice = c->phys, .vkDeviceProcAddr = ffx_device_proc};
     struct ffxCreateContextDescFrameGeneration d = {
         .header = {.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION, .pNext = &be.header},
-        .flags = FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT | FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE,
+        .flags = FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT | FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE |
+                 (vk_hdr_active() ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0u),   // an HDR10 back buffer
         .displaySize = {w, h}, .maxRenderSize = {rw > w ? rw : w, rh > h ? rh : h},
         .backBufferFormat = ffx_format((VkFormat)fmt)};
     if (cfg_get("XC3_TUP_DEBUG")) d.flags |= FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING;
@@ -394,12 +395,12 @@ float vk_fg_shown_ratio(void) {
 }
 
 void vk_fg_present(uint64_t id, VkSwapchainKHR sc, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images,
-                   const int rect[4], int allow) {
+                   const int rect[4], int allow, const VkSlImage *hudless) {
     int mode = vk_fg_mode();
     if (mode != VK_FG_OFF) ratio_tick(mode, sc);
     if (mode == VK_FG_OFF) vk_sl_reflex_present(id);   // Reflex with DLSS alone
     if (mode == VK_FG_DLSS) {
-        vk_sl_fg_present(id, w, h, fmt, images, rect, F.render_w, F.render_h, allow);
+        vk_sl_fg_present(id, w, h, fmt, images, rect, F.render_w, F.render_h, allow, hudless);
         return;
     }
     if (mode != VK_FG_FSR || !F.sc_ctx || F.fsr_failed) return;
@@ -416,6 +417,10 @@ void vk_fg_present(uint64_t id, VkSwapchainKHR sc, uint32_t w, uint32_t h, VkFor
             cf.generationRect.width = rect[2], cf.generationRect.height = rect[3];
         } else {
             cf.generationRect.width = (int32_t)w, cf.generationRect.height = (int32_t)h;
+        }
+        if (on && hudless) {   // the interface is told apart from the scene by the difference to this picture
+            cf.HUDLessColor = ffx_res(hudless, ffx_format(hudless->format));
+            cf.HUDLessColor.state = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS;
         }
         ffxReturnCode_t rc = F.configure(&F.ctx, &cf.header);
         if (rc != FFX_API_RETURN_OK) {

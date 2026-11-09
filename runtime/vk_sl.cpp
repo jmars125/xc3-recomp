@@ -615,7 +615,7 @@ extern "C" void vk_sl_fg_frame_end(uint64_t id) { marker(sl::PCLMarker::eRenderS
 // one before have their inputs and allow is set), constants for a frame that set none, the picture's rectangle in the
 // w x h back buffer, and the present marker.
 extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images, const int rect[4],
-                                 uint32_t render_w, uint32_t render_h, int allow) {
+                                 uint32_t render_w, uint32_t render_h, int allow, const VkSlImage *hudless) {
     if (!S.fg) return;
     sl::FrameToken *ft = token(id);
     if (!ft) return;
@@ -650,6 +650,18 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
                        (unsigned long long)id, w, h, render_w, render_h);
             S.fg_on = on, S.fg_set = 1, S.fg_w = w, S.fg_h = h, S.fg_rw = render_w, S.fg_rh = render_h;
         }
+    }
+    if (on && hudless) {
+        // The frame without the interface, placed as the back buffer's picture: DLSS-G keeps what differs (the HUD)
+        // out of the frames it generates. It is read at this present (eValidUntilPresent).
+        sl::Resource res = resource(hudless);
+        sl::Extent e{0, 0, hudless->w, hudless->h};
+        if (rect) e = sl::Extent{(uint32_t)rect[1], (uint32_t)rect[0], (uint32_t)rect[2], (uint32_t)rect[3]};
+        sl::ResourceTag t(&res, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &e);
+        sl::ViewportHandle vp(0u);
+        sl::Result r = S.set_tag(*ft, vp, &t, 1, NULL);
+        static int n;
+        if (r != sl::Result::eOk && n++ < 4) rt_log("vk: DLSS Frame Generation: the HUD-less tag failed (%s)", result_name(r));
     }
     if (rect && (rect[0] || rect[1] || (uint32_t)rect[2] != w || (uint32_t)rect[3] != h)) {
         // the picture between black bars: generation runs on its rectangle only
@@ -748,8 +760,9 @@ extern "C" int vk_sl_fg_inputs(VkCommandBuffer cb, uint64_t id, const VkSlImage 
 extern "C" void vk_sl_fg_frame_start(uint64_t id) { (void)id; }
 extern "C" void vk_sl_fg_frame_end(uint64_t id) { (void)id; }
 extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images, const int rect[4],
-                                 uint32_t render_w, uint32_t render_h, int allow) {
-    (void)id, (void)w, (void)h, (void)fmt, (void)images, (void)rect, (void)render_w, (void)render_h, (void)allow;
+                                 uint32_t render_w, uint32_t render_h, int allow, const VkSlImage *hudless) {
+    (void)id, (void)w, (void)h, (void)fmt, (void)images, (void)rect, (void)render_w, (void)render_h, (void)allow,
+        (void)hudless;
 }
 extern "C" void vk_sl_fg_present_end(uint64_t id) { (void)id; }
 extern "C" int vk_sl_fg_active(void) { return 0; }

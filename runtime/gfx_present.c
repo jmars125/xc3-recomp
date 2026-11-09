@@ -140,6 +140,13 @@ static uint32_t g_flip_idx;
 // what the flip tells the generator: the picture's rectangle and whether a menu covers it.
 static uint64_t g_fg_next, g_flip_fg;
 static int g_flip_rect[4], g_flip_allow;
+// Frame generation's picture without the interface at the swapchain's size and format (hudless_record).
+static VkImage g_hl;
+static VmaAllocation g_hl_mem;
+static VkImageView g_hl_view;
+static uint32_t g_hl_w, g_hl_h;
+static VkFormat g_hl_fmt;
+static int g_flip_hl;   // the flip's present has g_hl for its frame
 static int g_sc_fsr;   // g_sc is FSR 3 frame generation's swapchain
 
 // ---- XC3_FLIGHT thumbnails (flight.c; g_pl): each present also blits the swapchain image down into slot frame % g_th_n
@@ -295,7 +302,10 @@ static void flip_locked(void) {
                            .pImageIndices = &g_flip_idx};
     vk_queue_lock();
     sc_fns(vk_ctx()->device);
-    vk_fg_present(g_flip_fg, g_sc, g_sc_ext.width, g_sc_ext.height, g_sc_fmt, g_sc_n, g_flip_rect, g_flip_allow);
+    VkSlImage hl = {g_hl, g_hl_view, g_hl_fmt, g_hl_w, g_hl_h,
+                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 0, 0};
+    vk_fg_present(g_flip_fg, g_sc, g_sc_ext.width, g_sc_ext.height, g_sc_fmt, g_sc_n, g_flip_rect, g_flip_allow,
+                  g_flip_hl && g_hl ? &hl : NULL);
     VkResult r = SC.present(vk_ctx()->gfx_queue, &pi);
     vk_fg_present_end(g_flip_fg);
     vk_queue_unlock();
@@ -332,6 +342,11 @@ static int create_swapchain(void) {
     // UNORM: the blit writes the bytes the game wrote (no sRGB encode).
     VkSurfaceFormatKHR sf = fmts[0];
     int found = 0;
+    // HDR (vk_hdr.c): 10-bit HDR10, which Windows offers while its HDR is on
+    for (uint32_t i = 0; i < nf && !found && vk_hdr_wanted(); i++)
+        if ((fmts[i].format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || fmts[i].format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) &&
+            fmts[i].colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT) { sf = fmts[i]; found = 1; }
+    if (vk_hdr_wanted()) vk_hdr_set_active(found);
     for (uint32_t i = 0; i < nf && !found; i++)
         if (fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM && fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { sf = fmts[i]; found = 1; }
     for (uint32_t i = 0; i < nf && !found; i++)
@@ -600,6 +615,153 @@ void gfx_fit_rect(int cw, int ch, int dw, int dh, int out[4]) {
     out[0] = (dw - out[2]) / 2, out[1] = (dh - out[3]) / 2;
 }
 
+static void hudless_free(void) {
+    VkCtx *c = vk_ctx();
+    if (g_hl_view) vkDestroyImageView(c->device, g_hl_view, NULL);
+    if (g_hl) vmaDestroyImage(c->vma, g_hl, g_hl_mem);
+    g_hl = VK_NULL_HANDLE, g_hl_view = VK_NULL_HANDLE, g_hl_w = g_hl_h = 0;
+}
+
+// Frame generation's HUD-less picture of the frame being presented (vk_tup.c vk_tup_hudless: the upscaler's output, a
+// w x h image like the presented one) brought to the swapchain's size the way the picture is: the same crop, the same
+// place between black bars and the same scaler (fsr: FSR 1 with its sharpening, else the bilinear blit), so that it
+// differs from the back buffer only where the interface is. Left in GENERAL; 0 when there is none for this frame.
+static int hudless_record(VkCommandBuffer cb, unsigned slot, int w, int h, const int rect[4], const int to[4], int fsr) {
+    VkImage pic;
+    uint32_t pw = 0, ph = 0;
+    if (vk_fg_mode() == VK_FG_OFF) return 0;
+    int have = vk_tup_hudless(g_fg_next, &pic, &pw, &ph);
+    // the upscaler's target can be taller than the presented image (1920x1088 against 1080): the picture is at the
+    // same place in both, from the top left
+    if (!have || (int)pw < w || (int)ph < h) {
+        static int n;
+        if (cfg_get("XC3_TUP_DEBUG") && n++ < 20)
+            rt_log("gfx: no HUD-less picture for frame %llu (%s, %ux%u against %dx%d)", (unsigned long long)g_fg_next,
+                   have ? "a smaller one" : "none kept", pw, ph, w, h);
+        return 0;
+    }
+    VkCtx *c = vk_ctx();
+    if (g_hl && (g_hl_w != g_sc_ext.width || g_hl_h != g_sc_ext.height || g_hl_fmt != g_sc_fmt)) {
+        vk_queue_lock(), vkDeviceWaitIdle(c->device), vk_queue_unlock();
+        hudless_free();
+        vk_hdr_release();
+    }
+    if (!g_hl) {
+        VkImageCreateInfo ii = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = g_sc_fmt,
+                                .extent = {g_sc_ext.width, g_sc_ext.height, 1}, .mipLevels = 1, .arrayLayers = 1,
+                                .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                         VK_IMAGE_USAGE_SAMPLED_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(c->vma, &ii, &ai, &g_hl, &g_hl_mem, NULL) != VK_SUCCESS) return g_hl = VK_NULL_HANDLE, 0;
+        VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = g_hl,
+                                    .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = g_sc_fmt,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        if (vkCreateImageView(c->device, &vi, NULL, &g_hl_view) != VK_SUCCESS) g_hl_view = VK_NULL_HANDLE;
+        g_hl_w = g_sc_ext.width, g_hl_h = g_sc_ext.height, g_hl_fmt = g_sc_fmt;
+        rt_log("gfx: frame generation's HUD-less picture at %ux%u", g_hl_w, g_hl_h);
+    }
+    // the previous present's read of it is over: the generators read it within their present
+    sync_barrier(cb, g_hl, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                 VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    if (to[2] != (int)g_sc_ext.width || to[3] != (int)g_sc_ext.height) {
+        VkClearColorValue black = {.float32 = {0, 0, 0, 1}};
+        VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(cb, g_hl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+        sync_barrier(cb, g_hl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    }
+    // With HDR the picture went through the encode first (present_hdr): this one does as well, as all scene (compared
+    // with itself, nothing in it is the interface); it is then the encode's image of the crop's size.
+    VkFormat pf = VK_FORMAT_R8G8B8A8_UNORM;
+    int sr[4] = {rect[0], rect[1], rect[2], rect[3]};
+    if (vk_hdr_active()) {
+        VkImage e = vk_hdr_encode(cb, slot, 1, pic, pf, pic, rect, &pf);
+        if (!e) return 0;
+        pic = e, pw = (uint32_t)rect[2], ph = (uint32_t)rect[3];
+        sr[0] = sr[1] = 0;
+    }
+    // FSR 1's per-slot source view: a slot of its own, after the picture's (FRAMES of them)
+    int done = fsr && vk_fsr_record(cb, slot + FRAMES, pic, pf, (int)pw, (int)ph, sr, g_hl, to[0], to[1],
+                                    (uint32_t)to[2], (uint32_t)to[3]);
+    if (!done) {
+        VkImageBlit region = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                              .srcOffsets = {{sr[0], sr[1], 0}, {sr[0] + sr[2], sr[1] + sr[3], 1}},
+                              .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                              .dstOffsets = {{to[0], to[1], 0}, {to[0] + to[2], to[1] + to[3], 1}}};
+        vkCmdBlitImage(cb, pic, VK_IMAGE_LAYOUT_GENERAL, g_hl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
+                       VK_FILTER_LINEAR);
+    }
+    sync_barrier(cb, g_hl, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                 VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+    return 1;
+}
+
+// The HDR present (vk_hdr.c): the crop rect of src encoded to PQ, scaled (FSR 1 or the blit) into the window-size
+// RGBA16F picture, the overlay drawn into an RGBA8 image and blended onto it at the interface's white, and the result
+// converted into dst (the HDR10 swapchain image, TRANSFER_DST). *fsr, *hl: as the SDR path sets them. 0: nothing
+// recorded (the SDR path runs instead).
+static int present_hdr(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, int w, int h, const int rect[4],
+                       const int to[4], int overlay, VkImage dst, int *fsr, int *hl) {
+    VkImage bare = VK_NULL_HANDLE;
+    uint32_t bw = 0, bh = 0;
+    if (!vk_tup_hudless(g_fg_next, &bare, &bw, &bh) || (int)bw < w || (int)bh < h) bare = VK_NULL_HANDLE;
+    VkFormat ef;
+    VkImage enc = vk_hdr_encode(cb, slot, 0, src, fmt, bare, rect, &ef);
+    VkImage full = enc ? vk_hdr_full(g_sc_ext.width, g_sc_ext.height) : VK_NULL_HANDLE;
+    if (!full) return 0;
+    const VkPipelineStageFlags2 ALL = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, XF = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    const VkAccessFlags2 RW = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    sync_barrier(cb, full, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ALL, RW, XF,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    VkClearColorValue black = {.float32 = {0, 0, 0, 1}};   // PQ 0: no light
+    VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cb, full, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &all);
+    sync_barrier(cb, full, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, XF,
+                 VK_ACCESS_2_TRANSFER_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    const int er[4] = {0, 0, rect[2], rect[3]};
+    *fsr = vk_fsr_record(cb, slot, enc, ef, rect[2], rect[3], er, full, to[0], to[1], (uint32_t)to[2], (uint32_t)to[3]);
+    if (!*fsr) {
+        VkImageBlit region = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {rect[2], rect[3], 1}},
+                              .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                              .dstOffsets = {{to[0], to[1], 0}, {to[0] + to[2], to[1] + to[3], 1}}};
+        vkCmdBlitImage(cb, enc, VK_IMAGE_LAYOUT_GENERAL, full, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+    }
+    g_scaler = *fsr ? 2 : rect[2] != to[2] || rect[3] != to[3];
+    *hl = hudless_record(cb, slot, w, h, rect, to, *fsr);
+    sync_barrier(cb, full, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                 ALL, RW);
+    VkImage oi;
+    VkImageView ov;
+    if (overlay && vk_hdr_overlay_target(g_sc_ext.width, g_sc_ext.height, &oi, &ov)) {
+        sync_barrier(cb, oi, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, ALL, RW,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                     VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = ov,
+                                        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                        .clearValue = {.color = {.float32 = {0, 0, 0, 0}}}};
+        VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_sc_ext}, .layerCount = 1,
+                              .colorAttachmentCount = 1, .pColorAttachments = &ca};
+        vkCmdBeginRendering(cb, &ri);
+        menu_overlay_draw(cb);
+        vkCmdEndRendering(cb);
+        vk_hdr_overlay(cb);
+    }
+    sync_barrier(cb, full, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ALL, RW, XF,
+                 VK_ACCESS_2_TRANSFER_READ_BIT);
+    VkImageBlit one = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                       .srcOffsets = {{0, 0, 0}, {(int)g_sc_ext.width, (int)g_sc_ext.height, 1}},
+                       .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                       .dstOffsets = {{0, 0, 0}, {(int)g_sc_ext.width, (int)g_sc_ext.height, 1}}};
+    vkCmdBlitImage(cb, full, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &one,
+                   VK_FILTER_NEAREST);
+    return 1;
+}
+
 static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w, int h, const int crop[4], int defer) {
     int general = layout == VK_IMAGE_LAYOUT_GENERAL;
     gfx_window_start();
@@ -642,8 +804,10 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     window_settings_live();
     // The menu overlay: laid out before recording (its first frame starts the ImGui back end and uploads the font)
     const char *menu_shot = NULL;
-    MenuTarget mt = {c->instance, c->phys, c->device, c->gfx_family, c->gfx_queue, g_sc_fmt, g_sc_ext.width,
-                     g_sc_ext.height, cw, ch, g_scaler};
+    // HDR: the overlay draws into an RGBA8 image of ours (present_hdr), not into the HDR10 swapchain image
+    int hdr = general && src && vk_hdr_active();
+    MenuTarget mt = {c->instance, c->phys, c->device, c->gfx_family, c->gfx_queue,
+                     hdr ? VK_FORMAT_R8G8B8A8_UNORM : g_sc_fmt, g_sc_ext.width, g_sc_ext.height, cw, ch, g_scaler};
     int overlay = g_sc_view[idx] &&
                   menu_overlay_frame(__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED), &mt, &menu_shot);
     static char shot_now[600];
@@ -668,6 +832,10 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     const int rect[4] = {cx, cy, cw, ch};
     int to[4];   // where the picture goes in the swapchain image: {x, y, w, h}
     gfx_fit_rect(cw, ch, (int)g_sc_ext.width, (int)g_sc_ext.height, to);
+    int fsr = 0, hl = 0;
+    if (hdr && present_hdr(cb, slot, src, fmt, w, h, rect, to, overlay, dst, &fsr, &hl)) {
+        overlay = 0;   // drawn into the HDR picture already
+    } else {
     if (to[2] != (int)g_sc_ext.width || to[3] != (int)g_sc_ext.height) {   // black bars beside or above and below it
         VkClearColorValue black = {.float32 = {0, 0, 0, 1}};
         VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -677,8 +845,9 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                      VK_ACCESS_2_TRANSFER_WRITE_BIT);
     }
     // FSR (XC3_UPSCALER) when the picture's rectangle is larger than the crop; else the bilinear blit
-    int fsr = general && vk_fsr_record(cb, slot, src, fmt, w, h, rect, dst, to[0], to[1], (uint32_t)to[2], (uint32_t)to[3]);
+    fsr = general && vk_fsr_record(cb, slot, src, fmt, w, h, rect, dst, to[0], to[1], (uint32_t)to[2], (uint32_t)to[3]);
     g_scaler = fsr ? 2 : cw != to[2] || ch != to[3];
+    hl = src && hudless_record(cb, slot, w, h, rect, to, fsr);
     if (!fsr) {
         if (general)   // a GENERAL source (vk_texture.c images): earlier submissions' writes become visible to the blit here
             sync_barrier(cb, src, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -691,6 +860,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         if (general)   // later submissions that write the source wait for the blit's read
             sync_barrier(cb, src, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 0);
+    }
     }
     // last: the image's layout, and the stage and access of its last write, as each step leaves it
     VkImageLayout last = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -752,6 +922,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         g_flip_fg = g_fg_next;
         memcpy(g_flip_rect, to, sizeof to);
         g_flip_allow = !menu_is_open();
+        g_flip_hl = hl;
         if (!defer) flip_locked();
     } else {
         vk_device_fault_report(r);
@@ -810,6 +981,7 @@ void gfx_window_release_vk(void) {
         g_flip_on = 0;   // its blit is done (device idle); the swapchain goes away unpresented
         menu_vk_release();
         vk_fsr_release();
+        hudless_free();
         vk_tup_release();
         vk_fg_release();
         free_capture();

@@ -74,6 +74,17 @@ static int create_instance(void) {
         validate = 0;
     }
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    if (vk_hdr_wanted()) {   // the HDR10 colour space of the swapchain (vk_hdr.c)
+        uint32_t ne = 0;
+        vkEnumerateInstanceExtensionProperties(NULL, &ne, NULL);
+        VkExtensionProperties *ep = ne ? calloc(ne, sizeof *ep) : NULL;
+        int have = 0;
+        if (ep && vkEnumerateInstanceExtensionProperties(NULL, &ne, ep) == VK_SUCCESS)
+            for (uint32_t i = 0; i < ne; i++) have |= !strcmp(ep[i].extensionName, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+        free(ep);
+        if (have) ext[n_ext++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
+        else rt_log("vk: HDR off: the Vulkan loader has no %s", VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+    }
     if ((wants_dlss() || vk_fg_mode() == VK_FG_DLSS) && vk_sl_start(wants_dlss(), vk_fg_mode() == VK_FG_DLSS, vk_fg_mode() == VK_FG_OFF)) {
         const char *sl[16];
         uint32_t n = vk_sl_instance_exts(sl, 16);

@@ -1,0 +1,97 @@
+#version 450
+//
+// Copyright (c) 2025 Carlos Lopez Jr.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+// documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
+// Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+// WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// HDR10 encode on the present (runtime/vk_hdr.c vk_hdr_encode): the game's 8-bit picture (sRGB-encoded values in a
+// UNORM image), crop rectangle at offset, into an RGBA16F image of PQ code values in Rec. 2020 that FSR 1 or the blit
+// then scale to the window. The sRGB decode, gamma correction, Rec. 2020 conversion, gamut compression, peak limit and
+// PQ follow NX2navi's shaders/hdr_encode.comp (Carlos Lopez Jr.'s, MIT, above).
+//
+// The game's picture is SDR: its tonemap already put the scene's highlights under 1.0. Where the picture is the 3D
+// scene, the highlights are expanded towards the display's peak by luminance (the hue kept): y -> y (1 + h y^4
+// (peak / game - 1)), which leaves the darks and the midtones as they were and takes the SDR white to the peak at
+// h = 1. The interface is told apart from the scene by the picture without it (hl, vk_tup.c vk_tup_hudless: the
+// upscaler's output before the game draws its interface): where the two differ, the interface was drawn there, and
+// it stays at its own white (ui nits) without expansion. Without that picture (no temporal upscaler) nothing is
+// expanded and the whole picture sits at the game's white.
+// p0: game nits (the scene's white), ui nits, peak nits, gamma correction (0 none, 1: 2.2, 2: 2.4).
+// p1: highlights (h, 0..1), 1 when hl is the picture without the interface, saturation (1 unchanged), unused.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D hl;
+layout(binding = 2, rgba16f) uniform writeonly image2D dst;
+layout(push_constant) uniform P {
+    ivec2 offset;
+    ivec2 size;
+    vec4 p0;
+    vec4 p1;
+} pc;
+
+vec3 copy_sign(vec3 mag, vec3 s) {
+    vec3 a = abs(mag);
+    return mix(a, -a, lessThan(s, vec3(0.0)));
+}
+
+vec3 sign_pow(vec3 x, float e) { return copy_sign(pow(abs(x), vec3(e)), x); }
+
+vec3 srgb_decode(vec3 c) {
+    return mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, lessThanEqual(c, vec3(0.04045)));
+}
+
+// The colour an sRGB code shows on a display of power g.
+vec3 gamma_decode(vec3 c, float g) { return pow(c, vec3(g)); }
+
+vec3 pq(vec3 nits) {
+    const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));
+    return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2));
+}
+
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(at, pc.size))) return;
+    vec3 code = clamp(texelFetch(src, at + pc.offset, 0).rgb, 0.0, 1.0);
+    bool ui = true;
+    if (pc.p1.y > 0.5) {
+        vec3 bare = clamp(texelFetch(hl, at + pc.offset, 0).rgb, 0.0, 1.0);
+        ui = any(greaterThan(abs(code - bare), vec3(1.5 / 255.0)));
+    }
+    vec3 c = pc.p0.w == 1.0 ? gamma_decode(code, 2.2) : pc.p0.w == 2.0 ? gamma_decode(code, 2.4) : srgb_decode(code);
+    float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    float white = ui ? pc.p0.y : pc.p0.x;
+    if (!ui && y > 0.0) {
+        float k = max(pc.p0.z / pc.p0.x - 1.0, 0.0);
+        float e = y * (1.0 + pc.p1.x * pow(y, 4.0) * k);
+        c *= e / y;
+        if (pc.p1.z != 1.0) c = max(mix(vec3(e), c, pc.p1.z), vec3(0.0));   // saturation around the grey of e
+    }
+    // Rec. 709 to Rec. 2020 (rows)
+    c = c * mat3(0.6274038960, 0.3292830384, 0.0433130657,
+                 0.0690972894, 0.9195403951, 0.0113623156,
+                 0.0163914388, 0.0880133078, 0.8955952532);
+    float gray = dot(c, vec3(0.2627002120, 0.6779980715, 0.0593017165));
+    const float MID_GRAY_GAMMA = log(1.0 / pow(10.0, 0.75)) / log(0.5);   // about 2.49: 18% grey encodes to 50%
+    vec3 encoded = sign_pow(c, 1.0 / MID_GRAY_GAMMA);
+    float encoded_gray = pow(max(gray, 0.0), 1.0 / MID_GRAY_GAMMA);
+    float lowest = min(0.0, min(encoded.r, min(encoded.g, encoded.b)));
+    float distance = encoded_gray - lowest;
+    float ratio = distance == 0.0 ? 0.0 : -lowest / distance;
+    c = sign_pow(mix(vec3(encoded_gray), encoded, 1.0 - ratio), MID_GRAY_GAMMA);
+    c *= white;
+    float max_channel = max(max(max(c.r, c.g), c.b), pc.p0.z);
+    c *= pc.p0.z / max_channel;
+    imageStore(dst, at, vec4(pq(max(c, vec3(0.0))), 1.0));
+}

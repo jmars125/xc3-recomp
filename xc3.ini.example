@@ -154,6 +154,17 @@
 # game starts each frame only as early as the GPU can take it, so the picture is closer to the input. DLSS Frame
 # Generation keeps it at least on; with FSR 3 frame generation it is off. Changes take effect at once.
 # reflex = 1
+# HDR10 output (Windows' HDR must be on; a restart): the game's SDR picture is expanded, the scene's highlights towards
+# hdr_peak_nits by hdr_highlights (0..100; 0 keeps the SDR picture) from its white at hdr_game_nits; the game's
+# interface and the menu stay at hdr_ui_nits. hdr_saturation (0..200, 100 unchanged) sets the scene's colour strength,
+# hdr_gamma how the game's colours are decoded (2.2, 2.4 or srgb). The levels change at once.
+# hdr = 0
+# hdr_peak_nits = 1000
+# hdr_game_nits = 203
+# hdr_ui_nits = 203
+# hdr_highlights = 50
+# hdr_saturation = 100
+# hdr_gamma = 2.2
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
 # proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
 # picture_fit = keep
