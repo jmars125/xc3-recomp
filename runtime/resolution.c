@@ -107,6 +107,17 @@ static void ui_fit_init(void) {
     rt_log("resolution: interface fit %.3f", k);
 }
 
+// The layout manager's canvas (patches-upd.txt, canvas): the shipped 1280x720 of the table's second size, which every
+// layout is made for, whatever size res_init writes there. Without it a speech bubble placed at a world position lands
+// off the screen above 1280x720.
+static void ui_canvas_init(void) {
+    int set = rt_patch_set("canvas");
+    uint8_t *page = rt_patch_page();
+    if (set < 0 || !page) return;
+    uint32_t canvas[2] = {1280, 720};
+    memcpy(page + 0x60, canvas, sizeof canvas);
+}
+
 // TotK Recomp grows the texture heap through its HeapDef table; XC3 has no such table, and the 1.0.1 mods run at
 // 3840x2160 without a bigger heap.
 uint64_t res_heap_extra_kib(void) { return 0; }
@@ -121,6 +132,7 @@ void res_heapdef_served(void) {}
 void res_init(void) {
     decide();
     scene_scale();
+    ui_canvas_init();   // the shipped canvas is right whatever the table holds
     rt_patch_switch(rt_patch_set("uifit"), 0);   // ui_fit_init turns it on once the resolution is in place
     uint64_t table_at = 0;
     for (size_t i = 0; i < sizeof TABLES / sizeof *TABLES && !table_at; i++) {

@@ -54,3 +54,15 @@ site menus main 1031e88 bd408102 bd408102 @page:x8 1e220800 bd400102
 # the site (a bl follows). Hook site from Lucky7 (games/xc3/patches.py, the L8 tour).
 set tour XC3_TOUR 0
 site tour main f3d0 aa0003f3 aa0003f3 @call:f00
+
+# canvas (XC3_UI_CANVAS, resolution.c): the interface's canvas. The layout manager's setup (main+0x1037790, the object
+# at *main+0x1b64fc0 +0x48) makes its canvas (+0x7a0 width, +0x7ac height) the frame size it is given, at most the
+# resolution table's second size: shipped 1280x720, the size every layout is made for. resolution.c writes the output
+# size into that entry, so the canvas grew to it while the layouts kept drawing in 1280x720 units, and what the game
+# places at a world position through the canvas moved away from it: at 1920x1080 a field event's speech bubble, the
+# one that waits for A, sat 1.5 times too far from the top left, at 3840x2160 3 times, off the screen. Each site loads
+# the entry's address from its GOT entry; the replacement points it at the patch page's +0x60 (width) and +0x64
+# (height), where resolution.c keeps 1280 and 720. x8 is reloaded before its next use.
+set canvas XC3_UI_CANVAS 1
+site canvas main 10377b4 f9449d08 @page:x8 91018108
+site canvas main 10377e4 f944a108 @page:x8 91019108
