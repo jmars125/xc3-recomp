@@ -417,6 +417,13 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
         (!f->own_out && f->out.format != VK_FORMAT_R8G8B8A8_UNORM))
         return 0;
     uint32_t rw = f->color.w, rh = f->color.h, ow = f->out.w, oh = f->out.h;
+    if (f->rw && f->rh) {   // the game's dynamic resolution drew a smaller scene into the same targets
+        static uint32_t lw, lh;
+        if ((f->rw != lw || f->rh != lh) && knob("XC3_TUP_DEBUG"))
+            rt_log("vk: temporal upscale: the scene drew %ux%u of %ux%u", f->rw, f->rh, rw, rh);
+        lw = f->rw, lh = f->rh;
+        rw = f->rw, rh = f->rh;
+    }
     if (f->depth.w < rw || f->depth.h < rh || f->motion.w < rw || f->motion.h < rh || !ensure_images(c, rw, rh, ow, oh))
         return 0;
     if (mode == VK_TUP_FSR3 && !ensure_ffx(c)) return 0;

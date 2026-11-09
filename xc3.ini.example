@@ -135,6 +135,9 @@
 # 50 (performance) and 33 (ultra performance); the menu names them. The interface stays at the game resolution. For supersampling, set output_res above window_size. Read at
 # start.
 # render_scale = game
+# Dynamic resolution, the game's own: the 3D scene draws smaller (down to 70 % per side) while the GPU cannot keep up
+# with the frame rate limit, and whole again when it can. Best with a temporal upscaler. Changes take effect at once.
+# dynamic_res = 0
 # Upscaler. fsr (AMD FSR 1) or bilinear scale the picture to the window when the window is larger than the game
 # resolution. The temporal upscalers rebuild the 3D scene in place of the game's own 2x2 reconstruction, from the
 # game's depth, motion vectors and camera jitter, from the scene at half the game resolution (render_scale = game)

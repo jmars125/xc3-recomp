@@ -119,6 +119,8 @@ typedef struct {
     int own_out;                       // 1: the result stays in an image of ours of out's size (vk_tup_result)
     float jitter[2];                   // camera jitter in render pixels, x right and y down
     float near_z, fov_y;               // 0: defaults
+    uint32_t rw, rh;                   // the part of color, depth and motion the scene drew (the game's dynamic
+                                       // resolution draws less than the targets hold); 0: all of it
 } VkTupFrame;
 int vk_tup_mode(void);                           // XC3_UPSCALER as a VK_TUP_* mode
 int vk_tup_role(const GfxShader *fs);            // VK_TUP_FIRST..LAST for the game's reconstruction draws

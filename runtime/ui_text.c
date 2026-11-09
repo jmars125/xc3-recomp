@@ -110,6 +110,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                             "picture is closer to your input. Boost also keeps the GPU clocks up. DLSS Frame Generation "
                             "always keeps it on.",
     [UI_MENU_REFLEX_BOOST] = "On + boost",
+    [UI_MENU_DYNAMIC_RES] = "Dynamic resolution",
+    [UI_MENU_DYNAMIC_RES_DESC] = "The game's own: the 3D scene draws smaller while the GPU cannot keep up with the frame "
+                                 "rate limit, and whole again when it can. Best with DLSS or FSR 3, which scale it back "
+                                 "up.",
     [UI_MENU_HDR] = "HDR",
     [UI_MENU_HDR_DESC] = "HDR10 output: the game's picture expanded to your display's range. Needs Windows' HDR on. "
                          "Takes a restart.",
@@ -407,6 +411,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                             "картинка ближе к вводу. Ускорение также держит частоты GPU высокими. С генерацией кадров "
                             "DLSS он всегда включён.",
     [UI_MENU_REFLEX_BOOST] = "Вкл. + ускорение",
+    [UI_MENU_DYNAMIC_RES] = "Динамическое разрешение",
+    [UI_MENU_DYNAMIC_RES_DESC] = "Собственное разрешение игры: 3D-сцена рисуется меньше, пока GPU не успевает за "
+                                 "ограничением частоты кадров, и снова целиком, когда успевает. Лучше всего с DLSS или "
+                                 "FSR 3, которые возвращают её к полному размеру.",
     [UI_MENU_HDR] = "HDR",
     [UI_MENU_HDR_DESC] = "Вывод HDR10: картинка игры расширяется до диапазона вашего дисплея. Нужен включённый HDR "
                          "в Windows. Требует перезапуска.",

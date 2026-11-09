@@ -32,7 +32,9 @@ void perf_set_overlay(int mode) {
     __atomic_store_n(&perf_on, perf_base || mode == 2, __ATOMIC_RELAXED);
 }
 
-int perf_gpu_timing(void) { return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2; }
+int perf_gpu_timing(void) {   // dynamic resolution (dynres.c) reads the GPU's time per frame too
+    return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2 || dynres_on();
+}
 
 static volatile int64_t gpu_busy_total;
 

@@ -1995,6 +1995,10 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
         const char *js = cfg_get("XC3_TUP_JITTER");
         float sign = (c4[10] != 0 ? -1.0f : 1.0f) * (js && !strcmp(js, "-1") ? -1.0f : 1.0f);
         f->jitter[0] = f->jitter[1] = 0.25f * sign;
+        // c4[0].xy: the size the scene drew this frame, inside its targets (smaller while the game's dynamic
+        // resolution lowers it)
+        if (c4[0] >= 64 && c4[1] >= 64 && c4[0] <= (float)f->color.w && c4[1] <= (float)f->color.h)
+            f->rw = (uint32_t)c4[0], f->rh = (uint32_t)c4[1];
         f->near_z = 0.1f;
         f->fov_y = 1.222f;
         static int said;
