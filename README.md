@@ -39,6 +39,8 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
   `dlss` or `dlaa`). The frame limit counts the frames on screen, so 120 draws 60 and shows 120; the overlay counts
   the frames on screen too. The game's interface is kept out of the generated frames
 - DLSS model choice (`dlss_preset`) and NVIDIA Reflex low latency (`reflex`) with DLSS or DLAA
+- Dynamic resolution (`dynamic_res`): the game's own, the 3D scene drawn smaller while the GPU cannot keep up with the
+  frame limit
 - HDR10 output (`hdr`; Windows' HDR on): the scene's highlights expanded towards the display's peak, the interface
   kept at its own brightness
 - Variable refresh rate (`vrr`): for G-SYNC and FreeSync monitors, each frame shows when it is ready and the frame
@@ -51,7 +53,6 @@ the NVIDIA (Streamline, DLSS) and AMD (FidelityFX) libraries next to `xc3.exe`.
 ## Planned
 
 - Linux and the Steam Deck tested on real hardware
-- Dynamic resolution (the game's own scaling needs more reverse engineering)
 
 ## Installing
 

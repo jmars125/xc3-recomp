@@ -38,6 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cfg.h"
 #include "host.h"
 #include "nvn_api.h"
 #include "nvn_tex.h"
@@ -100,6 +101,24 @@ static void counter_cb(void *arg) {
     uint64_t *addr = arg;
     write_counter(*addr, 0);
     free(addr);
+}
+
+// XC3_GPU_TIME_TEST=<ms> (a test): each timestamp report runs that much later than the one before, so the game reads
+// its GPU as that much slower per report pair and its own dynamic resolution lowers the scene.
+static uint64_t ts_extra_ns;
+// Dynamic resolution (dynres.c): the frame's second report, later by the GPU time the game is to read.
+static void counter_dynres_cb(void *arg) {
+    uint64_t *a = arg;
+    uint64_t rec[2] = {0, (uint64_t)((unsigned __int128)(kern_now_ns() + dynres_report_ns()) * 12 / 625)};
+    memcpy((void *)(uintptr_t)*a, rec, sizeof rec);
+    free(a);
+}
+
+static void counter_ts_cb(void *arg) {
+    uint64_t *a = arg;   // {addr, extra ns}
+    uint64_t rec[2] = {0, (uint64_t)((unsigned __int128)(kern_now_ns() + a[1]) * 12 / 625)};
+    memcpy((void *)(uintptr_t)a[0], rec, sizeof rec);
+    free(a);
 }
 
 // Reports queued by the replay that the GPU has not finished. The condition of RENDER_COND reads a timestamp one as 0
@@ -284,10 +303,34 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
     vk_mem_count(m.cls, VK_MUSE_GPU_WRITE, sizeof(NVNcounterData));
     if (samples) oq_report(ex, p->addr);
     else {
-        uint64_t *a = malloc(sizeof *a);
-        if (!a) rt_fatal("vk: out of memory");
-        *a = p->addr;
-        vk_completion_add(ex->fence, counter_cb, a);
+        static double test_ms = -1;
+        if (test_ms < 0) {
+            const char *t = cfg_get("XC3_GPU_TIME_TEST");
+            test_ms = t ? atof(t) : 0;
+            if (test_ms > 0) rt_log("vk: XC3_GPU_TIME_TEST: each timestamp report %.2f ms after the last", test_ms);
+        }
+        if (p->type == NVN_COUNTER_TYPE_TIMESTAMP && ((p->addr >> 5) & 3) == 1 && dynres_on()) {
+            uint64_t *a = malloc(sizeof *a);
+            if (!a) rt_fatal("vk: out of memory");
+            *a = p->addr;
+            vk_completion_add(ex->fence, counter_dynres_cb, a);
+        } else if (test_ms > 0 && p->type == NVN_COUNTER_TYPE_TIMESTAMP) {
+            static unsigned n;
+            static const char *only;
+            if (!only) only = cfg_get("XC3_GPU_TIME_TEST_SLOT") ? cfg_get("XC3_GPU_TIME_TEST_SLOT") : "";
+            if (*only) ts_extra_ns = ((p->addr >> 5) & 3) == (uint64_t)atoi(only) ? (uint64_t)(test_ms * 1e6) : 0;
+            else ts_extra_ns += (uint64_t)(test_ms * 1e6);
+            if (n++ < 12) rt_log("vk: timestamp report %u at %#llx", n, (unsigned long long)p->addr);
+            uint64_t *a = malloc(2 * sizeof *a);
+            if (!a) rt_fatal("vk: out of memory");
+            a[0] = p->addr, a[1] = ts_extra_ns;
+            vk_completion_add(ex->fence, counter_ts_cb, a);
+        } else {
+            uint64_t *a = malloc(sizeof *a);
+            if (!a) rt_fatal("vk: out of memory");
+            *a = p->addr;
+            vk_completion_add(ex->fence, counter_cb, a);
+        }
     }
     pending[pending_head++ % PENDING] = (typeof(pending[0])){p->addr, ex->fence, samples};
 }
