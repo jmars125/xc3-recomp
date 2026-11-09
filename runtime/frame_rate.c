@@ -146,12 +146,23 @@ static void frame_limit_live(void) {
 // Shown frames per drawn frame; the Vulkan back end's frame generation (vk_fg.c) overrides this.
 __attribute__((weak)) int gfx_frame_gen_factor(void) { return 1; }
 
+// With a variable refresh rate (XC3_VRR=1) the limit stays a little under the monitor's refresh rate, so frames never
+// reach its top, where vsync would hold them a whole refresh: refresh - refresh^2 / 3600 (NVIDIA Reflex's cap, 116 at
+// 120 Hz, 138 at 144 Hz).
+static double vrr_cap(double hz) {
+    double r = gfx_window_refresh_hz();
+    if (r < LIMIT_MIN_HZ || strcmp(cfg_value("XC3_VRR"), "1")) return hz;
+    double top = r - r * r / 3600;
+    return hz > top ? top : hz;
+}
+
 uint64_t frame_step_cap_ns(void) {
     frame_limit_live();
     if (cut_now) return (uint64_t)(1e9 / 30 + 0.5);
     double hz = limit_hz ? limit_hz : gfx_window_refresh_hz();
     if (hz < LIMIT_MIN_HZ) hz = 60;   // display rate unknown (no window yet)
     if (hz > LIMIT_MAX_HZ) hz = LIMIT_MAX_HZ;
+    hz = vrr_cap(hz);
     // With frame generation running (vk_fg.c) the limit counts the frames shown: a drawn and a generated one per
     // drawn frame, so the game draws half of it.
     hz /= gfx_frame_gen_factor();
@@ -166,7 +177,8 @@ double frame_step_limit_hz(void) {
     if (cut_now) return 30;
     double r = hz ? hz : gfx_window_refresh_hz();
     if (r < LIMIT_MIN_HZ) r = 60;
-    return !step_word && r > 60 ? 60 : r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r;
+    r = vrr_cap(r > LIMIT_MAX_HZ ? LIMIT_MAX_HZ : r);
+    return !step_word && r > 60 ? 60 : r;
 }
 
 // ---- XC3_TRACE=perf speed lines

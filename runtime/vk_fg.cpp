@@ -110,6 +110,9 @@ static struct {
     int fsr_on;                     // generation on at the last present
     int fsr_failed;
     uint32_t render_w, render_h;    // the inputs' size (the newest)
+    // frames shown per drawn frame, measured every 30 presents from the generators' own counts (vk_fg_shown_ratio)
+    uint64_t ratio_drawn, ratio_shown0;
+    volatile float ratio;
 } F = {.mode = -1};
 
 int vk_fg_mode(void) {
@@ -372,9 +375,28 @@ static ffxReturnCode_t fsr_generate(ffxDispatchDescFrameGeneration *params, void
     return F.dispatch((ffxContext *)user, &params->header);
 }
 
+// The present thread, once per drawn frame: the generator's count of frames it presented (DLSS-G's own count, or how
+// many presents the FSR 3 swapchain made) over the last 30 drawn frames gives the shown frames per drawn one.
+static void ratio_tick(int mode, VkSwapchainKHR sc) {
+    uint64_t shown = mode == VK_FG_DLSS ? vk_sl_fg_shown()
+                   : F.sc_ctx && F.fns.last_present_count && sc ? F.fns.last_present_count(sc) : 0;
+    if (++F.ratio_drawn < 30) return;
+    float r = shown > F.ratio_shown0 ? (float)(shown - F.ratio_shown0) / (float)F.ratio_drawn : 1;
+    __atomic_store_n(&F.ratio, r < 1 ? 1 : r > 8 ? 8 : r, __ATOMIC_RELAXED);
+    F.ratio_drawn = 0, F.ratio_shown0 = shown;
+    static int n;
+    if ((rt_trace & RT_TRACE_PERF) && ++n % 20 == 0) rt_log("frame generation: %.2f frames shown per drawn frame", r);
+}
+
+float vk_fg_shown_ratio(void) {
+    float r = __atomic_load_n(&F.ratio, __ATOMIC_RELAXED);
+    return F.mode > VK_FG_OFF && r > 1 ? r : 1;
+}
+
 void vk_fg_present(uint64_t id, VkSwapchainKHR sc, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images,
                    const int rect[4], int allow) {
     int mode = vk_fg_mode();
+    if (mode != VK_FG_OFF) ratio_tick(mode, sc);
     if (mode == VK_FG_DLSS) {
         vk_sl_fg_present(id, w, h, fmt, images, rect, F.render_w, F.render_h, allow);
         return;

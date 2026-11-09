@@ -55,6 +55,7 @@ void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat fmt, uint32_
                       uint32_t render_w, uint32_t render_h, int allow);
 void vk_sl_fg_present_end(uint64_t id);   // right after it
 int vk_sl_fg_active(void);                // generation was on at the last present
+uint64_t vk_sl_fg_shown(void);            // frames DLSS-G presented so far, drawn and generated
 // Before the swapchain goes away: generation off with its resources freed, and the device idle through Streamline's
 // vkDeviceWaitIdle, which also waits for the frames its present thread still holds.
 void vk_sl_fg_release(VkDevice dev);

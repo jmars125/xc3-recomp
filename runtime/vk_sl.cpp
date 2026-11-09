@@ -111,6 +111,7 @@ struct {
     uint32_t fg_w, fg_h, fg_rw, fg_rh;     // the sizes the options were last set for
     int fg_set;                            // options set once
     uint64_t fg_last_status_check;
+    uint64_t fg_shown;   // frames DLSS-G presented, drawn and generated (vk_sl_fg_present)
 } S;
 
 const char *result_name(sl::Result r) {
@@ -594,14 +595,18 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
         sl::ViewportHandle vp(0u);
         S.set_tag(*ft, vp, &t, 1, NULL);
     }
-    // Once a second while on: a status other than ok (the reasons DLSS-G gives for not running) goes to the log.
-    if (on && S.dlssg_get_state && id - S.fg_last_status_check >= 120) {
-        S.fg_last_status_check = id;
+    // Every present: the frames DLSS-G put on screen since the last one (drawn and generated), for the overlay; while
+    // on, a status other than ok (the reasons DLSS-G gives for not running) goes to the log, once a second at most.
+    if (S.dlssg_get_state && S.fg_set) {
         sl::DLSSGState st{};
         sl::ViewportHandle vp(0u);
-        if (S.dlssg_get_state(vp, st, NULL) == sl::Result::eOk && st.status != sl::DLSSGStatus::eOk) {
-            static int n;
-            if (n++ < 8) rt_log("vk: DLSS Frame Generation status %#x", (unsigned)st.status);
+        if (S.dlssg_get_state(vp, st, NULL) == sl::Result::eOk) {
+            __atomic_add_fetch(&S.fg_shown, st.numFramesActuallyPresented, __ATOMIC_RELAXED);
+            if (on && st.status != sl::DLSSGStatus::eOk && id - S.fg_last_status_check >= 120) {
+                S.fg_last_status_check = id;
+                static int n;
+                if (n++ < 8) rt_log("vk: DLSS Frame Generation status %#x", (unsigned)st.status);
+            }
         }
     }
     S.pcl_marker(sl::PCLMarker::ePresentStart, *ft);
@@ -610,6 +615,8 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
 extern "C" void vk_sl_fg_present_end(uint64_t id) { marker(sl::PCLMarker::ePresentEnd, id); }
 
 extern "C" int vk_sl_fg_active(void) { return S.fg && S.fg_on; }
+
+extern "C" uint64_t vk_sl_fg_shown(void) { return __atomic_load_n(&S.fg_shown, __ATOMIC_RELAXED); }
 
 extern "C" void vk_sl_fg_release(VkDevice dev) {
     if (!S.fg) return;
@@ -666,6 +673,7 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
 }
 extern "C" void vk_sl_fg_present_end(uint64_t id) { (void)id; }
 extern "C" int vk_sl_fg_active(void) { return 0; }
+extern "C" uint64_t vk_sl_fg_shown(void) { return 0; }
 extern "C" void vk_sl_fg_release(VkDevice dev) { (void)dev; }
 extern "C" void vk_sl_shutdown(void) {}
 

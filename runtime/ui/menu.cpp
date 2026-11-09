@@ -29,6 +29,7 @@ extern "C" {
 #include "perfmon.h"
 #include "platform/platform.h"
 #include "sysinfo.h"
+#include "vk_fg.h"
 #include "ui/menu.h"
 #include "ui_text.h"
 // host.h and vk.h pull in cpu.h, which is C only: the functions the menu needs from them, as declared there.
@@ -533,6 +534,7 @@ static void tab_screen(float scale) {
     opt_begin("##screen", scale);
     opt_toggle("XC3_FULLSCREEN", UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC);
     row_window_size();
+    opt_toggle("XC3_VRR", UI_MENU_VRR, UI_MENU_VRR_DESC);
     static const UiTextId present[] = {UI_MENU_PRESENT_MAILBOX, UI_MENU_PRESENT_VSYNC, UI_MENU_PRESENT_IMMEDIATE};
     opt_choice("XC3_VK_PRESENT", UI_MENU_PRESENT, present, 3, UI_MENU_PRESENT_DESC, present_note());
     row_gpu();
@@ -911,7 +913,8 @@ static void perf_tick(uint64_t now, const MenuTarget *t) {
         g_perf_frames++;
         if (d > g_perf_max_ns) g_perf_max_ns = d;
         if (g_perf_win_ns >= 500000000ull) {
-            snprintf(g_perf_text, sizeof g_perf_text, menu_text(UI_PERF_LINE_FPS), g_perf_frames * 1e9 / g_perf_win_ns);
+            snprintf(g_perf_text, sizeof g_perf_text, menu_text(UI_PERF_LINE_FPS),   // frames on screen
+                     g_perf_frames * 1e9 / g_perf_win_ns * vk_fg_shown_ratio());
             g_perf_win_ns = g_perf_max_ns = 0;
             g_perf_frames = 0;
         }
@@ -962,11 +965,11 @@ static float perf_gb(float mb) { return mb < 0 ? -1 : mb / 1024; }
 
 // The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), how the
 // present scales the image to the window (gfx_present.c, the last present), the frame limit and the presentation mode
-// in use.
+// in use, and frame generation: the generator running and the frames shown per drawn one (vk_fg_shown_ratio).
 static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
-    char v[6][64];
+    char v[7][64];
     snprintf(v[0], sizeof v[0], menu_text(UI_MENU_OV_FMT_SIZE), t->width, t->height);
     snprintf(v[1], sizeof v[1], menu_text(UI_MENU_OV_FMT_SIZE), (unsigned)t->image_w, (unsigned)t->image_h);
     snprintf(v[2], sizeof v[2], menu_text(UI_MENU_OV_FMT_SCENE), scene[0], scene[1], scene[0] * 100.0 / out[0]);
@@ -981,14 +984,17 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     if (hz > 0) snprintf(v[4], sizeof v[4], menu_text(UI_MENU_OV_FPS), hz);
     const char *pm = present_name(gfx_window_present_mode());
     snprintf(v[5], sizeof v[5], "%s", pm ? pm : menu_text(UI_MENU_OV_NONE));
-    static const UiTextId labels[6] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE,
-                                       UI_MENU_OV_SCALING, UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT};
+    const char *fg = vk_fg_status();
+    if (fg) snprintf(v[6], sizeof v[6], "%s x%.1f", fg, vk_fg_shown_ratio());
+    else snprintf(v[6], sizeof v[6], "%s", menu_text(UI_MENU_FRAME_GEN_OFF));
+    static const UiTextId labels[7] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE, UI_MENU_OV_SCALING,
+                                       UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT, UI_MENU_FRAME_GEN};
     if (!ImGui::BeginTable("##perfp", 2, ImGuiTableFlags_SizingFixedFit)) return;
     float vw = 0;
     for (auto &s : v) vw = fmaxf(vw, ImGui::CalcTextSize(s).x);
     ImGui::TableSetupColumn("##p0", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("##p1", ImGuiTableColumnFlags_WidthFixed, vw);
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
         perf_label(labels[i], c);
         ImGui::TableNextColumn();
         perf_right(v[i], false);
@@ -1040,7 +1046,7 @@ static void perf_full_draw(const MenuTarget *t, float scale) {
         perf_cell(UI_MENU_OV_GAME_GB, perf_gb(s.ram_game_mb));
         ImGui::TableNextColumn();   // the frame row: no label, the rate in its place
         char b[64];
-        snprintf(b, sizeof b, menu_text(UI_MENU_OV_FPS), s.fps);
+        snprintf(b, sizeof b, menu_text(UI_MENU_OV_FPS), s.fps * vk_fg_shown_ratio());   // frames on screen
         ImGui::TextColored(fps_c, "%s", b);
         perf_cell(UI_MENU_OV_FRAME_MS, s.frame_ms_avg);
         perf_cell(UI_MENU_OV_MAX_MS, s.frame_ms_max);

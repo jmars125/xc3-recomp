@@ -235,16 +235,17 @@ int gfx_window_focused(void) { return g_focused; }
 unsigned gfx_window_focus_messages(void) { return (unsigned)g_focus_msgs; }
 
 // Present path (g_pl held): a settings change (cfg_version) reaches the window thread, which applies a changed size or
-// fullscreen; a changed XC3_VK_PRESENT rebuilds the swapchain at this present.
+// fullscreen; a changed XC3_VK_PRESENT or XC3_VRR rebuilds the swapchain at this present.
 static void window_settings_live(void) {
     static unsigned seen;
     static int started;
-    static char present[16];   // the XC3_VK_PRESENT the swapchain was made with
+    static char present[24];   // the XC3_VK_PRESENT and XC3_VRR the swapchain was made with
     unsigned v = cfg_version();
     if (started && v == seen) return;
     seen = v;
-    const char *e = cfg_value("XC3_VK_PRESENT");
-    if (!started || strncmp(e, present, sizeof present - 1)) {
+    char e[24];
+    snprintf(e, sizeof e, "%s/%s", cfg_value("XC3_VK_PRESENT"), cfg_value("XC3_VRR"));
+    if (!started || strcmp(e, present)) {
         snprintf(present, sizeof present, "%s", e);
         if (started) plat_xchg32(&g_dirty, 1);
     }
@@ -255,8 +256,13 @@ static void window_settings_live(void) {
 // ---- swapchain
 static const char *g_present_got = "";   // the XC3_VK_PRESENT value of the mode the swapchain got; "" before one
 
+// XC3_VRR=1 replaces the setting: a variable refresh rate monitor shows each frame when it arrives under fifo (vsync
+// only above its range, which the frame limit keeps frames out of: frame_rate.c frame_step_cap_ns); mailbox would
+// drop frames and run the display at its full rate. DLSS Frame Generation paces its own frames and takes no vsync
+// (Streamline: "VSync with FG: not supported" on Vulkan), so it gets immediate.
 static VkPresentModeKHR pick_present_mode(VkPhysicalDevice pd) {
     const char *e = cfg_value("XC3_VK_PRESENT");
+    if (!strcmp(cfg_value("XC3_VRR"), "1")) e = vk_fg_mode() == VK_FG_DLSS ? "immediate" : "fifo";
     VkPresentModeKHR want = !strcmp(e, "mailbox") ? VK_PRESENT_MODE_MAILBOX_KHR
                           : !strcmp(e, "immediate") ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_FIFO_KHR;
     uint32_t n = 0;

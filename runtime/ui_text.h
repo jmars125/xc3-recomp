@@ -24,7 +24,7 @@ typedef enum {
     UI_MENU_VERSION,          // "XC3 Recomp %s, game %s": the port version and the game update, beside the title
 
     // Screen
-    UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC,
+    UI_MENU_FULLSCREEN, UI_MENU_FULLSCREEN_DESC, UI_MENU_VRR, UI_MENU_VRR_DESC,
     UI_MENU_WINDOW_SIZE, UI_MENU_WINDOW_SIZE_DESC, UI_MENU_WINDOW_SIZE_CUSTOM,
     UI_MENU_PRESENT, UI_MENU_PRESENT_DESC, UI_MENU_PRESENT_MAILBOX, UI_MENU_PRESENT_VSYNC, UI_MENU_PRESENT_IMMEDIATE,
     UI_MENU_PRESENT_IN_USE,   // "in use: %s" under the value when the swapchain got another mode than the setting

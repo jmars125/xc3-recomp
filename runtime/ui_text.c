@@ -36,6 +36,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_VERSION] = "XC3 Recomp %s, game %s",
 
     [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 toggles it.",
+    [UI_MENU_VRR] = "Variable refresh rate",
+    [UI_MENU_VRR_DESC] = "For G-SYNC and FreeSync monitors: each frame shows as soon as it is ready, with the frame rate "
+                         "held a little under the refresh rate so it stays in the monitor's range. Replaces the "
+                         "presentation setting. Needs VRR on in the driver; works best in fullscreen.",
     [UI_MENU_WINDOW_SIZE] = "Window size", [UI_MENU_WINDOW_SIZE_DESC] = "Size of the game window when not fullscreen.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Custom",
     [UI_MENU_PRESENT] = "Presentation", [UI_MENU_PRESENT_DESC] = "How finished frames reach the screen.",
@@ -293,6 +297,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_VERSION] = "XC3 Recomp %s, игра %s",
 
     [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 переключает режим.",
+    [UI_MENU_VRR] = "Переменная частота обновления",
+    [UI_MENU_VRR_DESC] = "Для мониторов G-SYNC и FreeSync: каждый кадр выводится, как только готов, а частота кадров "
+                         "держится чуть ниже частоты обновления, чтобы оставаться в диапазоне монитора. Заменяет "
+                         "настройку вывода кадров. Нужна включённая VRR в драйвере; лучше всего в полноэкранном режиме.",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Другой",
     [UI_MENU_PRESENT] = "Вывод кадров", [UI_MENU_PRESENT_DESC] = "Как готовые кадры попадают на экран.",

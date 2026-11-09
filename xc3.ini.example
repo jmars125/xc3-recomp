@@ -115,6 +115,11 @@
 # here. Changes while the game runs take effect at once.
 # window_size = 1920x1080
 # fullscreen = 0
+# Variable refresh rate (G-SYNC, FreeSync, HDMI VRR): 1 presents each frame as it is ready, with vsync above the
+# monitor's range (immediate under DLSS Frame Generation, which brings its own pacing), in place of the presentation
+# setting, and holds the frame rate a little under the refresh rate (116 at 120 Hz), so frames stay inside the range.
+# Needs a VRR monitor with VRR on in the driver; fullscreen is the surest. Changes take effect at once.
+# vrr = 0
 # Performance overlay in the top right corner: off, fps, or full (frame rate, mean and longest frame time). F10
 # cycles the modes in game, as do both stick clicks (L3 + R3) on a controller.
 # perf_overlay = off

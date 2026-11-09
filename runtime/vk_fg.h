@@ -47,6 +47,9 @@ void vk_fg_release(void);   // before the device goes away
 // Shown frames per drawn frame: 2 while generation runs, else 1. The frame limit (frame_rate.c) divides by it.
 int gfx_frame_gen_factor(void);
 const char *vk_fg_status(void);   // for the overlay: "DLSS FG", "FSR FG" or NULL while off
+// Frames shown per drawn frame lately, from the generators' own counts (1 without generation): the overlay's frame
+// rate counts drawn frames and multiplies by it.
+float vk_fg_shown_ratio(void);
 
 #ifdef __cplusplus
 }

@@ -24,7 +24,8 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - 60 fps and above (`fps_limit` up to 360 or the display's rate)
 - Any game resolution and aspect ratio, including ultrawide (`output_res` in `xc3.ini`)
 - Upscaling and anti-aliasing (`upscaler` in `xc3.ini`, or F1): NVIDIA DLSS and DLAA on RTX cards, AMD FSR 3 on any GPU, each in place of the game's own temporal reconstruction, with `render_scale` setting the share of the resolution the 3D scene draws in; FSR 1 for a window larger than the game resolution. `python tools/fetch_upscalers.py <folder of xc3.exe>` puts the NVIDIA and AMD libraries next to `xc3.exe`
-- Frame generation (`frame_gen` in `xc3.ini`, or F1; takes a restart): NVIDIA DLSS Frame Generation on RTX 40 and 50 cards, AMD FSR 3 frame generation on any GPU, showing a generated frame between every two the game draws. Both need a temporal upscaler (`fsr3`, `dlss` or `dlaa`), which supplies the depth and motion they work from; the frame limit caps the shown frames, so the game draws at half of it
+- Variable refresh rate (`vrr` in `xc3.ini`, or F1): for G-SYNC and FreeSync monitors, presents each frame as it is ready and holds the frame rate a little under the refresh rate (116 at 120 Hz) so it stays in the monitor's range
+- Frame generation (`frame_gen` in `xc3.ini`, or F1; takes a restart): NVIDIA DLSS Frame Generation on RTX 40 and 50 cards, AMD FSR 3 frame generation on any GPU, showing a generated frame between every two the game draws. Both need a temporal upscaler (`fsr3`, `dlss` or `dlaa`), which supplies the depth and motion they work from; the frame limit caps the shown frames, so the game draws at half of it. The performance overlay counts the frames on screen
 - RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
 
 ## Planned
