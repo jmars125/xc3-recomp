@@ -83,6 +83,7 @@ jobs:
           path: build/release/${{ env.PACKAGE }}
           if-no-files-found: error
           compression-level: 0
+          retention-days: 1   # the release holds the packages; this copy only passes them to the later jobs
 
   linux:
     needs: version
@@ -118,6 +119,7 @@ jobs:
           path: build/release/${{ env.PACKAGE }}
           if-no-files-found: error
           compression-level: 0
+          retention-days: 1   # the release holds the packages; this copy only passes them to the later jobs
 
   # A fresh runner with none of the build's toolchain: each package unpacks and passes the check-only installer pass.
   verify:
