@@ -576,6 +576,11 @@ static void tab_screen(float scale) {
     opt_choice("XC3_UPSCALER", UI_MENU_UPSCALER, up, 5, UI_MENU_UPSCALER_DESC);
     static const UiTextId fg[] = {UI_MENU_FRAME_GEN_OFF, UI_MENU_FRAME_GEN_DLSS, UI_MENU_FRAME_GEN_FSR};
     opt_choice("XC3_FRAME_GEN", UI_MENU_FRAME_GEN, fg, 3, UI_MENU_FRAME_GEN_DESC);
+    if (!strcmp(cfg_value("XC3_FRAME_GEN"), "dlss")) {   // vk_sl.cpp vk_sl_fg_present
+        static const char *const mv[] = {"2", "3", "4", "5", "6"};
+        static const char *const mn[] = {"2x", "3x", "4x", "5x", "6x"};
+        opt_choice_list("XC3_FRAME_GEN_MULTI", UI_MENU_FRAME_GEN_MULTI, mv, mn, 5, UI_MENU_FRAME_GEN_MULTI_DESC);
+    }
     static const UiTextId fit[] = {UI_MENU_PICTURE_FIT_KEEP, UI_MENU_PICTURE_FIT_STRETCH};
     opt_choice("XC3_PICTURE_FIT", UI_MENU_PICTURE_FIT, fit, 2, UI_MENU_PICTURE_FIT_DESC);
     opt_slider("XC3_SHARPNESS", UI_MENU_SHARPNESS, 0, 100, UI_MENU_SHARPNESS_DESC, 5, "%.0f %%");

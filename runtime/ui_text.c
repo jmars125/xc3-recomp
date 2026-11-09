@@ -88,6 +88,11 @@ static const char *const text_en[UI_TEXT_COUNT] = {
                                "FSR 3 runs on any card with amd_fidelityfx_vk.dll. Takes effect after a restart.",
     [UI_MENU_FRAME_GEN_OFF] = "Off", [UI_MENU_FRAME_GEN_DLSS] = "NVIDIA DLSS Frame Generation",
     [UI_MENU_FRAME_GEN_FSR] = "AMD FSR 3 frame generation",
+    [UI_MENU_FRAME_GEN_MULTI] = "DLSS frame multiplier",
+    [UI_MENU_FRAME_GEN_MULTI_DESC] = "Frames shown per frame the game draws with NVIDIA DLSS Frame Generation: 3x to 6x "
+                                     "(Multi Frame Generation) need an RTX 50 card, up to what it supports; others stay "
+                                     "at 2x. The frame rate "
+                                     "limit counts the shown frames, so 240 at 4x draws 60.",
     [UI_MENU_PICTURE_FIT] = "Picture shape",
     [UI_MENU_PICTURE_FIT_DESC] = "When the window's shape differs from the game resolution's (a 16:9 game on the Steam "
                                  "Deck's 16:10 screen), keep the picture's proportions with black bars, or stretch it "
@@ -381,6 +386,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
                                "работает на любой карте с amd_fidelityfx_vk.dll. Включается после перезапуска.",
     [UI_MENU_FRAME_GEN_OFF] = "Выкл.", [UI_MENU_FRAME_GEN_DLSS] = "NVIDIA DLSS Frame Generation",
     [UI_MENU_FRAME_GEN_FSR] = "AMD FSR 3 (генерация кадров)",
+    [UI_MENU_FRAME_GEN_MULTI] = "Множитель кадров DLSS",
+    [UI_MENU_FRAME_GEN_MULTI_DESC] = "Сколько кадров показывается на каждый нарисованный игрой с NVIDIA DLSS Frame "
+                                     "Generation: от 3x до 6x (Multi Frame Generation) требуют карту RTX 50, до "
+                                     "того, что она поддерживает; на других остаётся 2x. Ограничение частоты считает показанные кадры: 240 при 4x рисует 60.",
     [UI_MENU_PICTURE_FIT] = "Пропорции картинки",
     [UI_MENU_PICTURE_FIT_DESC] = "Когда форма окна отличается от формы разрешения игры (игра 16:9 на экране Steam Deck "
                                  "16:10), сохранять пропорции картинки с чёрными полосами или растягивать её на всё окно.",

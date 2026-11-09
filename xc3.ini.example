@@ -173,6 +173,9 @@
 # and needs a temporal upscaler (upscaler = fsr3, dlss or dlaa): the game's depth and motion come from there. The
 # frame rate limit then counts the shown frames, so 120 draws 60 and shows 120. Takes a restart.
 # frame_gen = off
+# With frame_gen = dlss: frames shown per drawn frame, 2 to 6. 3 and above are NVIDIA's Multi Frame Generation and need
+# an RTX 50 card, up to what it supports; others stay at 2. At 4, fps_limit = 240 draws 60. Changes take effect at once.
+# frame_gen_multi = 2
 
 [language]
 # Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.
