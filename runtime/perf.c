@@ -32,7 +32,14 @@ void perf_set_overlay(int mode) {
     __atomic_store_n(&perf_on, perf_base || mode == 2, __ATOMIC_RELAXED);
 }
 
-int perf_gpu_timing(void) { return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2; }
+static int gpu_want;   // perf_gpu_timing_want: a feature reads GPU time (dynamic resolution)
+
+void perf_gpu_timing_want(int on) { __atomic_store_n(&gpu_want, on != 0, __ATOMIC_RELAXED); }
+
+int perf_gpu_timing(void) {
+    return (rt_trace & RT_TRACE_PERF) || __atomic_load_n(&overlay, __ATOMIC_RELAXED) == 2 ||
+           __atomic_load_n(&gpu_want, __ATOMIC_RELAXED);
+}
 
 static volatile int64_t gpu_busy_total;
 

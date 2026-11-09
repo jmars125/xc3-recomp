@@ -150,7 +150,7 @@ void vk_fg_device(VkDevice dev, uint32_t family, uint32_t first_queue) {
 
 uint64_t vk_fg_frame(void) {
     uint64_t id = __atomic_load_n(&F.build, __ATOMIC_ACQUIRE);
-    if (!F.started && vk_fg_mode() == VK_FG_DLSS) {
+    if (!F.started && (vk_fg_mode() == VK_FG_DLSS || vk_sl_reflex_ready())) {
         F.started = 1;
         vk_sl_fg_frame_start(id);
     }
@@ -160,7 +160,7 @@ uint64_t vk_fg_frame(void) {
 uint64_t vk_fg_frame_close(void) {
     uint64_t id = vk_fg_frame();
     __atomic_store_n(&F.build, id + 1, __ATOMIC_RELEASE);
-    if (vk_fg_mode() == VK_FG_DLSS) {
+    if (vk_fg_mode() == VK_FG_DLSS || vk_sl_reflex_ready()) {   // vk_sl.cpp: DLSS-G, or Reflex with DLSS alone
         vk_sl_fg_frame_end(id);
         vk_sl_fg_frame_start(id + 1);   // Reflex sleeps here, before the next frame is recorded
     }
@@ -326,7 +326,7 @@ static struct FfxApiResource ffx_res(const VkSlImage *i, uint32_t fmt) {
     struct FfxApiResource r = {.resource = (void *)i->image, .state = FFX_API_RESOURCE_STATE_UNORDERED_ACCESS};
     r.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
     r.description.format = fmt;
-    r.description.width = i->w, r.description.height = i->h, r.description.depth = 1;
+    r.description.width = i->iw ? i->iw : i->w, r.description.height = i->ih ? i->ih : i->h, r.description.depth = 1;
     r.description.mipCount = 1;
     r.description.usage = FFX_API_RESOURCE_USAGE_READ_ONLY;
     return r;
@@ -337,7 +337,7 @@ void vk_fg_inputs(VkCommandBuffer cb, const VkSlImage *depth, const VkSlImage *m
     int mode = vk_fg_mode();
     if (mode == VK_FG_OFF) return;
     uint64_t id = vk_fg_frame();
-    F.render_w = depth->w, F.render_h = depth->h;
+    F.render_w = depth->iw ? depth->iw : depth->w, F.render_h = depth->ih ? depth->ih : depth->h;   // the largest
     if (mode == VK_FG_DLSS) {
         if (!dlss_tagged) vk_sl_fg_inputs(cb, id, depth, motion, jitter, near_z, fov_y, reset);
         return;
@@ -397,6 +397,7 @@ void vk_fg_present(uint64_t id, VkSwapchainKHR sc, uint32_t w, uint32_t h, VkFor
                    const int rect[4], int allow) {
     int mode = vk_fg_mode();
     if (mode != VK_FG_OFF) ratio_tick(mode, sc);
+    if (mode == VK_FG_OFF) vk_sl_reflex_present(id);   // Reflex with DLSS alone
     if (mode == VK_FG_DLSS) {
         vk_sl_fg_present(id, w, h, fmt, images, rect, F.render_w, F.render_h, allow);
         return;
@@ -431,7 +432,7 @@ void vk_fg_present(uint64_t id, VkSwapchainKHR sc, uint32_t w, uint32_t h, VkFor
 }
 
 void vk_fg_present_end(uint64_t id) {
-    if (vk_fg_mode() == VK_FG_DLSS) vk_sl_fg_present_end(id);
+    if (vk_fg_mode() == VK_FG_DLSS || vk_sl_reflex_ready()) vk_sl_fg_present_end(id);
 }
 
 void vk_fg_release(void) {

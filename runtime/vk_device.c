@@ -74,7 +74,7 @@ static int create_instance(void) {
         validate = 0;
     }
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    if ((wants_dlss() || vk_fg_mode() == VK_FG_DLSS) && vk_sl_start(wants_dlss(), vk_fg_mode() == VK_FG_DLSS)) {
+    if ((wants_dlss() || vk_fg_mode() == VK_FG_DLSS) && vk_sl_start(wants_dlss(), vk_fg_mode() == VK_FG_DLSS, vk_fg_mode() == VK_FG_OFF)) {
         const char *sl[16];
         uint32_t n = vk_sl_instance_exts(sl, 16);
         for (uint32_t i = 0; i < n && n_ext < 23; i++) {

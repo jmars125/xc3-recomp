@@ -379,6 +379,7 @@ static int create_swapchain(void) {
         g_sc_view[i] = VK_NULL_HANDLE;
     }
     if (old && !fsr_fg) SC.destroy(c->device, old, NULL);
+    if (!fsr_fg) vk_sl_swapchain_made();   // Reflex's mode goes with the swapchain (vk_sl.cpp reflex_apply)
     g_sc_fsr = fsr_fg;
     g_sc_fmt = sf.format;
     g_sc_ext = ext;

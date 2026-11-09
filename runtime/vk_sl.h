@@ -14,13 +14,14 @@ typedef struct {
     VkImage image;
     VkImageView view;
     VkFormat format;
-    uint32_t w, h;
+    uint32_t w, h;          // the part in use, from the top left
     VkImageUsageFlags usage;
+    uint32_t iw, ih;        // the image's own size when larger (dynamic resolution); 0: w x h
 } VkSlImage;   // in VK_IMAGE_LAYOUT_GENERAL
 
 // Before vkCreateInstance, with the features wanted (dlss: DLSS for the upscaler, fg: DLSS Frame Generation);
 // 1: Streamline runs with at least one of them.
-int vk_sl_start(int dlss, int fg);
+int vk_sl_start(int dlss, int fg, int reflex);   // reflex: Reflex with DLSS alone (frame generation off)
 uint32_t vk_sl_instance_exts(const char **out, uint32_t max);   // instance extensions the features ask for
 uint32_t vk_sl_device_exts(const char **out, uint32_t max);     // device extensions the features ask for
 uint32_t vk_sl_extra_queues(void);                              // queues of the graphics family Streamline asks for
@@ -54,6 +55,10 @@ void vk_sl_fg_frame_end(uint64_t id);     // replay: frame id's recording is don
 void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat fmt, uint32_t images, const int rect[4],
                       uint32_t render_w, uint32_t render_h, int allow);
 void vk_sl_fg_present_end(uint64_t id);   // right after it
+int vk_sl_reflex_ready(void);              // Reflex runs without DLSS-G: the frame and present calls are for it
+void vk_sl_reflex_present(uint64_t id);    // the present thread, before frame id's present, without DLSS-G
+void vk_sl_swapchain_made(void);           // a swapchain was made: Reflex's mode is set on it again
+int vk_sl_reflex_mode(void);               // the Reflex mode pacing frames: 0 none, 1 on, 2 with boost
 int vk_sl_fg_active(void);                // generation was on at the last present
 uint64_t vk_sl_fg_shown(void);            // frames DLSS-G presented so far, drawn and generated
 // Before the swapchain goes away: generation off with its resources freed, and the device idle through Streamline's

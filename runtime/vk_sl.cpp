@@ -23,7 +23,16 @@
 // (vk_sl_evaluate, or vk_sl_fg_inputs when FSR upscales), copied at once (eOnlyValidNow: our images are rewritten by
 // the next frame before this one is presented), the camera constants of the id, and the back buffer at the present.
 // The latency markers it requires (sl.pcl) go at the replay's frame boundaries and around the present, and Reflex,
-// which it requires on, sleeps at the start of each frame (vk_sl_fg_frame_start). A frame without tagged inputs
+// which it requires on, sleeps at the start of each frame (vk_sl_fg_frame_start).
+//
+// Reflex. Its low-latency mode (XC3_REFLEX: 0 off, 1 on, 2 on with boost; live) also runs with DLSS alone, when frame
+// generation is off: the same sleep and markers at the same places, so the game starts a frame only as early as the GPU
+// can take it. DLSS-G keeps it at least on. Streamline sets the mode on the swapchain it saw last
+// (VK_NV_low_latency2) and drops it with that swapchain, so it is set again after each one (vk_sl_swapchain_made), as
+// NX2navi does (runtime/dlssg/nx2_sl.cpp, nx2sl_reflex).
+//
+// The DLSS model (XC3_DLSS_PRESET, live): default leaves NVIDIA's model per mode, a letter takes that one in every
+// mode (vk_sl_evaluate sets the options again when it changes). A frame without tagged inputs
 // (loading screens, movies, the scene not drawn) and the in-game menu turn generation off (sl::DLSSGMode::eOff, its
 // resources kept) until two frames in a row have them again.
 //
@@ -79,7 +88,12 @@ struct {
     int ready;       // the device is set: the proxies work
     int dlss;        // DLSS runs on the device
     int fg;          // DLSS-G runs on the device
-    int want_dlss, want_fg;
+    int want_dlss, want_fg, want_reflex;
+    int reflex;            // Reflex's functions are there: the sleep and the markers run while reflex_mode or fg
+    int reflex_mode;       // the mode last set: 0 off, 1 on, 2 boost; -1 none yet
+    unsigned reflex_cfg;   // cfg_version when XC3_REFLEX was read
+    int preset;            // the DLSS model in every mode (sl::DLSSPreset), 0 NVIDIA's per mode
+    unsigned preset_cfg;   // cfg_version when XC3_DLSS_PRESET was read
     int failed;      // given up for the session
     PfnShutdown shutdown;
     PfnRequirements requirements;
@@ -102,6 +116,7 @@ struct {
     uint32_t n_inst_exts, n_dev_exts;
     uint32_t gfx_queues, compute_queues;   // the extra queues the features ask for
     uint32_t last_mode, last_w, last_h;
+    int last_preset;
     // frame generation, by frame id
     volatile uint64_t tagged[RING];        // id + 1 when the frame's depth and motion were tagged
     volatile uint64_t constants[RING];     // id + 1 when the frame's camera constants were set
@@ -205,8 +220,11 @@ sl::FrameToken *token(uint64_t id) {
     return ft;
 }
 
+// Reflex paces this frame: DLSS-G runs, or the low-latency mode is on.
+int reflex_runs() { return S.reflex && (S.fg || S.reflex_mode > 0); }
+
 void marker(sl::PCLMarker m, uint64_t id) {
-    if (!S.fg || !S.pcl_marker) return;
+    if (!reflex_runs()) return;
     if (sl::FrameToken *ft = token(id)) S.pcl_marker(m, *ft);
 }
 
@@ -252,7 +270,7 @@ int set_constants(const sl::FrameToken &ft, uint64_t id, const sl::Constants &k)
 
 sl::Resource resource(const VkSlImage *i) {
     sl::Resource r(sl::ResourceType::eTex2d, (void *)i->image, NULL, (void *)i->view, (uint32_t)VK_IMAGE_LAYOUT_GENERAL);
-    r.width = i->w, r.height = i->h;
+    r.width = i->iw ? i->iw : i->w, r.height = i->ih ? i->ih : i->h;   // the extent (tag) says the part in use
     r.nativeFormat = (uint32_t)i->format;
     r.mipLevels = 1, r.arrayLayers = 1;
     r.usage = (uint32_t)i->usage;
@@ -280,9 +298,40 @@ int had_constants(uint64_t id) {
     return (uint64_t)InterlockedCompareExchange64((volatile LONG64 *)&S.constants[id % RING], 0, 0) == id + 1;
 }
 
+// XC3_REFLEX set as Streamline's Reflex mode: when the setting changed, and with force (a new swapchain) always.
+// DLSS-G requires it on, so 0 means on while generation runs.
+void reflex_apply(int force) {
+    if (!S.reflex) return;
+    unsigned v = cfg_version();
+    if (!force && v == S.reflex_cfg) return;
+    S.reflex_cfg = v;
+    int m = cfg_int("XC3_REFLEX");
+    m = m < 0 ? 0 : m > 2 ? 2 : m;
+    if (S.fg && !m) m = 1;
+    if (!force && m == S.reflex_mode) return;
+    sl::ReflexOptions o{};
+    o.mode = m == 2 ? sl::ReflexMode::eLowLatencyWithBoost : m ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
+    sl::Result r = S.reflex_set_options(o);
+    static int n;
+    if (m != S.reflex_mode && n++ < 8)
+        rt_log("vk: Reflex low-latency mode %s (%s)", m == 2 ? "on with boost" : m ? "on" : "off", result_name(r));
+    S.reflex_mode = m;
+}
+
+// XC3_DLSS_PRESET as Streamline's preset (sl::DLSSPreset: J 10, K 11, L 12, M 13), read again when a setting changed.
+int dlss_preset() {
+    unsigned v = cfg_version();
+    if (v != S.preset_cfg) {
+        S.preset_cfg = v;
+        const char *p = cfg_value("XC3_DLSS_PRESET");
+        S.preset = !p || !p[0] || p[1] ? 0 : p[0] == 'j' ? 10 : p[0] == 'k' ? 11 : p[0] == 'l' ? 12 : p[0] == 'm' ? 13 : 0;
+    }
+    return S.preset;
+}
+
 } // namespace
 
-extern "C" int vk_sl_start(int dlss, int fg) {
+extern "C" int vk_sl_start(int dlss, int fg, int reflex) {
     if (S.started || S.failed) return S.started;
     S.failed = 1;
     wchar_t dir[MAX_PATH], path[MAX_PATH + 32];
@@ -312,11 +361,14 @@ extern "C" int vk_sl_start(int dlss, int fg) {
         rt_log("vk: DLSS off: sl.interposer.dll lacks the Streamline entry points");
         return 0;
     }
-    // DLSS-G needs Reflex (its latency markers come from sl.pcl, which Streamline always loads).
+    // DLSS-G needs Reflex (its latency markers come from sl.pcl, which Streamline always loads); DLSS alone takes it
+    // when reflex is asked for (frame generation off: FSR 3's swapchain does not go through Streamline).
     static sl::Feature features[3];
     uint32_t nf = 0;
+    reflex = fg || (dlss && reflex);
     if (dlss) features[nf++] = sl::kFeatureDLSS;
-    if (fg) features[nf++] = sl::kFeatureDLSS_G, features[nf++] = sl::kFeatureReflex;
+    if (fg) features[nf++] = sl::kFeatureDLSS_G;
+    if (reflex) features[nf++] = sl::kFeatureReflex;
     if (!nf) return 0;
     static wchar_t plugin_dir[MAX_PATH];
     static const wchar_t *plugin_dirs[] = {plugin_dir};
@@ -343,7 +395,9 @@ extern "C" int vk_sl_start(int dlss, int fg) {
     }
     S.started = 1;
     S.want_dlss = dlss && require(sl::kFeatureDLSS, "DLSS");
-    S.want_fg = fg && require(sl::kFeatureDLSS_G, "DLSS Frame Generation") && require(sl::kFeatureReflex, "Reflex");
+    S.want_reflex = reflex && require(sl::kFeatureReflex, "Reflex");
+    S.want_fg = fg && S.want_reflex && require(sl::kFeatureDLSS_G, "DLSS Frame Generation");
+    S.reflex_mode = -1;
     if (!S.want_dlss && !S.want_fg) {
         S.shutdown();
         S.started = 0;
@@ -411,6 +465,16 @@ extern "C" void vk_sl_device(VkInstance inst, VkPhysicalDevice phys, VkDevice de
     S.ready = 1;
     sl::AdapterInfo ai{};
     ai.vkPhysicalDevice = phys;
+    if (S.want_reflex) {
+        if (S.is_supported && (r = S.is_supported(sl::kFeatureReflex, ai)) != sl::Result::eOk)
+            rt_log("vk: Reflex off: %s", result_name(r));
+        else if (!(S.pcl_marker = feature_fn<PfnPclSetMarker>(sl::kFeaturePCL, "slPCLSetMarker")) ||
+                 !(S.reflex_sleep = feature_fn<PfnReflexSleep>(sl::kFeatureReflex, "slReflexSleep")) ||
+                 !(S.reflex_set_options = feature_fn<PfnReflexSetOptions>(sl::kFeatureReflex, "slReflexSetOptions")))
+            rt_log("vk: Reflex off: a plugin lacks its entry points");
+        else
+            S.reflex = 1;
+    }
     if (S.want_dlss) {
         if (S.is_supported && (r = S.is_supported(sl::kFeatureDLSS, ai)) != sl::Result::eOk)
             rt_log("vk: DLSS off: %s", result_name(r));
@@ -424,23 +488,17 @@ extern "C" void vk_sl_device(VkInstance inst, VkPhysicalDevice phys, VkDevice de
     if (S.want_fg) {
         if (S.is_supported && (r = S.is_supported(sl::kFeatureDLSS_G, ai)) != sl::Result::eOk)
             rt_log("vk: DLSS Frame Generation off: %s", result_name(r));
-        else if (!(S.dlssg_set_options = feature_fn<PfnDlssgSetOptions>(sl::kFeatureDLSS_G, "slDLSSGSetOptions")) ||
-                 !(S.pcl_marker = feature_fn<PfnPclSetMarker>(sl::kFeaturePCL, "slPCLSetMarker")) ||
-                 !(S.reflex_sleep = feature_fn<PfnReflexSleep>(sl::kFeatureReflex, "slReflexSleep")) ||
-                 !(S.reflex_set_options = feature_fn<PfnReflexSetOptions>(sl::kFeatureReflex, "slReflexSetOptions")))
+        else if (!S.reflex)
+            rt_log("vk: DLSS Frame Generation off: it needs Reflex");
+        else if (!(S.dlssg_set_options = feature_fn<PfnDlssgSetOptions>(sl::kFeatureDLSS_G, "slDLSSGSetOptions")))
             rt_log("vk: DLSS Frame Generation off: a plugin lacks its entry points");
         else {
             S.dlssg_get_state = feature_fn<PfnDlssgGetState>(sl::kFeatureDLSS_G, "slDLSSGGetState");
-            sl::ReflexOptions ro{};
-            ro.mode = sl::ReflexMode::eLowLatency;   // DLSS-G requires Reflex on
-            if ((r = S.reflex_set_options(ro)) != sl::Result::eOk)
-                rt_log("vk: DLSS Frame Generation off: Reflex refused (%s)", result_name(r));
-            else {
-                S.fg = 1;
-                rt_log("vk: DLSS Frame Generation is ready");
-            }
+            S.fg = 1;
+            rt_log("vk: DLSS Frame Generation is ready");
         }
     }
+    reflex_apply(1);
     if (!S.dlss && !S.fg) {   // the proxies stay: the swapchain may already go through them
         rt_log("vk: Streamline runs with no feature");
     }
@@ -481,18 +539,23 @@ extern "C" int vk_sl_evaluate(VkCommandBuffer cb, uint64_t id, const VkSlImage *
     o.outputWidth = out->w, o.outputHeight = out->h;
     o.colorBuffersHDR = sl::Boolean::eFalse;   // tonemapped, gamma-encoded colour
     o.useAutoExposure = sl::Boolean::eFalse;
-    if ((uint32_t)o.mode != S.last_mode || out->w != S.last_w || out->h != S.last_h) {
+    int preset = dlss_preset();
+    sl::DLSSPreset pr = (sl::DLSSPreset)preset;   // 0 is eDefault: NVIDIA's model per mode
+    o.dlaaPreset = o.qualityPreset = o.balancedPreset = o.performancePreset = o.ultraPerformancePreset =
+        o.ultraQualityPreset = pr;
+    if ((uint32_t)o.mode != S.last_mode || out->w != S.last_w || out->h != S.last_h || preset != S.last_preset) {
         sl::Result r = S.dlss_set_options(vp, o);
         if (r != sl::Result::eOk) {
             static int logged;
             if (!logged++) rt_log("vk: DLSS: options refused (%s)", result_name(r));
             return 0;
         }
-        S.last_mode = (uint32_t)o.mode, S.last_w = out->w, S.last_h = out->h;
+        S.last_mode = (uint32_t)o.mode, S.last_w = out->w, S.last_h = out->h, S.last_preset = preset;
         static const char *const names[] = {"off", "performance", "balanced", "quality", "ultra performance",
                                             "ultra quality", "DLAA"};
         uint32_t m = (uint32_t)o.mode;
-        rt_log("vk: DLSS (%s) upscales %ux%u to %ux%u", m < 7 ? names[m] : "?", color->w, color->h, out->w, out->h);
+        rt_log("vk: DLSS (%s, model %c) upscales %ux%u to %ux%u", m < 7 ? names[m] : "?",
+               preset ? (char)('A' + preset - 1) : '-', color->w, color->h, out->w, out->h);
     }
 
     sl::Constants k;
@@ -537,7 +600,7 @@ extern "C" int vk_sl_fg_inputs(VkCommandBuffer cb, uint64_t id, const VkSlImage 
 
 // The replay thread at the frame boundaries: the frame id's recording begins (Reflex sleeps here) and ends.
 extern "C" void vk_sl_fg_frame_start(uint64_t id) {
-    if (!S.fg) return;
+    if (!reflex_runs()) return;
     if (sl::FrameToken *ft = token(id)) {
         S.reflex_sleep(*ft);
         S.pcl_marker(sl::PCLMarker::eSimulationStart, *ft);
@@ -609,8 +672,21 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
             }
         }
     }
+    reflex_apply(0);
     S.pcl_marker(sl::PCLMarker::ePresentStart, *ft);
 }
+
+extern "C" int vk_sl_reflex_ready(void) { return S.reflex && !S.fg; }
+
+extern "C" void vk_sl_reflex_present(uint64_t id) {
+    if (!S.reflex || S.fg) return;
+    reflex_apply(0);
+    marker(sl::PCLMarker::ePresentStart, id);
+}
+
+extern "C" void vk_sl_swapchain_made(void) { reflex_apply(1); }
+
+extern "C" int vk_sl_reflex_mode(void) { return reflex_runs() ? (S.reflex_mode < 1 ? 1 : S.reflex_mode) : 0; }
 
 extern "C" void vk_sl_fg_present_end(uint64_t id) { marker(sl::PCLMarker::ePresentEnd, id); }
 
@@ -633,12 +709,16 @@ extern "C" void vk_sl_fg_release(VkDevice dev) {
 
 extern "C" void vk_sl_shutdown(void) {
     if (S.started && S.shutdown) S.shutdown();
-    S.started = S.ready = S.dlss = S.fg = 0;
+    S.started = S.ready = S.dlss = S.fg = S.reflex = 0;
 }
 
 #else   // Streamline is Windows only
 
-extern "C" int vk_sl_start(int dlss, int fg) { (void)dlss, (void)fg; return 0; }
+extern "C" int vk_sl_start(int dlss, int fg, int reflex) { (void)dlss, (void)fg, (void)reflex; return 0; }
+extern "C" int vk_sl_reflex_ready(void) { return 0; }
+extern "C" void vk_sl_reflex_present(uint64_t id) { (void)id; }
+extern "C" void vk_sl_swapchain_made(void) {}
+extern "C" int vk_sl_reflex_mode(void) { return 0; }
 extern "C" uint32_t vk_sl_instance_exts(const char **out, uint32_t max) { (void)out, (void)max; return 0; }
 extern "C" uint32_t vk_sl_device_exts(const char **out, uint32_t max) { (void)out, (void)max; return 0; }
 extern "C" uint32_t vk_sl_extra_queues(void) { return 0; }

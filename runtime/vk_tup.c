@@ -85,7 +85,7 @@ static struct {
     PfnFfxDispatch dispatch;
     PfnFfxQuery query;
     ffxContext ctx;
-    uint32_t rw, rh, ow, oh;            // our images' sizes
+    uint32_t rw, rh, ow, oh;            // our images' sizes: the largest render size seen, the output size
     uint32_t crw, crh, cow, coh;        // the FSR context's sizes
     int reset;
     PFN_vkCmdPushDescriptorSetKHR push;
@@ -285,10 +285,12 @@ static PFN_vkVoidFunction VKAPI_PTR ffx_proc(VkDevice d, const char *name) {
     return NULL;
 }
 
-// Our images at these sizes. A size change waits for the device: earlier frames may still read the old images and the
-// old FSR context's resources.
+// Our images for a render size of rw x rh and an output of ow x oh. The render images only grow: a smaller render size
+// (dynamic resolution, dynres.c) uses their top left part, so the upscaler keeps its context and its history. A new
+// size waits for the device: earlier frames may still read the old images and the old FSR context's resources.
 static int ensure_images(VkCtx *c, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh) {
-    if (T.color.image && T.rw == rw && T.rh == rh && T.ow == ow && T.oh == oh) return 1;
+    if (T.color.image && rw <= T.rw && rh <= T.rh && T.ow == ow && T.oh == oh) return 1;
+    if (T.color.image && T.ow == ow && T.oh == oh) rw = rw > T.rw ? rw : T.rw, rh = rh > T.rh ? rh : T.rh;
     vk_queue_lock();
     vkDeviceWaitIdle(c->device);
     vk_queue_unlock();
@@ -425,9 +427,9 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     if (sharp < 0) sharp = 0;
     if (sharp > 100) sharp = 100;
     struct ffxDispatchDescUpscale d = {.header = {.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE}, .commandList = (void *)cb};
-    d.color = res(&T.color, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, rw, rh, 0);
-    d.depth = res(&T.depth, FFX_API_SURFACE_FORMAT_R32_FLOAT, rw, rh, 0);
-    d.motionVectors = res(&T.motion, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, rw, rh, 0);
+    d.color = res(&T.color, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, T.rw, T.rh, 0);   // renderSize: the part in use
+    d.depth = res(&T.depth, FFX_API_SURFACE_FORMAT_R32_FLOAT, T.rw, T.rh, 0);
+    d.motionVectors = res(&T.motion, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, T.rw, T.rh, 0);
     d.output = res(&T.out, FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM, ow, oh, 1);
     d.jitterOffset.x = f->jitter[0], d.jitterOffset.y = f->jitter[1];
     d.motionVectorScale.x = (float)rw, d.motionVectorScale.y = (float)rh;
@@ -467,10 +469,10 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     } else {
         const VkImageUsageFlags u = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VkSlImage ci = {T.color.image, T.color.view, VK_FORMAT_R8G8B8A8_UNORM, rw, rh, u},
-                  di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u},
-                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u},
-                  oi = {T.out.image, T.out.view, VK_FORMAT_R8G8B8A8_UNORM, ow, oh, u};
+        VkSlImage ci = {T.color.image, T.color.view, VK_FORMAT_R8G8B8A8_UNORM, rw, rh, u, T.rw, T.rh},
+                  di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u, T.rw, T.rh},
+                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u, T.rw, T.rh},
+                  oi = {T.out.image, T.out.view, VK_FORMAT_R8G8B8A8_UNORM, ow, oh, u, 0, 0};
         rec_drain();   // as for FSR: Streamline records straight into the command buffer
         ok = dlss_tagged = vk_sl_evaluate(cb, vk_fg_frame(), &ci, &di, &mi, &oi, f->jitter, d.cameraNear,
                                           d.cameraFovAngleVertical, T.reset, mode == VK_TUP_DLAA);
@@ -479,8 +481,8 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
         // Frame generation reads the same prepared depth and motion (vk_fg.c), recorded after the upscaler's reads.
         const VkImageUsageFlags u = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                                     VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VkSlImage di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u},
-                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u};
+        VkSlImage di = {T.depth.image, T.depth.view, VK_FORMAT_R32_SFLOAT, rw, rh, u, T.rw, T.rh},
+                  mi = {T.motion.image, T.motion.view, VK_FORMAT_R16G16_SFLOAT, rw, rh, u, T.rw, T.rh};
         rec_drain();
         vk_fg_inputs(cb, &di, &mi, f->jitter, d.cameraNear, d.cameraFovAngleVertical, T.reset, dt, dlss_tagged);
     }

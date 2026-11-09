@@ -131,8 +131,8 @@
 # output_res = 1920x1080
 # 3D render scale: the scene's size relative to the game resolution: game (the game's own: half the game resolution,
 # rebuilt to the full size by its 2x2 temporal reconstruction or by a temporal upscaler) or a fixed percentage from
-# 25 to 99; 100 or more is the same as game. With a temporal upscaler, 67 is DLSS's quality mode and 58 its balanced
-# one. The interface stays at the game resolution. For supersampling, set output_res above window_size. Read at
+# 25 to 99; 100 or more is the same as game. With a temporal upscaler the DLSS modes are 67 (quality), 58 (balanced),
+# 50 (performance) and 33 (ultra performance); the menu names them. The interface stays at the game resolution. For supersampling, set output_res above window_size. Read at
 # start.
 # render_scale = game
 # Upscaler. fsr (AMD FSR 1) or bilinear scale the picture to the window when the window is larger than the game
@@ -146,6 +146,22 @@
 # FSR 3's sharpening. Other changes while the game runs take effect at once.
 # upscaler = fsr
 # sharpness = 80
+# The DLSS model: default (NVIDIA's per mode: K for dlaa, quality and balanced, M for performance, L for ultra
+# performance), or k, j, l or m for that model in every mode (j: slightly less ghosting behind moving characters,
+# a little more flicker than k). Changes take effect at once.
+# dlss_preset = default
+# NVIDIA Reflex low latency with upscaler = dlss or dlaa: 0 off, 1 on, 2 on with boost (the GPU clocks kept up). The
+# game starts each frame only as early as the GPU can take it, so the picture is closer to the input. DLSS Frame
+# Generation keeps it at least on; with FSR 3 frame generation it is off. Changes take effect at once.
+# reflex = 1
+# Dynamic resolution: 1 lowers the 3D render scale in DLSS's steps (67, 58, 50, then 33 % when render_scale is 50 or
+# less) while the GPU takes longer per frame than the target, and raises it back to render_scale when there is room.
+# Needs render_scale below 100 (or upscaler = dlaa, which starts from 100) and a temporal upscaler. dyn_res_target is
+# the GPU time per drawn frame in milliseconds, or auto: the frame limit's (half the shown rate under frame
+# generation). dyn_res_step is the frames each step is held at least. Changes take effect at once.
+# dyn_res = 0
+# dyn_res_target = auto
+# dyn_res_step = 45
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
 # proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
 # picture_fit = keep
