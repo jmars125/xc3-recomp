@@ -125,6 +125,7 @@ struct {
     int fg_on;                             // the mode last set: 1 on
     uint32_t fg_w, fg_h, fg_rw, fg_rh;     // the sizes the options were last set for
     int fg_set;                            // options set once
+    uint32_t fg_gen, fg_max;               // frames generated per drawn one as last set; the card's most (0: unread)
     uint64_t fg_last_status_check;
     uint64_t fg_shown;   // frames DLSS-G presented, drawn and generated (vk_sl_fg_present)
 } S;
@@ -626,10 +627,24 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
         sl::ViewportHandle vp(0u);
         S.set_constants(k, *ft, vp);
     }
-    if (on != S.fg_on || !S.fg_set || w != S.fg_w || h != S.fg_h || (on && (render_w != S.fg_rw || render_h != S.fg_rh))) {
+    // Multi Frame Generation (XC3_FRAME_GEN_MULTI: 2x to 6x, live): 1 to 5 generated frames per drawn one, at most what
+    // the card allows (DLSSGState numFramesToGenerateMax: 1 on RTX 40, 3 to 5 on RTX 50 by driver).
+    if (!S.fg_max && S.dlssg_get_state) {
+        sl::DLSSGState st{};
+        sl::ViewportHandle vp(0u);
+        if (S.dlssg_get_state(vp, st, NULL) == sl::Result::eOk && st.numFramesToGenerateMax) {
+            S.fg_max = st.numFramesToGenerateMax;
+            rt_log("vk: DLSS Frame Generation: up to %ux on this card", S.fg_max + 1);
+        }
+    }
+    int multi = cfg_int("XC3_FRAME_GEN_MULTI");
+    uint32_t gen = multi > 2 ? (uint32_t)multi - 1 : 1;
+    if (gen > (S.fg_max ? S.fg_max : 1)) gen = S.fg_max ? S.fg_max : 1;
+    if (on != S.fg_on || !S.fg_set || gen != S.fg_gen || w != S.fg_w || h != S.fg_h ||
+        (on && (render_w != S.fg_rw || render_h != S.fg_rh))) {
         sl::DLSSGOptions o{};
         o.mode = on ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-        o.numFramesToGenerate = 1;
+        o.numFramesToGenerate = gen;
         o.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;   // short pauses (menus, loading) do not reallocate
         o.numBackBuffers = images;
         o.colorWidth = w, o.colorHeight = h;
@@ -645,10 +660,10 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
             static int logged;
             if (!logged++) rt_log("vk: DLSS Frame Generation: options refused (%s)", result_name(r));
         } else {
-            if (on != S.fg_on || !S.fg_set)
-                rt_log("vk: DLSS Frame Generation %s (frame %llu, %ux%u, inputs %ux%u)", on ? "on" : "off",
+            if (on != S.fg_on || !S.fg_set || gen != S.fg_gen)
+                rt_log("vk: DLSS Frame Generation %s %ux (frame %llu, %ux%u, inputs %ux%u)", on ? "on" : "off", gen + 1,
                        (unsigned long long)id, w, h, render_w, render_h);
-            S.fg_on = on, S.fg_set = 1, S.fg_w = w, S.fg_h = h, S.fg_rw = render_w, S.fg_rh = render_h;
+            S.fg_on = on, S.fg_set = 1, S.fg_gen = gen, S.fg_w = w, S.fg_h = h, S.fg_rw = render_w, S.fg_rh = render_h;
         }
     }
     if (on && hudless) {
@@ -703,6 +718,8 @@ extern "C" int vk_sl_reflex_mode(void) { return reflex_runs() ? (S.reflex_mode <
 extern "C" void vk_sl_fg_present_end(uint64_t id) { marker(sl::PCLMarker::ePresentEnd, id); }
 
 extern "C" int vk_sl_fg_active(void) { return S.fg && S.fg_on; }
+
+extern "C" int vk_sl_fg_factor(void) { return S.fg && S.fg_on ? (int)S.fg_gen + 1 : 1; }
 
 extern "C" uint64_t vk_sl_fg_shown(void) { return __atomic_load_n(&S.fg_shown, __ATOMIC_RELAXED); }
 
@@ -766,6 +783,7 @@ extern "C" void vk_sl_fg_present(uint64_t id, uint32_t w, uint32_t h, VkFormat f
 }
 extern "C" void vk_sl_fg_present_end(uint64_t id) { (void)id; }
 extern "C" int vk_sl_fg_active(void) { return 0; }
+extern "C" int vk_sl_fg_factor(void) { return 1; }
 extern "C" uint64_t vk_sl_fg_shown(void) { return 0; }
 extern "C" void vk_sl_fg_release(VkDevice dev) { (void)dev; }
 extern "C" void vk_sl_shutdown(void) {}

@@ -34,7 +34,8 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
   the game's own temporal reconstruction, with `render_scale` setting the share of the resolution the 3D scene draws
   in; FSR 1 for a window larger than the game resolution
 - Frame generation (`frame_gen`; takes a restart): NVIDIA DLSS Frame Generation on RTX 40 and 50 cards, AMD FSR 3 frame
-  generation on any GPU, a generated frame between every two the game draws. It needs a temporal upscaler (`fsr3`,
+  generation on any GPU, a generated frame between every two the game draws; DLSS Multi Frame Generation
+  (`frame_gen_multi`, 3x to 6x) on RTX 50 cards. It needs a temporal upscaler (`fsr3`,
   `dlss` or `dlaa`). The frame limit counts the frames on screen, so 120 draws 60 and shows 120; the overlay counts
   the frames on screen too. The game's interface is kept out of the generated frames
 - DLSS model choice (`dlss_preset`) and NVIDIA Reflex low latency (`reflex`) with DLSS or DLAA

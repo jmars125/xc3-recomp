@@ -449,12 +449,13 @@ void vk_fg_release(void) {
 
 int gfx_frame_gen_factor(void) {
     int m = F.mode;
-    return (m == VK_FG_DLSS && vk_sl_fg_active()) || (m == VK_FG_FSR && F.fsr_on) ? 2 : 1;
+    if (m == VK_FG_DLSS) return vk_sl_fg_factor();
+    return m == VK_FG_FSR && F.fsr_on ? 2 : 1;
 }
 
 const char *vk_fg_status(void) {
     int m = F.mode;
-    if (m == VK_FG_DLSS && vk_sl_fg_active()) return "DLSS FG";
+    if (m == VK_FG_DLSS && vk_sl_fg_active()) return "DLSS FG";   // the overlay adds the measured multiplier
     if (m == VK_FG_FSR && F.fsr_on) return "FSR FG";
     return NULL;
 }

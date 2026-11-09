@@ -60,6 +60,7 @@ void vk_sl_reflex_present(uint64_t id);    // the present thread, before frame i
 void vk_sl_swapchain_made(void);           // a swapchain was made: Reflex's mode is set on it again
 int vk_sl_reflex_mode(void);               // the Reflex mode pacing frames: 0 none, 1 on, 2 with boost
 int vk_sl_fg_active(void);                // generation was on at the last present
+int vk_sl_fg_factor(void);                // frames shown per drawn one: 2 to 4 while on (Multi Frame Generation), else 1
 uint64_t vk_sl_fg_shown(void);            // frames DLSS-G presented so far, drawn and generated
 // Before the swapchain goes away: generation off with its resources freed, and the device idle through Streamline's
 // vkDeviceWaitIdle, which also waits for the frames its present thread still holds.
