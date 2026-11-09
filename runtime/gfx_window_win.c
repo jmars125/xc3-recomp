@@ -13,6 +13,7 @@
 #include "gfx.h"
 #include "gfx_wsys.h"
 #include "input.h"
+#include "vk_sl.h"
 #include "input_win.h"
 #include "nvn_api.h"
 #include "ui/menu.h"
@@ -292,7 +293,10 @@ VkSurfaceKHR wsys_surface(VkInstance inst) {
     VkWin32SurfaceCreateInfoKHR si = {.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
                                       .hinstance = GetModuleHandleW(NULL), .hwnd = g_hwnd};
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-    VkResult r = vkCreateWin32SurfaceKHR(inst, &si, NULL, &surface);
+    // With DLSS Frame Generation through Streamline's proxy: its swapchain hook finds the window by the surface.
+    PFN_vkCreateWin32SurfaceKHR create = (PFN_vkCreateWin32SurfaceKHR)vk_sl_instance_proc(inst, "vkCreateWin32SurfaceKHR");
+    if (!create) create = vkCreateWin32SurfaceKHR;
+    VkResult r = create(inst, &si, NULL, &surface);
     if (r != VK_SUCCESS) rt_log("gfx: vkCreateWin32SurfaceKHR failed (%d)", (int)r);
     return r == VK_SUCCESS ? surface : VK_NULL_HANDLE;
 }

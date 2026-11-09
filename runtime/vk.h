@@ -127,6 +127,8 @@ int vk_tup_result(VkTupImage *o);                // the image vk_tup_record wrot
 void vk_tup_copy(VkCommandBuffer cb, const VkTupImage *src, const VkTupImage *dst);   // outside a pass, GENERAL; scales
 void vk_tup_release(void);                       // before the device goes away
 void vk_present_flip(void);
+// The present thread names the frame id (vk_fg_frame_close) of the vk_present_blit call that follows.
+void vk_present_frame_id(uint64_t id);
 // Every submission to ctx->gfx_queue (and xfer_queue when shared) takes this lock; vk_present_image and the swapchain
 // rebuild do. Recursive.
 void vk_queue_lock(void);

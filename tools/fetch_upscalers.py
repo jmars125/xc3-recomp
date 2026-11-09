@@ -1,10 +1,12 @@
 """Fetch the upscaler libraries xc3.exe loads at run time into a build folder: fetch_upscalers.py build/upd.
 
-- AMD's signed amd_fidelityfx_vk.dll (FidelityFX SDK 1.1.4, FSR 3.1, MIT) for upscaler = fsr3 (runtime/vk_tup.c).
-- NVIDIA's signed Streamline 2.14.16 DLLs for upscaler = dlss or dlaa (runtime/vk_sl.cpp): sl.interposer.dll,
-  sl.common.dll and sl.dlss.dll (MIT), NvLowLatencyVk.dll, which sl.common.dll loads, and the DLSS model nvngx_dlss.dll
-  (both under NVIDIA's SDK licences, which let an application ship them). They come out of NVIDIA's release zip
-  (276 MB); --no-dlss skips it.
+- AMD's signed amd_fidelityfx_vk.dll (FidelityFX SDK 1.1.4, FSR 3.1, MIT) for upscaler = fsr3 (runtime/vk_tup.c) and
+  frame_gen = fsr (runtime/vk_fg.c).
+- NVIDIA's signed Streamline 2.14.16 DLLs for upscaler = dlss or dlaa and frame_gen = dlss (runtime/vk_sl.cpp):
+  sl.interposer.dll, sl.common.dll, sl.dlss.dll, sl.dlss_g.dll, sl.reflex.dll and sl.pcl.dll (MIT),
+  NvLowLatencyVk.dll, which sl.common.dll loads, and the DLSS and frame generation models nvngx_dlss.dll and
+  nvngx_dlssg.dll (under NVIDIA's SDK licences, which let an application ship them). They come out of NVIDIA's release
+  zip (276 MB); --no-dlss skips it.
 
 Every file is pinned by its SHA-256 (the zip by its own) and lands next to xc3.exe. Stdlib only.
 """
@@ -21,7 +23,8 @@ FFX = ('amd_fidelityfx_vk.dll',
        'a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78')
 SL_ZIP = ('https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.16/streamline-sdk-v2.14.16.zip',
           '32041e51db0cab709a271b72a352281b690c2abbd669a827809401a5dd23956b')
-SL_FILES = ['sl.interposer.dll', 'sl.common.dll', 'NvLowLatencyVk.dll', 'sl.dlss.dll', 'nvngx_dlss.dll']   # in bin/x64 of the zip
+SL_FILES = ['sl.interposer.dll', 'sl.common.dll', 'NvLowLatencyVk.dll', 'sl.dlss.dll', 'nvngx_dlss.dll',
+            'sl.dlss_g.dll', 'nvngx_dlssg.dll', 'sl.reflex.dll', 'sl.pcl.dll']   # in bin/x64 of the zip
 
 
 def sha256(data):

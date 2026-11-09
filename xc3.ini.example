@@ -115,6 +115,11 @@
 # here. Changes while the game runs take effect at once.
 # window_size = 1920x1080
 # fullscreen = 0
+# Variable refresh rate (G-SYNC, FreeSync, HDMI VRR): 1 presents each frame as it is ready, with vsync above the
+# monitor's range (immediate under DLSS Frame Generation, which brings its own pacing), in place of the presentation
+# setting, and holds the frame rate a little under the refresh rate (116 at 120 Hz), so frames stay inside the range.
+# Needs a VRR monitor with VRR on in the driver; fullscreen is the surest. Changes take effect at once.
+# vrr = 0
 # Performance overlay in the top right corner: off, fps, or full (frame rate, mean and longest frame time). F10
 # cycles the modes in game, as do both stick clicks (L3 + R3) on a controller.
 # perf_overlay = off
@@ -144,6 +149,11 @@
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
 # proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
 # picture_fit = keep
+# Frame generation: off, dlss (NVIDIA DLSS Frame Generation; an RTX 40 or newer card, hardware-accelerated GPU
+# scheduling on) or fsr (AMD FSR 3 frame generation; any GPU). It adds one generated frame between two drawn ones
+# and needs a temporal upscaler (upscaler = fsr3, dlss or dlaa): the game's depth and motion come from there. The
+# frame rate limit then counts the shown frames, so 120 draws 60 and shows 120. Takes a restart.
+# frame_gen = off
 
 [language]
 # Language: a Windows locale such as de-DE, or a Switch code (en-US, ja, zh-Hant, ...). Default: the Windows locale.

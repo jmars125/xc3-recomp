@@ -9,6 +9,7 @@
 #include "cfg.h"
 #include "host.h"
 #include "vk.h"
+#include "vk_fg.h"
 #include "vk_sl.h"
 #include "platform/platform.h"
 
@@ -55,8 +56,8 @@ static void mesa_cache_beside_exe(void) {
     plat_setenv("MESA_SHADER_CACHE_DIR", dir);
 }
 
-// upscaler = dlss or dlaa: Streamline (vk_sl.cpp) starts before the instance, which then has the extensions DLSS asks
-// for. Switching to DLSS in the menu later takes a restart.
+// upscaler = dlss or dlaa, or frame_gen = dlss: Streamline (vk_sl.cpp) starts before the instance, which then has the
+// extensions its features ask for. Switching to DLSS in the menu later takes a restart.
 static int wants_dlss(void) {
     const char *u = cfg_value("XC3_UPSCALER");
     return u && (!strcmp(u, "dlss") || !strcmp(u, "dlaa"));
@@ -73,7 +74,7 @@ static int create_instance(void) {
         validate = 0;
     }
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    if (wants_dlss() && vk_sl_start()) {
+    if ((wants_dlss() || vk_fg_mode() == VK_FG_DLSS) && vk_sl_start(wants_dlss(), vk_fg_mode() == VK_FG_DLSS)) {
         const char *sl[16];
         uint32_t n = vk_sl_instance_exts(sl, 16);
         for (uint32_t i = 0; i < n && n_ext < 23; i++) {
@@ -88,7 +89,8 @@ static int create_instance(void) {
                                .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext,
                                .enabledLayerCount = validate ? 1 : 0, .ppEnabledLayerNames = layers};
     rdoc_init();
-    VkResult r = vkCreateInstance(&ci, NULL, &g_vk.instance);
+    PFN_vkCreateInstance create = vk_sl_create_instance();   // DLSS Frame Generation: through Streamline
+    VkResult r = (create ? create : vkCreateInstance)(&ci, NULL, &g_vk.instance);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateInstance failed (%d); is a Vulkan 1.3 driver installed?", (int)r); return 0; }
     g_vk.validation = validate;
     if (validate) {
@@ -141,10 +143,12 @@ static int name_has(const char *s, const char *sub) {
 // XC3_GPU_NAME (case-insensitive part of the name) overrides.
 static int pick_device(void) {
     uint32_t n = 0;
-    vkEnumeratePhysicalDevices(g_vk.instance, &n, NULL);
+    PFN_vkEnumeratePhysicalDevices enumerate = vk_sl_enumerate_physical_devices();   // DLSS Frame Generation
+    if (!enumerate) enumerate = vkEnumeratePhysicalDevices;
+    enumerate(g_vk.instance, &n, NULL);
     if (!n) { rt_log("vk: no Vulkan device"); return 0; }
     VkPhysicalDevice *pd = calloc(n, sizeof *pd);
-    vkEnumeratePhysicalDevices(g_vk.instance, &n, pd);
+    enumerate(g_vk.instance, &n, pd);
     const char *e = cfg_get("XC3_GPU_INDEX");   // no fixed default: the best device when unset
     int want = e && *e ? atoi(e) : -1;
     const char *name = cfg_get("XC3_GPU_NAME");
@@ -355,14 +359,31 @@ static int create_device(void) {
                has_fbl && c->fbl.attachmentFeedbackLoopLayout, has_lr && c->lr.dynamicRenderingLocalRead);
     }
 
-    float prio = 1.0f;
+    // Our queue is the graphics family's first; Streamline's (vk_sl_extra_queues) and FSR 3 frame generation's
+    // (vk_fg_extra_queues) follow it, when the family has that many.
+    static const float prio[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    uint32_t sl_q = vk_sl_extra_queues(), fg_q = vk_fg_extra_queues(), fam_q = 1;
+    {
+        uint32_t nf = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(g_vk.phys, &nf, NULL);
+        VkQueueFamilyProperties *fp = calloc(nf ? nf : 1, sizeof *fp);
+        vkGetPhysicalDeviceQueueFamilyProperties(g_vk.phys, &nf, fp);
+        if (g_vk.gfx_family < nf) fam_q = fp[g_vk.gfx_family].queueCount;
+        free(fp);
+    }
+    if (1 + sl_q + fg_q > fam_q || 1 + sl_q + fg_q > 16) {
+        rt_log("vk: the graphics family has %u queues; %u for Streamline and %u for frame generation do not fit",
+               fam_q, sl_q, fg_q);
+        if (1 + sl_q > fam_q) sl_q = 0;
+        if (1 + sl_q + fg_q > fam_q) fg_q = 0;
+    }
     VkDeviceQueueCreateInfo qi[2] = {
-        {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.gfx_family, .queueCount = 1,
-         .pQueuePriorities = &prio}};
+        {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.gfx_family,
+         .queueCount = 1 + sl_q + fg_q, .pQueuePriorities = prio}};
     uint32_t nqi = 1;
     if (g_vk.xfer_family != g_vk.gfx_family) {
         qi[1] = (VkDeviceQueueCreateInfo){.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                          .queueFamilyIndex = g_vk.xfer_family, .queueCount = 1, .pQueuePriorities = &prio};
+                                          .queueFamilyIndex = g_vk.xfer_family, .queueCount = 1, .pQueuePriorities = prio};
         nqi = 2;
     }
     // The extensions DLSS asks for (vk_sl_start), those the driver has; Streamline hears whether all were there.
@@ -388,13 +409,15 @@ static int create_device(void) {
     }
     VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &c->f2, .queueCreateInfoCount = nqi,
                              .pQueueCreateInfos = qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
-    VkResult r = vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.device);
+    PFN_vkCreateDevice create = vk_sl_create_device(g_vk.instance);   // DLSS Frame Generation: through Streamline
+    VkResult r = (create ? create : vkCreateDevice)(g_vk.phys, &di, NULL, &g_vk.device);
     free(c);
     if (r != VK_SUCCESS) { rt_log("vk: vkCreateDevice failed (%d)", (int)r); return 0; }
-    vk_sl_device(g_vk.instance, g_vk.phys, g_vk.device, g_vk.gfx_family, sl_exts_ok);
+    vk_sl_device(g_vk.instance, g_vk.phys, g_vk.device, g_vk.gfx_family, 1, sl_exts_ok && (sl_q || !vk_sl_extra_queues()));
     vkGetDeviceQueue(g_vk.device, g_vk.gfx_family, 0, &g_vk.gfx_queue);
     if (g_vk.xfer_family != g_vk.gfx_family) vkGetDeviceQueue(g_vk.device, g_vk.xfer_family, 0, &g_vk.xfer_queue);
     else { g_vk.xfer_queue = g_vk.gfx_queue; g_vk.xfer_shared = 1; }
+    if (vk_fg_extra_queues()) vk_fg_device(g_vk.device, g_vk.gfx_family, fg_q ? 1 + sl_q : 0);   // 0: its queues did not fit
 
     VkPhysicalDeviceExternalMemoryHostPropertiesEXT emh = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
     VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &emh};

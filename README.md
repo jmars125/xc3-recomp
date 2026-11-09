@@ -9,8 +9,15 @@
 
 ## Status
 
-Early development. New Game, cutscenes and gameplay run on Windows with sound, text and the menu, at 60 fps by
-default (30 to 360 in the settings; above 60 is experimental).
+Playable from New Game through the story, cutscenes and battles on Windows, with sound, text and the menu. 60 fps by
+default; 30 to 360 in the settings, with game speed kept right at any rate.
+
+Known issues:
+
+- Some busy areas and cutscenes drop to around 40 fps on any GPU: the game's own CPU work bounds them. Frame generation
+  helps there.
+- The first visit to a place can stutter briefly while its shaders build; later visits do not.
+- Linux and the Steam Deck: the setup builds and installs, but play is not yet tested on a real GPU.
 
 Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -20,27 +27,38 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
 - Update 2.2.1 and all four add-on content packs, including Future Redeemed
 - XC3-Setup: builds the game from your own NSP files and `prod.keys`
 - In-game settings menu (F1) and performance overlay (F10)
-- Keyboard, mouse and gamepad
+- Keyboard, mouse and gamepad, with Xbox or PlayStation button prompts
 - 60 fps and above (`fps_limit` up to 360 or the display's rate)
-- Any game resolution and aspect ratio, including ultrawide (`output_res` in `xc3.ini`)
-- Upscaling and anti-aliasing (`upscaler` in `xc3.ini`, or F1): NVIDIA DLSS and DLAA on RTX cards, AMD FSR 3 on any GPU, each in place of the game's own temporal reconstruction, with `render_scale` setting the share of the resolution the 3D scene draws in; FSR 1 for a window larger than the game resolution. `python tools/fetch_upscalers.py <folder of xc3.exe>` puts the NVIDIA and AMD libraries next to `xc3.exe`
+- Any game resolution and aspect ratio, including ultrawide (`output_res`)
+- Upscaling and anti-aliasing (`upscaler`): NVIDIA DLSS and DLAA on RTX cards, AMD FSR 3 on any GPU, each in place of
+  the game's own temporal reconstruction, with `render_scale` setting the share of the resolution the 3D scene draws
+  in; FSR 1 for a window larger than the game resolution
+- Frame generation (`frame_gen`; takes a restart): NVIDIA DLSS Frame Generation on RTX 40 and 50 cards, AMD FSR 3 frame
+  generation on any GPU, a generated frame between every two the game draws. It needs a temporal upscaler (`fsr3`,
+  `dlss` or `dlaa`). The frame limit counts the frames on screen, so 120 draws 60 and shows 120; the overlay counts
+  the frames on screen too
+- Variable refresh rate (`vrr`): for G-SYNC and FreeSync monitors, each frame shows when it is ready and the frame
+  rate stays a little under the refresh rate (116 at 120 Hz), inside the monitor's range
 - RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
+
+Every setting is in the F1 menu and in `xc3.ini` ([xc3.ini.example](xc3.ini.example) lists every key). The setup puts
+the NVIDIA (Streamline, DLSS) and AMD (FidelityFX) libraries next to `xc3.exe`.
 
 ## Planned
 
-- Linux and the Steam Deck (the Linux setup builds and installs; not yet tested on a GPU)
-- VRR (should work in fullscreen with `vk_present = fifo` and `fps_limit = display`; not yet tested)
+- Linux and the Steam Deck tested on real hardware
+- The game's interface kept out of frame generation (it is interpolated with the picture today)
 
 ## Installing
 
-Requirements: Windows 10 or later, an x86-64 CPU with AVX2, a GPU with Vulkan 1.3 and `VK_EXT_external_memory_host`, about 36 GiB free during setup (20 GiB after).
+Requirements: Windows 10 or later, an x86-64 CPU with AVX2, a GPU with Vulkan 1.3 and `VK_EXT_external_memory_host`, about 36 GiB free during setup (20 GiB after). DLSS needs an NVIDIA RTX card; DLSS Frame Generation an RTX 40 or 50 card with hardware-accelerated GPU scheduling on.
 
 1. Download `XC3-Setup-<version>-windows.zip` from [Releases](../../releases/latest) and unpack it.
 2. Start `XC3-Setup.exe`. If SmartScreen warns about an unsigned app, choose *More info*, then *Run anyway*.
 3. Pick your game files, the language and an install folder, and press *Start*. The setup builds the game once.
 4. Play `xc3.exe` from the install folder.
 
-To update, run a newer `XC3-Setup.exe` on the same folder; saves and settings are kept. Settings are in the in-game menu and in `xc3.ini` ([xc3.ini.example](xc3.ini.example) lists every key). Controls: [docs/controls.md](docs/controls.md).
+To update, run a newer `XC3-Setup.exe` on the same folder; saves and settings are kept. Controls: [docs/controls.md](docs/controls.md).
 
 ## Credits
 

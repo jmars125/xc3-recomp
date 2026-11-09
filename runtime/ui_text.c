@@ -36,6 +36,10 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_VERSION] = "XC3 Recomp %s, game %s",
 
     [UI_MENU_FULLSCREEN] = "Fullscreen", [UI_MENU_FULLSCREEN_DESC] = "Fills the screen with the game; F11 toggles it.",
+    [UI_MENU_VRR] = "Variable refresh rate",
+    [UI_MENU_VRR_DESC] = "For G-SYNC and FreeSync monitors: each frame shows as soon as it is ready, with the frame rate "
+                         "held a little under the refresh rate so it stays in the monitor's range. Replaces the "
+                         "presentation setting. Needs VRR on in the driver; works best in fullscreen.",
     [UI_MENU_WINDOW_SIZE] = "Window size", [UI_MENU_WINDOW_SIZE_DESC] = "Size of the game window when not fullscreen.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Custom",
     [UI_MENU_PRESENT] = "Presentation", [UI_MENU_PRESENT_DESC] = "How finished frames reach the screen.",
@@ -70,6 +74,15 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Bilinear",
     [UI_MENU_UPSCALER_FSR3] = "AMD FSR 3 (temporal)", [UI_MENU_UPSCALER_DLSS] = "NVIDIA DLSS",
     [UI_MENU_UPSCALER_DLAA] = "NVIDIA DLAA",
+    [UI_MENU_FRAME_GEN] = "Frame generation",
+    [UI_MENU_FRAME_GEN_DESC] = "Shows a generated frame between every two the game draws, for twice the frames on "
+                               "screen; the frame rate limit then counts the shown frames, so 120 draws 60. It works "
+                               "from the depth and motion of a temporal upscaler (AMD FSR 3, NVIDIA DLSS or DLAA) and is "
+                               "off with the others, and while this menu is open. NVIDIA DLSS Frame Generation needs an "
+                               "RTX 40 or newer card, hardware-accelerated GPU scheduling and the Streamline DLLs; AMD "
+                               "FSR 3 runs on any card with amd_fidelityfx_vk.dll. Takes effect after a restart.",
+    [UI_MENU_FRAME_GEN_OFF] = "Off", [UI_MENU_FRAME_GEN_DLSS] = "NVIDIA DLSS Frame Generation",
+    [UI_MENU_FRAME_GEN_FSR] = "AMD FSR 3 frame generation",
     [UI_MENU_PICTURE_FIT] = "Picture shape",
     [UI_MENU_PICTURE_FIT_DESC] = "When the window's shape differs from the game resolution's (a 16:9 game on the Steam "
                                  "Deck's 16:10 screen), keep the picture's proportions with black bars, or stretch it "
@@ -284,6 +297,10 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_VERSION] = "XC3 Recomp %s, игра %s",
 
     [UI_MENU_FULLSCREEN] = "Полный экран", [UI_MENU_FULLSCREEN_DESC] = "Игра на весь экран; F11 переключает режим.",
+    [UI_MENU_VRR] = "Переменная частота обновления",
+    [UI_MENU_VRR_DESC] = "Для мониторов G-SYNC и FreeSync: каждый кадр выводится, как только готов, а частота кадров "
+                         "держится чуть ниже частоты обновления, чтобы оставаться в диапазоне монитора. Заменяет "
+                         "настройку вывода кадров. Нужна включённая VRR в драйвере; лучше всего в полноэкранном режиме.",
     [UI_MENU_WINDOW_SIZE] = "Размер окна", [UI_MENU_WINDOW_SIZE_DESC] = "Размер окна игры вне полноэкранного режима.",
     [UI_MENU_WINDOW_SIZE_CUSTOM] = "Другой",
     [UI_MENU_PRESENT] = "Вывод кадров", [UI_MENU_PRESENT_DESC] = "Как готовые кадры попадают на экран.",
@@ -319,6 +336,15 @@ static const char *const text_ru[UI_TEXT_COUNT] = {
     [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "Билинейное",
     [UI_MENU_UPSCALER_FSR3] = "AMD FSR 3 (временной)", [UI_MENU_UPSCALER_DLSS] = "NVIDIA DLSS",
     [UI_MENU_UPSCALER_DLAA] = "NVIDIA DLAA",
+    [UI_MENU_FRAME_GEN] = "Генерация кадров",
+    [UI_MENU_FRAME_GEN_DESC] = "Показывает сгенерированный кадр между каждыми двумя нарисованными, вдвое больше кадров "
+                               "на экране; ограничение частоты кадров тогда считает показанные кадры, так что 120 рисует "
+                               "60. Работает по глубине и движению временного апскейлера (AMD FSR 3, NVIDIA DLSS или "
+                               "DLAA), с другими выключена, и пока открыто это меню. NVIDIA DLSS Frame Generation нужны "
+                               "карта RTX 40 или новее, аппаратное планирование GPU и библиотеки Streamline; AMD FSR 3 "
+                               "работает на любой карте с amd_fidelityfx_vk.dll. Включается после перезапуска.",
+    [UI_MENU_FRAME_GEN_OFF] = "Выкл.", [UI_MENU_FRAME_GEN_DLSS] = "NVIDIA DLSS Frame Generation",
+    [UI_MENU_FRAME_GEN_FSR] = "AMD FSR 3 (генерация кадров)",
     [UI_MENU_PICTURE_FIT] = "Пропорции картинки",
     [UI_MENU_PICTURE_FIT_DESC] = "Когда форма окна отличается от формы разрешения игры (игра 16:9 на экране Steam Deck "
                                  "16:10), сохранять пропорции картинки с чёрными полосами или растягивать её на всё окно.",
