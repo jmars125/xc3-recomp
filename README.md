@@ -51,7 +51,6 @@ the NVIDIA (Streamline, DLSS) and AMD (FidelityFX) libraries next to `xc3.exe`.
 
 - Linux and the Steam Deck tested on real hardware
 - Dynamic resolution (the game's own scaling needs more reverse engineering)
-- A DLSS reactive mask for particles and transparencies
 
 ## Installing
 
