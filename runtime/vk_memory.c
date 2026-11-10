@@ -20,6 +20,7 @@
 #include "nvn_api.h"
 #include "nvn_pool_index.h"
 #include "vk.h"
+#include "vk_exec.h"
 #include "platform/platform.h"
 
 // Timestamps for the tracking cost, in ns; qpc_ms converts.
@@ -831,14 +832,14 @@ static int query_stamp(uint64_t lo, uint64_t hi, uint32_t g) {
 //   reports it at the fence (vk_gpu_written), which copies those bytes back into guest memory. Until then the CPU
 //   copies skip them: a page the CPU and the GPU both write keeps the GPU's bytes.
 // XC3_SHADOW=1/0 forces the mode on or off; the default is on for Linux.
-typedef struct { uint64_t lo, hi; } SRange;
+typedef struct { uint64_t lo, hi, fence; } SRange;   // fence: of the submission that writes it, 0 unknown
 static PlatMutex shadow_lock = PLAT_MUTEX_INIT;   // after pool_lock; before gen_lock
 static PoolRec **stouch;                          // shadow_lock: pools resolved since the last sync
 static int nstouch, cstouch;
 static SRange *spend;                             // shadow_lock: GPU writes recorded and not copied back yet
 static int nspend, cspend;
 static int64_t s_live_n, s_live_bytes;            // shadow_lock
-static uint64_t s_syncs, s_copied, s_queries, s_untracked, s_wb_bytes, s_ticks;   // shadow_lock: since the last log
+static uint64_t s_syncs, s_copied, s_queries, s_untracked, s_wb_bytes, s_wb_dup, s_ticks;   // shadow_lock: since the last log
 
 static int shadow_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     r->import_lo = addr & ~0xfffull;
@@ -961,8 +962,31 @@ void vk_mem_gpu_pending(uint64_t addr, uint64_t size) {
     if (!shadow_on || !size) return;
     plat_mutex_lock(&shadow_lock);
     if (nspend == cspend) grow((void **)&spend, &cspend, sizeof *spend);
-    spend[nspend++] = (SRange){addr, addr + size};
+    spend[nspend++] = (SRange){addr, addr + size, vk_exec_recording_fence()};
     plat_mutex_unlock(&shadow_lock);
+}
+
+// The draws of a submission note the storage ranges they may write, and all of them complete at the submission's
+// fence. XC3 binds one buffer for many draws at different starts with the same end, so the notes overlap: walking in a
+// field on the Steam Deck profile, the same half-MiB tail came back over a hundred times a frame, 50 to 80 MiB a frame
+// in all. The GPU is done with the whole submission at the fence, so the shadow bytes are final: each byte is copied
+// once per fence (wb_done holds what this fence already copied; the completion thread reaches fences in order).
+static uint64_t wb_fence;
+static SRange *wb_done;
+static int nwb_done, cwb_done;
+
+// Copies [lo, hi) of r's shadow to guest memory except what wb_done holds; returns the bytes copied. shadow_lock held.
+static uint64_t wb_copy(PoolRec *r, uint64_t lo, uint64_t hi, int from) {
+    for (int i = from; i < nwb_done; i++)
+        if (wb_done[i].lo < hi && wb_done[i].hi > lo) {
+            uint64_t n = 0;
+            if (wb_done[i].lo > lo) n += wb_copy(r, lo, wb_done[i].lo, i + 1);
+            if (wb_done[i].hi < hi) n += wb_copy(r, wb_done[i].hi, hi, i + 1);
+            return n;
+        }
+    mem_thaw(lo, hi - lo);
+    memcpy((void *)(uintptr_t)lo, r->smap + (lo - r->import_lo), hi - lo);
+    return hi - lo;
 }
 
 void vk_gpu_written(uint64_t addr, uint64_t size) {
@@ -971,13 +995,28 @@ void vk_gpu_written(uint64_t addr, uint64_t size) {
         const pidx_ent *e = pidx_find(&pool_index, addr, size);
         PoolRec *r = e ? e->buf : NULL;
         plat_mutex_lock(&shadow_lock);
-        if (r && r->smap && addr >= r->import_lo && addr + size <= r->import_hi) {
-            mem_thaw(addr, size);
-            memcpy((void *)(uintptr_t)addr, r->smap + (addr - r->import_lo), size);
-            s_wb_bytes += size;
-        }
+        int k = -1;   // the oldest pending note of this range: the one this fence completes
         for (int i = 0; i < nspend; i++)
-            if (spend[i].lo == addr && spend[i].hi == addr + size) { spend[i] = spend[--nspend]; break; }
+            if (spend[i].lo == addr && spend[i].hi == addr + size && (k < 0 || spend[i].fence < spend[k].fence)) k = i;
+        uint64_t fence = k >= 0 ? spend[k].fence : 0;
+        if (k >= 0) spend[k] = spend[--nspend];
+        if (!fence || fence != wb_fence) wb_fence = fence, nwb_done = 0;
+        if (r && r->smap && addr >= r->import_lo && addr + size <= r->import_hi) {
+            uint64_t n = wb_copy(r, addr, addr + size, 0);
+            s_wb_bytes += n;
+            s_wb_dup += size - n;
+            if (fence) {   // merged with the ranges it touches, so the list stays short
+                SRange m = {addr, addr + size, fence};
+                for (int i = 0; i < nwb_done;)
+                    if (wb_done[i].lo <= m.hi && wb_done[i].hi >= m.lo) {
+                        if (wb_done[i].lo < m.lo) m.lo = wb_done[i].lo;
+                        if (wb_done[i].hi > m.hi) m.hi = wb_done[i].hi;
+                        wb_done[i] = wb_done[--nwb_done];
+                    } else i++;
+                if (nwb_done == cwb_done) grow((void **)&wb_done, &cwb_done, sizeof *wb_done);
+                wb_done[nwb_done++] = m;
+            }
+        }
         plat_mutex_unlock(&shadow_lock);
         plat_mutex_unlock_shared(&pool_lock);
     }
@@ -988,11 +1027,11 @@ static void shadow_log(uint64_t frame) {
     if (!shadow_on) return;
     plat_mutex_lock(&shadow_lock);
     rt_log("mem: shadow at frame %llu: %lld pools %.1f MiB; since the last: %llu pool syncs, %llu queries, %.1f MiB "
-           "copied in (%llu untracked), %.1f MiB written back, %.2f ms, %d GPU writes pending",
+           "copied in (%llu untracked), %.1f MiB written back (%.1f MiB of repeats skipped), %.2f ms, %d GPU writes pending",
            (unsigned long long)frame, (long long)s_live_n, s_live_bytes / 1048576.0, (unsigned long long)s_syncs,
            (unsigned long long)s_queries, s_copied / 1048576.0, (unsigned long long)s_untracked, s_wb_bytes / 1048576.0,
-           qpc_ms(s_ticks), nspend);
-    s_syncs = s_queries = s_copied = s_untracked = s_wb_bytes = s_ticks = 0;
+           s_wb_dup / 1048576.0, qpc_ms(s_ticks), nspend);
+    s_syncs = s_queries = s_copied = s_untracked = s_wb_bytes = s_wb_dup = s_ticks = 0;
     plat_mutex_unlock(&shadow_lock);
 }
 
