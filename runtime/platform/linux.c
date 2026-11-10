@@ -980,11 +980,21 @@ int plat_mem_read(uint64_t addr, void *out, size_t n) {
     return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
 }
 
+// Guest reservations answer from pstate, which every protection change below PS_LIMIT goes through (plat_mem_commit,
+// plat_mem_decommit, plat_mem_protect; reservations are never released). Only pages outside them (PS_FREE: host
+// memory) cost a process_vm_readv each. A system call per page made the check of a texture's pool (up to 354 MiB, 90k
+// pages; vk_texture.c storage_readable) take tens of ms on the replay thread while the camera moved on a Steam Deck.
 int plat_mem_readable(uint64_t addr, uint64_t n) {
     uint8_t b;
     uint64_t end = addr + (n ? n : 1);
-    for (uint64_t a = addr; a < end; a = (a | 4095) + 1)
+    for (uint64_t a = addr; a < end; a = (a | 4095) + 1) {
+        if (pstate && a < PS_LIMIT) {
+            uint8_t v = __atomic_load_n(&pstate[a / PG], __ATOMIC_RELAXED);
+            if (v == PS_READ || v == PS_RW) continue;
+            if (v != PS_FREE) return 0;
+        }
         if (!plat_mem_read(a, &b, 1)) return 0;
+    }
     return 1;
 }
 
