@@ -399,15 +399,22 @@ def take_prebuilt(out, src):
 
 # ---- runtime/, recomp/, tools/, data/ ---------------------------------------------------------------------------------
 
+# The runtime library of each x86-64 level the setup can compile for (build_game.py --cpu), named as installer/layout.py
+# runtime_lib_for expects: the CPU check picks v2 on a CPU without AVX2.
+RUNTIME_LIBS = {'v3': 'libxc3rt.a', 'v2': 'libxc3rt-v2.a'}
+
+
 def runtime_lib(out, llvm):
-    """Build libxc3rt.a with the folder's llvm/ and copy it, the headers and the install-side sources into runtime/."""
-    build = MAIN_ROOT / 'build' / 'release-check' / 'rtlib'
-    run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', VERSION_TAG,
-         '--expected', ROOT / 'tools' / 'data' / EXPECTED, '--toolchain', llvm,
-         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--gen', RUNTIME_LAYOUT,
-         '--out', build], env=clean_env(llvm / 'bin', out / 'bin'))
+    """Build libxc3rt.a and libxc3rt-v2.a with the folder's llvm/ and copy them, the headers and the install-side
+    sources into runtime/."""
     rt = out / 'runtime'
-    shutil.copy2(build / 'libxc3rt.a', rt / 'libxc3rt.a')
+    for level, name in RUNTIME_LIBS.items():
+        build = MAIN_ROOT / 'build' / 'release-check' / ('rtlib' if level == 'v3' else f'rtlib-{level}')
+        run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', VERSION_TAG,
+             '--expected', ROOT / 'tools' / 'data' / EXPECTED, '--toolchain', llvm, '--cpu', level,
+             '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja.exe', '--gen', RUNTIME_LAYOUT,
+             '--out', build], env=clean_env(llvm / 'bin', out / 'bin'))
+        shutil.copy2(build / 'libxc3rt.a', rt / name)
     for p in sorted((ROOT / 'runtime').rglob('*')):
         if p.suffix in RUNTIME_SUFFIXES and p.is_file():
             (rt / p.relative_to(ROOT / 'runtime')).parent.mkdir(parents=True, exist_ok=True)

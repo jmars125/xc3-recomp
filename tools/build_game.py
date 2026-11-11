@@ -91,9 +91,18 @@ NINJA = UCRT / 'ninja.exe' if WIN else on_path('ninja')
 SDL3_DLLS = [UCRT / 'SDL3.dll', UCRT / 'libiconv-2.dll', UCRT / 'libopus-0.dll'] if WIN else []
 
 # Flags for generated code as LAS Recomp builds it (Makefile GENFLAGS, Windows), plus -march for the FP/SIMD lowering.
+# --cpu picks the -march level: x86-64-v3 (AVX2, FMA, BMI2) by default; x86-64-v2 (SSE4.2) for CPUs without AVX2, where
+# the guest's fused multiply-adds become calls to the C library's fma/fmaf, which round once as the Switch does.
+CPU_LEVELS = ('v3', 'v2')
 GEN_FLAGS = ['-O1', '-fno-strict-aliasing', '-Wno-return-type', '-Wno-unused-label', '-fvisibility=hidden',
              '-march=x86-64-v3']
 RT_FLAGS = ['-O2', '-g', '-Wall', '-fno-strict-aliasing', '-march=x86-64-v3']
+
+
+def set_cpu_level(level):
+    """Points the -march of GEN_FLAGS and RT_FLAGS at x86-64-<level>."""
+    for flags in (GEN_FLAGS, RT_FLAGS):
+        flags[next(i for i, f in enumerate(flags) if f.startswith('-march='))] = f'-march=x86-64-{level}'
 if WIN:
     LINK_FLAGS = ['-fuse-ld=lld', '-Wl,--stack,16777216', '"-Wl,--Map=$builddir/xc3.map"']   # the map feeds tools/prof_report.py
     LINK_LIBS = ['-lpsapi', '-lbcrypt', '-lvulkan-1', '-luser32', '-lgdi32', '-ldwmapi', '-lwinmm', '-lSDL3', '-lopus', '-l:libvpx.a', '-l:libzstd.a', '-l:libstdc++.a', '-l:libwinpthread.a']   # Vulkan back end; libvpx static (movies); libzstd static (resolution.c)
@@ -739,9 +748,13 @@ def main():
     ap.add_argument('--runtime-lib', type=Path, help=f'link against this {LIB_NAME} instead of compiling runtime/ '
                                                     f'({", ".join(sorted(INSTALL_SIDE))} and modules.c still compile)')
     ap.add_argument('--icon', type=Path, help='the .ico of xc3.exe (default runtime/xc3.ico)')
+    ap.add_argument('--cpu', choices=CPU_LEVELS, default='v3',
+                    help='x86-64 level to compile for: v3 (AVX2, the default) or v2 (SSE4.2, for CPUs without AVX2); '
+                         'a --runtime-lib must be built for the same level')
     ap.add_argument('--expected', type=Path,
                     help='expected hashes (default tools/data/expected-<display version>.json)')
     args = ap.parse_args()
+    set_cpu_level(args.cpu)
 
     gen = (args.gen or ROOT / 'generated' / args.version).resolve()
     out = (args.out or ROOT / 'build' / args.version).resolve()

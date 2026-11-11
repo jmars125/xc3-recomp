@@ -46,7 +46,8 @@ builds the translator again with other bytes, so the bytes do not decide (`steps
 1. **Check** before writing anything: the files open with the keys, the update is 2.2.1 (by hash, as
    `tools/extract.py`), the keys are new enough for the update, enough space is free on the target disk (about 32 GiB with the add-on content at the peak
    of a first install, 25 GiB after it), the CPU has
-   AVX2 (`-march=x86-64-v3`), a Vulkan 1.3 GPU exists. Each failure is one clear message.
+   SSE4.2 at least (the game compiles for `-march=x86-64-v3` with AVX2, else for `x86-64-v2` against `libxc3rt-v2.a`,
+   recorded as `cpu` in `xc3-install.json`), a Vulkan 1.3 GPU exists. Each failure is one clear message.
 2. **Extract** ExeFS and RomFS into the install folder and verify the hashes.
 3. **Add-on content**: the RomFS of each chosen NSP goes to `aoc/<index>/`, decrypted with the NSP's own ticket.
 4. **Lift** the ExeFS to C (`recomp/gen.py`) into a temp folder next to the installer.

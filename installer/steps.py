@@ -278,8 +278,20 @@ class Check(Step):
         except ValueError:
             raise InstallError('check.host_probe_failed', code=r.returncode) from None
         ctx.reporter.log(f'host: {r.stdout.strip()}')
-        if not host['x86_64_v3']:
-            raise InstallError('check.cpu_no_avx2')
+        # The x86-64 level the game is compiled for: v3 (AVX2) where the CPU has it, else v2 (SSE4.2), whose lifted
+        # code calls the C library for the guest's fused multiply-adds (tools/build_game.py --cpu). A level other than
+        # the one the plan assumed (the recorded one, v3 at first) replans the compile.
+        cpu = 'v3' if host['x86_64_v3'] else 'v2' if host.get('x86_64_v2') else None
+        if not cpu:
+            raise InstallError('check.cpu_too_old')
+        if cpu == 'v2':
+            ctx.reporter.warning('warn.cpu_no_avx2')
+        if cpu != compile_cpu(ctx):
+            ctx.reporter.log(f'check: compiling for x86-64-{cpu} (recorded {compile_cpu(ctx)})')
+            ctx.state['cpu'] = cpu
+            ctx.keys = {}
+            ctx.plan(ctx.forced)
+        ctx.state['cpu'] = cpu
         if not host['loader']:
             raise InstallError('check.vulkan_missing')
         devices = host['devices']
@@ -663,6 +675,11 @@ class Lift(Step):
 NINJA_LINE = re.compile(r'^\[(\d+)/(\d+)\] ')
 
 
+def compile_cpu(ctx):
+    """The x86-64 level the game is compiled for: recorded by the CPU check (Check.host), v3 until it runs."""
+    return ctx.state.get('cpu', 'v3')
+
+
 class Compile(Step):
     id = 'compile'
 
@@ -670,7 +687,8 @@ class Compile(Step):
         layout = ctx.layout
         clang = subprocess.run([str(layout.clang), '--version'], capture_output=True, text=True).stdout
         tools = [layout.tools / n for n in ('build_game.py', 'build_shaders.py', 'romfs_index.py', 'check_content.py')]
-        return fingerprint('compile-3', ctx.keys['lift'], layout.runtime, layout.runtime_lib, layout.deps or 'system',
+        return fingerprint('compile-3', ctx.keys['lift'], layout.runtime, layout.runtime_lib_for(compile_cpu(ctx)),
+                           compile_cpu(ctx), layout.deps or 'system',
                            layout.sysroot or 'host', *tools, clang, *[d.name for d in layout.dlls])
 
     def current(self, ctx, record):
@@ -694,11 +712,15 @@ class Compile(Step):
                 phase[0] = 'link'
                 rep.progress('compile', 'link', force=True)
 
+        cpu = compile_cpu(ctx)
+        runtime_lib = layout.runtime_lib_for(cpu)
+        if not runtime_lib.is_file():
+            raise InstallError('check.release_incomplete', paths=[str(runtime_lib)])
         rep.progress('compile', 'compile', force=True)
         code, log = run_tool(ctx, 'compile', layout.tools / 'build_game.py', [
             '--gen', ctx.temp / 'gen', '--out', build, '--toolchain', layout.llvm,
             *(['--deps', layout.deps] if layout.deps else []), *(['--sysroot', layout.sysroot] if layout.sysroot else []),
-            '--runtime', layout.runtime, '--runtime-lib', layout.runtime_lib, '--ninja', layout.ninja,
+            '--runtime', layout.runtime, '--runtime-lib', runtime_lib, '--cpu', cpu, '--ninja', layout.ninja,
             '--version', version_tag(game_version(ctx)), '--expected', layout.expected(game_version(ctx)),
             '--exefs', dest / 'exefs', '--romfs', dest / 'romfs',
             '--profile', dest / 'profile'], parse)

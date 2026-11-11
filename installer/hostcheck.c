@@ -43,8 +43,19 @@ static int x86_64_v3(void) {
     return (c & (1u << 5)) != 0;   // LZCNT (ABM)
 }
 
+// The x86-64-v2 level from CPUID: CMPXCHG16B, LAHF/SAHF, POPCNT, SSE3, SSE4.1, SSE4.2 and SSSE3. A CPU with it but
+// not v3 gets the game built for v2 (installer/steps.py Check, build_game.py --cpu v2).
+static int x86_64_v2(void) {
+    unsigned a, b, c, d;
+    if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
+    const unsigned need = 1u << 0 | 1u << 9 | 1u << 13 | 1u << 19 | 1u << 20 | 1u << 23;
+    if ((c & need) != need) return 0;
+    if (!__get_cpuid(0x80000001, &a, &b, &c, &d)) return 0;
+    return (c & 1u) != 0;   // LAHF/SAHF in 64-bit mode
+}
+
 int main(void) {
-    printf("{\"x86_64_v3\": %s, ", x86_64_v3() ? "true" : "false");
+    printf("{\"x86_64_v3\": %s, \"x86_64_v2\": %s, ", x86_64_v3() ? "true" : "false", x86_64_v2() ? "true" : "false");
     void *lib = open_lib();
     PFN_vkGetInstanceProcAddr gipa = lib ? (PFN_vkGetInstanceProcAddr)lib_sym(lib, "vkGetInstanceProcAddr") : NULL;
     if (!gipa) {
