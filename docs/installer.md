@@ -68,10 +68,15 @@ A cancelled or failed setup resumes from the last finished step (`xc3-install.js
 `installer/` (stdlib only; `installer/layout.py` maps the release folder and, in a repository, the dev toolchain):
 
 ```
-python -m installer --base FILE --update FILE --keys FILE --lang CODE --dest DIR [--root DIR] [--temp DIR] [--verify]
+python -m installer --base FILE --update FILE --keys FILE [--dlc FILE ...] --lang CODE --dest DIR [--root DIR] [--temp DIR]
+                     [--verify] [--progress-lines]
 ```
 
 - On a folder with `xc3-install.json` only `--dest` is needed; the game files only when the extraction must run again.
+- `--dlc` takes any number of files, after one option or by repeating it (`--dlc=a.nsp --dlc=b.nsp`).
+- `--progress-lines` prints `progress <0 to 1> <text>` lines in place of the JSON events, the setup protocol of a
+  launcher that runs this without a window (`LineReporter` in `installer/events.py`). Every step weighs the same, so the
+  number is a position, not a time estimate.
 - stdout: one JSON event per line, types `start`, `plan`, `step` (started, done, skipped), `progress` (step, phase,
   done/total/unit), `space` (bytes needed and free on the install disk and the temp disk), `warning`, `error`, `end` (`installer/events.py`). Messages are ids with parameters;
   `installer/text/en.json` holds their English text. The human-readable log goes to `<temp>/logs/`.

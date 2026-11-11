@@ -417,6 +417,8 @@ HERE="$(dirname "$(readlink -f "$0")")"
 export PYTHONDONTWRITEBYTECODE=1
 export TCL_LIBRARY="$HERE/python/lib/tcl9.0"
 export TK_LIBRARY="$HERE/python/lib/tk9.0"
+# A launcher runs the setup without a window as AppRun -m installer ... (docs/installer.md, "RecompLauncher").
+if [ "$1" = "-m" ]; then exec "$HERE/python/bin/python3" "$@"; fi
 exec "$HERE/python/bin/python3" -m installer.gui "$@"
 '''
 
