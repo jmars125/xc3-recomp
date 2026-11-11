@@ -74,6 +74,8 @@ python -m installer --base FILE --update FILE --keys FILE [--dlc FILE ...] --lan
 
 - On a folder with `xc3-install.json` only `--dest` is needed; the game files only when the extraction must run again.
 - `--dlc` takes any number of files, after one option or by repeating it (`--dlc=a.nsp --dlc=b.nsp`).
+- `--default-lang CODE` is the language of a first install when `--lang` is missing; a folder with `xc3-install.json`
+  keeps the one it recorded. A launcher passes it instead of `--lang`, which would reset the language on every run.
 - `--progress-lines` prints `progress <0 to 1> <text>` lines in place of the JSON events, the setup protocol of a
   launcher that runs this without a window (`LineReporter` in `installer/events.py`). Every step weighs the same, so the
   number is a position, not a time estimate.

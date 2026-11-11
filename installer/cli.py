@@ -51,6 +51,8 @@ def main(argv=None):
                     help='add-on content NSPs (optional); repeat the option or list several files')
     ap.add_argument('--keys', type=Path, help='prod.keys')
     ap.add_argument('--lang', help='game language, a Switch language code (en-US, en-GB, ja, de, ru, ...)')
+    ap.add_argument('--default-lang', help='language of a first install when --lang is not given; an earlier install '
+                                           'keeps its own')
     ap.add_argument('--dest', type=Path, required=True, help='install folder')
     ap.add_argument('--root', type=Path, help='release folder or repository (default: the folder above installer/)')
     ap.add_argument('--temp', type=Path, help='temp folder (default: temp/ of the release on Windows, .setup-temp in '
