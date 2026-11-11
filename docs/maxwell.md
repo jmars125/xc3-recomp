@@ -219,6 +219,12 @@ Grep-level look on 2026-10-22, statuses updated 2026-10-26; "saw" is what the gr
     19.2 MHz unit is 32x off from the hardware's; find that consumer before fixing the unit; (b) the delta needs
     `vkCmdWriteTimestamp2` with `TOP_OF_PIPE` for TIMESTAMP_TOP and `BOTTOM_OF_PIPE` for TIMESTAMP, per submission
     segment, converted to whichever unit (a) shows. **Mismatch (instant); unit unverified.**
+22. **Storage image format.** SULD/SUST read and write texel bits as the instruction's format says, not the texture's.
+    The sand footprint decal reads the A2B10G10R10 G-buffer normal target through an R32UI image and unpacks it itself;
+    a storage view in the target's own format made that load undefined, and the decal wrote garbage normals over its
+    whole quad (dark squares on NVIDIA, issue #39). `vk_exec_draw.c` `storage_view_format` now gives the view the
+    shader's declared format when its texel size matches and it supports storage (images are MUTABLE_FORMAT).
+    **Fixed.**
 
 ## 8. Sources not read yet
 

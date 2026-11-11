@@ -470,7 +470,46 @@ static nvn_hmap views_by_image;          // VkImage -> its first ViewNode
 
 // An image view of a registered texture for a shader resource of type `rtype` (GfxShaderRes.type); VK_NULL_HANDLE when
 // the image cannot serve it (the caller binds a stand-in). Texture lock held.
-static VkImageView get_view(VkExec *ex, const VkTexImage *img, const view_t *v, int hv, uint16_t rtype, int storage) {
+// Bytes per texel of an uncompressed colour format; 0 for the others (compressed, depth, multi-planar).
+static uint32_t texel_bytes(VkFormat f) {
+    if (f == VK_FORMAT_R4G4_UNORM_PACK8 || (f >= VK_FORMAT_R8_UNORM && f <= VK_FORMAT_R8_SRGB)) return 1;
+    if ((f >= VK_FORMAT_R4G4B4A4_UNORM_PACK16 && f <= VK_FORMAT_A1R5G5B5_UNORM_PACK16) ||
+        (f >= VK_FORMAT_R8G8_UNORM && f <= VK_FORMAT_R8G8_SRGB) || (f >= VK_FORMAT_R16_UNORM && f <= VK_FORMAT_R16_SFLOAT))
+        return 2;
+    if ((f >= VK_FORMAT_R8G8B8A8_UNORM && f <= VK_FORMAT_A2B10G10R10_SINT_PACK32) ||
+        (f >= VK_FORMAT_R16G16_UNORM && f <= VK_FORMAT_R16G16_SFLOAT) || (f >= VK_FORMAT_R32_UINT && f <= VK_FORMAT_R32_SFLOAT) ||
+        f == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || f == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32)
+        return 4;
+    if ((f >= VK_FORMAT_R16G16B16A16_UNORM && f <= VK_FORMAT_R16G16B16A16_SFLOAT) ||
+        (f >= VK_FORMAT_R32G32_UINT && f <= VK_FORMAT_R32G32_SFLOAT))
+        return 8;
+    if (f >= VK_FORMAT_R32G32B32A32_UINT && f <= VK_FORMAT_R32G32B32A32_SFLOAT) return 16;
+    return 0;
+}
+
+// The format of a storage view of img for an image the shader declares with format code sfmt (tex_format): Maxwell's
+// SULD/SUST read and write the texel bits as the instruction's format says, whatever the texture's format. XC3's
+// sand footprint decal reads the A2B10G10R10 normal target through an R32UI image and unpacks it itself; through a
+// view in the target's own format that load is undefined and the decal wrote garbage normals over its whole quad
+// (dark squares, issue #39). The image is MUTABLE_FORMAT (vk_texture.c), so a view in another format of the same texel
+// size is valid where that format supports storage; otherwise the image's own format.
+static VkFormat storage_view_format(const VkTexImage *img, int sfmt) {
+    if (sfmt <= 0 || sfmt >= 40 || img->block_views || img->aspect != VK_IMAGE_ASPECT_COLOR_BIT) return img->format;
+    VkFormat f = tex_format[sfmt];
+    if (f == img->format || !texel_bytes(f) || texel_bytes(f) != texel_bytes(img->format)) return img->format;
+    static VkFormat checked[40];
+    static uint8_t ok[40];
+    if (checked[sfmt] != f) {
+        VkFormatProperties p;
+        vkGetPhysicalDeviceFormatProperties(vk_ctx()->phys, f, &p);
+        ok[sfmt] = (p.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
+        checked[sfmt] = f;
+    }
+    return ok[sfmt] ? f : img->format;
+}
+
+static VkImageView get_view(VkExec *ex, const VkTexImage *img, const view_t *v, int hv, uint16_t rtype, int storage,
+                            int sfmt) {
     VkImageViewType vt = res_view_type(rtype);
     int ms = (rtype & 0x200) != 0;
     if ((img->samples > 1) != ms || (storage && ms)) return VK_NULL_HANDLE;
@@ -518,17 +557,22 @@ static VkImageView get_view(VkExec *ex, const VkTexImage *img, const view_t *v, 
             }
     }
     uint32_t swz = (uint32_t)sw[0] | (uint32_t)sw[1] << 8 | (uint32_t)sw[2] << 16 | (uint32_t)sw[3] << 24;
-    ViewKey k = {img->image, img->format, vt, aspect, l0, nl, y0, ny, swz};
+    VkFormat fmt = storage ? storage_view_format(img, sfmt) : img->format;
+    ViewKey k = {img->image, fmt, vt, aspect, l0, nl, y0, ny, swz};
     if (!view_of.klen) nvn_hm_init(&view_of, sizeof(ViewKey)), nvn_hm_init(&views_by_image, sizeof(VkImage));
     VkImageView found = (VkImageView)nvn_hm_get(&view_of, &k);
     if (found) return found;
     VkImageViewCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = img->image, .viewType = vt,
-                                .format = img->format,
+                                .format = fmt,
                                 .components = {swz_of(sw[0]), swz_of(sw[1]), swz_of(sw[2]), swz_of(sw[3])},
                                 .subresourceRange = {aspect, l0, nl, y0, ny}};
     VkImageViewUsageCreateInfo use = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
                                       .usage = VK_IMAGE_USAGE_SAMPLED_BIT};
     if (img->block_views) ci.pNext = &use;   // the image's COLOR_ATTACHMENT usage is its block views' (vk_texture.c)
+    // A reinterpreting storage view is used for storage only: its format need not support the image's other usages.
+    VkImageViewUsageCreateInfo suse = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
+                                       .usage = VK_IMAGE_USAGE_STORAGE_BIT};
+    if (fmt != img->format) ci.pNext = &suse;
     VkImageView view;
     if (vkCreateImageView(vk_ctx()->device, &ci, NULL, &view) != VK_SUCCESS) return VK_NULL_HANDLE;
     ViewNode *n = malloc(sizeof *n);
@@ -1202,7 +1246,7 @@ static void tex_info_full(VkExec *ex, const GfxShaderRes *r, uint64_t h, int sto
         view_t v;
         int hv;
         const VkTexImage *img = vk_texture_by_id_locked((int)(h & 0xfffff), &v, &hv);
-        if (img) view = get_view(ex, img, &v, hv, r->type, storage), *image = img->image;
+        if (img) view = get_view(ex, img, &v, hv, r->type, storage, r->format), *image = img->image;
         if (img && storage) vk_texture_storage_bound_locked(img);
         if (img && !storage && ex->nfbl && in_fbl(ex, img->image)) layout = VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
         if (!storage && !separate) {
