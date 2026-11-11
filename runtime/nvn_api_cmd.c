@@ -689,12 +689,20 @@ NVN_API(nvnCommandBufferBindVertexBuffer) {
 #define UI_CLIP_LR (MOD_MAIN_BASE + 0x10386f0)   // the clip rectangle setter's return address, saved in its frame
 #define UI_FULL_WIDTH 1.9f
 static _Thread_local int ui_on_output, ui_in_rect;
+// The interface renderer also binds a camera, uniform block 1 of the vertex stage, before each run of elements: the
+// identity for the flat layouts (the HUD), a perspective projection for the layouts set up in 3D (the main menu on X,
+// tilted towards the view). That projection's x scale is the game's own, from the frame's real aspect (0.974 at 16:9,
+// 0.725 at 3440x1440), so those elements already keep their shape and their place about the centre, and narrowing them
+// again squeezed the menu to k * k of its width and, with its median right of the centre, moved it to the right edge.
+// ui_cam is the last camera block bound on the output target, 0 after a change of target.
+static _Thread_local uint64_t ui_cam;
 
 static void ui_note_target(const tex_t *t) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
     ui_on_output = t && t->d.width == out[0] && t->d.height == out[1];
     ui_in_rect = 0;
+    ui_cam = 0;
 }
 
 // The return address saved in the guest frame at fp, or 0. The guest stack page is asked about once per thread and page:
@@ -833,13 +841,23 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
 }
 
+// The camera block (ui_cam): 4x4, bound by the same wrapper as the elements' transforms.
+static void ui_note_cam(const Cpu *c, int st, uint64_t addr, uint64_t size) {
+    if (res_ui_fit() >= 1 || !ui_on_output || st != 0 || c->x[30] != UI_BIND_RET) return;
+    ui_cam = size >= 0x40 ? addr : 0;
+}
+
 static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     static _Thread_local struct { uint64_t addr; float x; } done[64];
     float k = res_ui_fit();
     if (k >= 1 || !ui_on_output || ui_in_rect || st != 0 || c->x[30] != UI_BIND_RET || size < 0x80 || size > 0x400 ||
         ui_frame_lr(c->x[29]) != UI_BIND_LR)
         return;
-    // The block is read as is, as the uniform snapshots do: it lies in the game's memory.
+    // The blocks are read as they are, as the uniform snapshots do: they lie in the game's memory.
+    if (ui_cam) {   // a camera whose w row takes z is a perspective one: the element is placed for this frame already
+        const float *p = (const float *)(uintptr_t)ui_cam;
+        if (p[12] != 0 || p[13] != 0 || p[14] != 0) return;
+    }
     float *f = (float *)(uintptr_t)addr;
     if (f[2] != 0 || f[6] != 0 || f[8] != 0 || f[9] != 0 || f[10] != 0 || f[11] != 0) return;
     unsigned slot = (unsigned)(addr >> 4) % 64;   // a block bound for a second draw is narrow already
@@ -882,6 +900,7 @@ static void bind_buffers(const Cpu *c, uint32_t op) {   // (cmd, stage, first, n
     int st = (int)arg_x(c, 1), first = (int)arg_x(c, 2), n = (int)arg_x(c, 3);
     const NVNbufferRange *rg = arg_p(c, 4);
     for (int i = 0; i < n; i++) {
+        if (op == OP_BIND_UBO && first + i == 1) ui_note_cam(c, st, rg[i].address, rg[i].size);
         if (op == OP_BIND_UBO && first + i == 0) ui_fit(c, st, rg[i].address, rg[i].size);
         *REC(o, op, p_bind_buf) = (p_bind_buf){st, first + i, rg[i].address, rg[i].size};
         hw_fix(o, 20);
@@ -889,6 +908,7 @@ static void bind_buffers(const Cpu *c, uint32_t op) {   // (cmd, stage, first, n
 }
 static void bind_buffer(const Cpu *c, uint32_t op) {    // (cmd, stage, index, NVNbufferAddress address, size_t size)
     cmd_t *o = cmd_of(c);
+    if (op == OP_BIND_UBO && arg_x(c, 2) == 1) ui_note_cam(c, (int)arg_x(c, 1), arg_x(c, 3), arg_x(c, 4));
     if (op == OP_BIND_UBO && arg_x(c, 2) == 0) ui_fit(c, (int)arg_x(c, 1), arg_x(c, 3), arg_x(c, 4));
     *REC(o, op, p_bind_buf) = (p_bind_buf){(int)arg_x(c, 1), (int)arg_x(c, 2), arg_x(c, 3), arg_x(c, 4)};
     hw_fix(o, 20);
