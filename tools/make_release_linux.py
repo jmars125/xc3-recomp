@@ -18,7 +18,7 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
                ov_zstd.c (compiled per install), xc3.png (the window icon), deps/ (Vulkan headers 1.4.363, VMA, zstd
                built static; SDL3, Opus and libvpx come from the sysroot)
     bin/       xc3_xlate (+ .id), hactool, ninja, libSDL3.so.0 (the sysroot's; the game finds it beside itself)
-    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, VERSION
+    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, recomplauncher.json, VERSION
     AppRun, xc3-setup.desktop, xc3-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
 
 --appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --prove compiles

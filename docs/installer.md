@@ -115,6 +115,7 @@ bin/upscalers/        AMD FSR 3 (MIT) and NVIDIA Streamline DLLs (MIT) with the 
 data/                 shader_list.tsv (MacNativeGames, MIT)
 THIRD_PARTY_NOTICES.md
 xc3.ini.example, VERSION  the default ini; the release string (the repository's VERSION plus the commit)
+recomplauncher.json    how RecompLauncher sets the game up and starts it ("RecompLauncher")
 ```
 
 - SDL3 comes from the upstream release, not MSYS2: MSYS2's DLL imports the LGPL libiconv.
@@ -133,7 +134,7 @@ Xft against the sniper sysroot so Russian text uses system TrueType fonts. The s
 ```
 AppRun                starts python/bin/python3 -m installer.gui (no bytecode written into the read-only mount)
 xc3-setup.desktop, xc3-setup.png
-installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, VERSION   as on Windows
+installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, recomplauncher.json, VERSION   as on Windows
 python/               python-build-standalone 3.14 (with tkinter) + the installer's packages; a .pth puts the folder,
                       tools/ and recomp/ on sys.path
 llvm/                 LLVM 23 (clang, lld, llvm-ar) and llvm/sysroot: the files of the Steam Runtime 3 "sniper" SDK the
@@ -220,3 +221,22 @@ Without Actions, the same two scripts build the packages locally; on Windows run
 
 - Re-warm the driver cache on start after a move, GPU or driver change.
 - NSZ and XCZ input.
+
+## RecompLauncher
+
+[RecompLauncher](https://recomplauncher.com) installs this release and sets the game up from the player's own files with
+`recomplauncher.json` (repository root; `tools/make_release.py` copies it to the top of both packages). It reads the
+base game, the update, the four add-on files and `prod.keys` as named inputs and runs the setup without a window:
+
+```
+python/python.exe -m installer --base=… --update=… --dlc=… --keys=… --default-lang=en-US --dest=<release>/game --progress-lines
+```
+
+On Linux the unpacked AppImage's `AppRun -m installer …` does the same (it hands a leading `-m` to the bundled Python).
+The game is built into `game/` inside the release folder, which a launcher update leaves alone, and started from there.
+`--progress-lines` is the launcher's progress protocol, and `--default-lang` keeps a player's language across runs.
+The window and the command line are unchanged without these arguments.
+
+The manifest's settings edit `game/xc3.ini`, so each setting's key and values are the ones `xc3.ini.example` documents:
+change both together. `tests/recomplauncher_manifest_test.py` checks the file's own consistency; validate it against
+the schema at https://recomplauncher.com/schema/recomplauncher.json after an edit.
