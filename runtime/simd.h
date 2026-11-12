@@ -7,7 +7,7 @@
 // tables. Not modelled: FPSR cumulative exception bits and QC, FPCR trap enables, FP16 arithmetic (ARMv8.2).
 // FPCR.AHP is honoured by the half-precision conversions. Host assumptions: IEEE binary32/64, MXCSR in
 // round-to-nearest outside the slow paths, with FTZ|DAZ equal to FPCR.FZ (cpu.h rt_fpcr_sync keeps it so); fma must be
-// correctly rounded (build x86 with -mfma).
+// correctly rounded: SIMD_FMA is the FMA instruction with -mfma, else runtime/fma_soft.c.
 #pragma once
 #include <fenv.h>
 #include <immintrin.h>
@@ -28,6 +28,20 @@ SIMD_VT(vf32, float) SIMD_VT(vf64, double)
 typedef uint16_t __attribute__((may_alias)) sa16;
 typedef uint32_t __attribute__((may_alias)) sa32;
 typedef uint64_t __attribute__((may_alias)) sa64;
+
+// Fused multiply-add x*y+z rounded once. Without -mfma (tools/build_game.py --cpu v2) the C library's fma/fmaf would be
+// called per lane, and glibc's software versions cost tens of nanoseconds each; runtime/fma_soft.c computes the same
+// result without changing the floating-point environment.
+#ifdef __FMA__
+#define SIMD_FMA(x, y, z) __builtin_elementwise_fma(x, y, z)
+#else
+float simd_fmaf_soft(float a, float b, float c);
+double simd_fmad_soft(double a, double b, double c);
+vf32 simd_fma4_soft(vf32 a, vf32 b, vf32 c);
+vf64 simd_fma2_soft(vf64 a, vf64 b, vf64 c);
+#define SIMD_FMA(x, y, z) \
+    _Generic((x), float: simd_fmaf_soft, double: simd_fmad_soft, vf32: simd_fma4_soft, vf64: simd_fma2_soft)(x, y, z)
+#endif
 typedef float __attribute__((may_alias)) saf32;
 typedef double __attribute__((may_alias)) saf64;
 typedef u128 __attribute__((aligned(1), may_alias)) u128u;
