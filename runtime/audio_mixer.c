@@ -156,7 +156,7 @@ static void output_open(Mixer *m, int rate) {
         rt_log("audio: XC3_AUDIO=none: mixing without a device");
         return;
     }
-    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    if (!audio_sdl_init()) {
         rt_log("audio: SDL audio init failed (%s): mixing without sound", SDL_GetError());
         return;
     }

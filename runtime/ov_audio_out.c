@@ -48,6 +48,19 @@ static const uint64_t REPORT_NS[] = {5000000000ull, 60000000000ull};   // the re
 
 static uint64_t now_ns(void) { return plat_now_ns(); }
 
+// The SDL audio subsystem for both outputs (this file and audio_mixer.c output_open). On Linux SDL 3 tries PipeWire
+// before PulseAudio. On a ROG Ally running SteamOS (issue #35) the PipeWire driver opened its default device and took
+// every byte, yet nothing was heard, while SDL_AUDIO_DRIVER=pulseaudio played through the speakers. PulseAudio comes
+// first here: PipeWire systems serve it through pipewire-pulse, PulseAudio systems natively, and SDL moves on to the
+// next name when a driver cannot start. SDL_AUDIO_DRIVER in the environment still decides (SDL lets it override a
+// hint of normal priority).
+int audio_sdl_init(void) {
+#ifdef __linux__
+    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "pulseaudio,pipewire,alsa,jack,sndio,oss");
+#endif
+    return SDL_InitSubSystem(SDL_INIT_AUDIO) ? 1 : 0;
+}
+
 static Out *find(uint64_t guest) {
     for (int i = 0; i < OUT_MAX; i++)
         if (outs[i].guest == guest) return &outs[i];
@@ -177,7 +190,7 @@ static uint32_t open_out(Cpu *c, uint64_t guest, uint64_t event, const uint8_t *
     if (!o) o = find(0);
     if (!o) rt_fatal("audout: more than %d AudioOuts open", OUT_MAX);
     if (sdl_ready < 0) {
-        sdl_ready = SDL_InitSubSystem(SDL_INIT_AUDIO) ? 1 : 0;
+        sdl_ready = audio_sdl_init();
         if (sdl_ready) list_devices();
         else rt_log("audout: SDL audio init failed (%s)", SDL_GetError());
     }
