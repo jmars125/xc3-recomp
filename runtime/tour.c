@@ -132,6 +132,7 @@ static void tour_tick(Cpu *c) {
         char path[600];
         snprintf(path, sizeof path, "%s/tour_%u.png", out_dir, ids[idx]);
         gfx_shot_request(path);
+        vk_dump_tour_shot();
         input_tour(0, TURN_RX);
         t0 = now, f0 = frame, phase = 3;
     } else if (phase == 3) {
