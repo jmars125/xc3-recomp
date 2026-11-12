@@ -117,6 +117,8 @@ typedef struct {
     VkTupImage color, depth, motion;   // render size, GENERAL: tonemapped colour, depth-stencil, packed motion vectors
     VkTupImage out;                    // output size, GENERAL: where the game's reconstruction writes
     int own_out;                       // 1: the result stays in an image of ours of out's size (vk_tup_result)
+    VkTupImage game_out;               // own_out: the reconstruction's target at its own size, GENERAL; the result is
+                                       // scaled into it too, for the game's passes that read it
     float jitter[2];                   // camera jitter in render pixels, x right and y down
     float near_z, fov_y;               // 0: defaults
     uint32_t rw, rh;                   // the part of color, depth and motion the scene drew (the game's dynamic
