@@ -14,7 +14,8 @@
 // that samples them; texture lines carry the storage address, mirror state, upload count and the image's and slot's
 // swizzle. Copies and texture clears are logged as "copy/clear after pass N". XC3_DUMP_LOG=<from> also logs the
 // frames from..frame-1 to passes.txt, with PNGs only of targets up to 64K texels. XC3_DUMP_BUF=<addr>:<size>[:...]
-// snapshots one GPU buffer range after every logged pass (buf_<pass>.bin and bufs.txt, see buf_snap).
+// snapshots one GPU buffer range after every logged pass (buf_<pass>.bin and bufs.txt, see buf_snap). XC3_DUMP=tour
+// dumps the frame two frames after the first tour capture instead (vk_dump_tour_shot).
 // A depth target with stencil also gets pass_<seq>_ts_<w>x<h>_stencil.png, the plane scaled by its maximum.
 // PNGs are opaque (alpha dropped). Integer formats are scaled by the image maximum, depth by its min..max range, SNORM
 // as x/2+1/2, UNORM and sRGB bytes written as stored. Caps: MAX_PASSES passes copied, PNG_CAP bytes of PNGs.
@@ -703,6 +704,19 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
        s->blend[0].eq_a, s->chmask.mask, s->color.alpha_func, s->color.logic_op);
     for (size_t k = 0; k < sizeof s->ds; k++) sp(&b, "%02x", ((const uint8_t *)&s->ds)[k]);
     sp(&b, "\n");
+    // vertex attributes (NVN format, stream, offset) and the bound streams (stride, divisor, guest address, size)
+    sp(&b, "    vattr");
+    for (int l = 0; l < 16; l++) {
+        va_st va;
+        memcpy(&va, &s->vattr[l], sizeof va);
+        if (va.fmt) sp(&b, " %d:fmt%#x/s%u+%u", l, (unsigned)va.fmt, (unsigned)va.stream, (unsigned)va.offset);
+    }
+    sp(&b, "\n    vstream");
+    for (int l = 0; l < 16; l++)
+        if (s->vstream[l].stride || ex->vbuf[l].address)
+            sp(&b, " %d:stride%u/div%u@%#llx+%#llx", l, s->vstream[l].stride, s->vstream[l].divisor,
+               (unsigned long long)ex->vbuf[l].address, (unsigned long long)ex->vbuf[l].size);
+    sp(&b, "\n");
     describe_bindings(&b, ex, info);
     ents[nents++] = (Ent){p, th, 1, b.s};
 out:
@@ -890,7 +904,8 @@ static void make_dirs(char *path) { plat_file_mkdir_p(path); }
 
 void vk_dump_init(void) {
     const char *e = cfg_get("XC3_DUMP");
-    if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
+    if (e && !strcmp(e, "tour")) dump_frame = UINT64_MAX;   // armed by vk_dump_tour_shot
+    else if (!e || !*e || !(dump_frame = strtoull(e, NULL, 10))) return;
     const char *lf = cfg_get("XC3_DUMP_LOG");
     if (lf && *lf) log_from = strtoull(lf, NULL, 10);
     const char *sr = cfg_get("XC3_DUMP_SKIP_RUNS");
@@ -929,6 +944,15 @@ void vk_dump_init(void) {
     }
     vk_dump_armed = 1;
     rt_log("vk_dump: frame %llu goes to %s", (unsigned long long)dump_frame, dir);
+}
+
+// XC3_DUMP=tour: tour.c calls this where it requests its capture, so the dump takes the frame two frames later, at the
+// same place on every GPU (a capture's frame number differs from run to run and between GPUs). Only the first capture
+// counts.
+void vk_dump_tour_shot(void) {
+    if (__atomic_load_n(&dump_frame, __ATOMIC_RELAXED) != UINT64_MAX) return;
+    __atomic_store_n(&dump_frame, frame_now() + 2, __ATOMIC_RELAXED);
+    rt_log("vk_dump: the tour capture arms frame %llu", (unsigned long long)dump_frame);
 }
 
 void vk_dump_present(uint64_t frame) {

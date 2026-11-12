@@ -40,7 +40,7 @@
 #define NVN_STAGE_CS 5
 #define ONESHOT_WAIT_MS 30000u   // prepare_draw: how long a one-shot draw waits for its pipeline before it is skipped
 
-enum { W_PROGRAM, W_SHADER, W_PIPELINE, W_NO_VS, W_FEEDBACK, W_INDEX, W_UB, W_BIND, W_SSBO_ALIGN, W_SSBO_SLOT, W_RESTART, W_INDIRECT, W_COUNT };
+enum { W_PROGRAM, W_SHADER, W_PIPELINE, W_NO_VS, W_FEEDBACK, W_INDEX, W_UB, W_BIND, W_SSBO_ALIGN, W_SSBO_SLOT, W_RESTART, W_INDIRECT, W_VB_ALIGN, W_COUNT };
 
 static void warn_once(int key, const char *fmt, ...) {
     static volatile int32_t seen[W_COUNT];
@@ -103,6 +103,7 @@ static struct {
     int vcls[17];                        // their pool class and pool record, for the census
     void *vpool[17];
     NVNbufferRange vin[16];              // the ranges they were resolved from, under vk_mem_gen vgen
+    uint32_t vraw[16];                   // the guest strides they were bound for (realign_stream repacks by them)
     uint64_t vgen;
     int vb_valid;
     uint8_t support[SUPPORT_BYTES];      // last support buffer and where it lives
@@ -1724,6 +1725,57 @@ static void record_fixed(VkExec *ex) {
     ex->dirty = 0;
 }
 
+// Vertex streams that are not 4-byte aligned. Vulkan requires each attribute fetch to be aligned to its format's
+// component size; Maxwell and NVIDIA's driver read unaligned streams as they are, AMD's hardware fetches from the
+// address rounded down. XC3 has both kinds: its depth pre-pass binds some meshes at an address of 2 mod 4 (stride 32,
+// position R32G32B32_SFLOAT), and some G-buffer meshes have stride 34, so every other vertex is two bytes off. On AMD
+// those positions came out two bytes off, the triangles reached w ~ 0 and covered the screen as sheets through the
+// camera (issues #47, #45). Such a stream is copied from guest memory into transient memory at an aligned offset, and
+// one with a stride that is not a multiple of 4 is repacked to the next multiple (prepare_draw gives the draw that
+// stride), as bind_range does for a misaligned uniform block. Left as it is where the pool is device-local or the
+// stream has no size. NVIDIA keeps binding guest memory directly.
+#define VB_REALIGN_MAX (16ull << 20)
+
+// The stride the draw uses for stream b: rounded up to a multiple of 4 when the stream will be repacked.
+static uint32_t host_stride(const VkExec *ex, int b) {
+    uint32_t st = ex->pipe.vstream[b].stride;
+    if (vk_caps.nvidia || !(st % 4)) return st;
+    const NVNbufferRange *r = &ex->vbuf[b];
+    VkMemSpan sp;
+    if (!r->address || !r->size || r->size > VB_REALIGN_MAX || !vk_mem_resolve(r->address, 1, &sp) || sp.alloc)
+        return st;
+    return (st + 3) & ~3u;
+}
+
+// 1 when stream b went into transient memory (buf, off, *n: the size bound); 0: bind the guest memory as it is.
+static int realign_stream(VkExec *ex, int b, const NVNbufferRange *r, const VkMemSpan *sp, uint64_t *n, VkBuffer *buf,
+                          VkDeviceSize *off) {
+    uint32_t st = ex->pipe.vstream[b].stride, hs = host_stride(ex, b);
+    if (vk_caps.nvidia || (!(sp->offset % 4) && hs == st)) return 0;
+    if (sp->alloc || !r->size || *n > VB_REALIGN_MAX || hs % 4) {
+        warn_once(W_VB_ALIGN, "vertex stream %#llx (stride %u, %llu bytes) is not 4-byte aligned and is bound as it is",
+                  (unsigned long long)r->address, st, (unsigned long long)r->size);
+        return 0;
+    }
+    const uint8_t *src = (const uint8_t *)(uintptr_t)r->address;
+    RS.volatile_ = 1;
+    vk_mem_count(sp->cls, VK_MUSE_CPU_READ, *n);
+    if (hs == st) {
+        memcpy(scratch(ex, *n, buf, off), src, *n);
+    } else {
+        uint64_t count = (*n + st - 1) / st, out = count * hs;
+        uint8_t *dst = scratch(ex, out, buf, off);
+        memset(dst, 0, out);
+        for (uint64_t i = 0; i < count; i++) {
+            uint64_t at = i * st, len = *n - at < st ? *n - at : st;
+            memcpy(dst + i * hs, src + at, len);
+        }
+        *n = out;
+    }
+    vk_mem_count(VK_MCLS_SCRATCH, VK_MUSE_VB, *n);
+    return 1;
+}
+
 static void bind_vertex_buffers(VkExec *ex) {
     VkBuffer vb[17];
     VkDeviceSize vo[17], vsz[17], vstr[17];
@@ -1735,10 +1787,11 @@ static void bind_vertex_buffers(VkExec *ex) {
     uint64_t gen = vk_mem_gen();
     int same_gen = B.vb_valid && B.vgen == gen;
     for (int b = 0; b < 17; b++) {
-        vb[b] = Z.zbuf, vo[b] = 0, vsz[b] = ZERO_BYTES, vstr[b] = b < 16 ? ex->pipe.vstream[b].stride : 0;
+        vb[b] = Z.zbuf, vo[b] = 0, vsz[b] = ZERO_BYTES, vstr[b] = b < 16 ? host_stride(ex, b) : 0;
         if (b == VK_PIPE_ZERO_BINDING) continue;
         const NVNbufferRange *r = &ex->vbuf[b];
-        if (same_gen && B.vin[b].address == r->address && B.vin[b].size == r->size) {
+        if (same_gen && B.vin[b].address == r->address && B.vin[b].size == r->size && B.vstr[b] == vstr[b] &&
+            B.vraw[b] == ex->pipe.vstream[b].stride) {
             vb[b] = B.vb[b], vo[b] = B.vo[b], vsz[b] = B.vsz[b], vcls[b] = B.vcls[b], vpool[b] = B.vpool[b];
             continue;
         }
@@ -1746,10 +1799,15 @@ static void bind_vertex_buffers(VkExec *ex) {
         if (!r->address || !vk_mem_resolve(r->address, 1, &sp)) continue;
         VK_MEM_USE(sp);
         uint64_t n = r->size && r->size < sp.avail ? r->size : sp.avail;
+        if (realign_stream(ex, b, r, &sp, &n, &vb[b], &vo[b])) {
+            vsz[b] = n;
+            continue;
+        }
         vb[b] = sp.buffer, vo[b] = sp.offset, vsz[b] = n, vcls[b] = sp.cls, vpool[b] = sp.pool;
     }
     memcpy(B.vcls, vcls, sizeof vcls), memcpy(B.vpool, vpool, sizeof vpool);
     memcpy(B.vin, ex->vbuf, sizeof B.vin);
+    for (int b = 0; b < 16; b++) B.vraw[b] = ex->pipe.vstream[b].stride;
     B.vgen = gen;
     if (B.vb_valid && !memcmp(B.vb, vb, sizeof vb) && !memcmp(B.vo, vo, sizeof vo) && !memcmp(B.vsz, vsz, sizeof vsz) &&
         (dyn || !memcmp(B.vstr, vstr, sizeof vstr)))
@@ -2120,6 +2178,8 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (fs && tup_draw(ex, fs)) return 0;
     uint32_t fbl = feedback_prepare(ex, fs);
     VkPipeState s = ex->pipe;
+    for (int b = 0; b < 16; b++)   // a stream with a stride that is not a multiple of 4 is repacked (realign_stream)
+        if (s.vstream[b].stride % 4) s.vstream[b].stride = host_stride(ex, b);
     s.vs = vs, s.fs = fs, s.gs = gs;
     s.feedback = (uint8_t)((fbl & 0xff ? 1 : 0) | (fbl & 0x100 ? 2 : 0));
     s.prim = (uint8_t)prim;
