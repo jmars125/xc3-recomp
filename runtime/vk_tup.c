@@ -404,6 +404,42 @@ static void hudless_keep(VkCtx *c, VkCommandBuffer cb, uint64_t id, uint32_t ow,
     HL.id[s] = id + 1;
 }
 
+// The scaled path skips the game's reconstruction, so its target would keep a picture from before the upscaler took
+// over: the game's copy (vk_exec_draw.c tup_draw, VK_TUP_COPY) and other passes read it after the reconstruction (the
+// title screen's 5ece73588fdabea6, scenes with effects of their own), and with DLAA such a pass drew that frozen picture
+// over the result tup_fixup put into the frame while the interface went on moving (issue #25). So the result also goes
+// into that target at its size (twice the scene's): whole multiples with the nearest filter, so the game's halving gives
+// back the result's pixels.
+static void game_out_fill(VkCtx *c, VkCommandBuffer cb, const VkTupImage *g, uint32_t ow, uint32_t oh) {
+    static VkFormat checked;
+    static int blit_ok;
+    if (!g->image || !g->w || !g->h) return;
+    if (g->format != checked) {
+        VkFormatProperties fp;
+        vkGetPhysicalDeviceFormatProperties(c->phys, g->format, &fp);
+        checked = g->format;
+        blit_ok = (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) != 0;
+        if (!blit_ok) rt_log("vk: temporal upscale: the reconstruction's target (format %d) takes no blit", (int)g->format);
+    }
+    if (!blit_ok) return;
+    const VkImageLayout G = VK_IMAGE_LAYOUT_GENERAL;
+    const VkPipelineStageFlags2 ALL = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, XF = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    const VkAccessFlags2 RW = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, ALL, VK_ACCESS_2_MEMORY_WRITE_BIT, XF, VK_ACCESS_2_TRANSFER_READ_BIT);
+    barrier(cb, g->image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, ALL, RW, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    int whole = g->w % ow == 0 && g->h % oh == 0;
+    static uint32_t lw, lh;
+    if ((g->w != lw || g->h != lh) && knob("XC3_TUP_DEBUG"))
+        rt_log("vk: temporal upscale: the result also goes into the reconstruction's %ux%u target (%s)", g->w, g->h,
+               whole ? "nearest" : "linear");
+    lw = g->w, lh = g->h;
+    VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0}, {(int32_t)ow, (int32_t)oh, 1}},
+                      .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{0}, {(int32_t)g->w, (int32_t)g->h, 1}}};
+    vkCmdBlitImage(cb, T.out.image, G, g->image, G, 1, &bl, whole ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+    barrier(cb, g->image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, XF, VK_ACCESS_2_TRANSFER_WRITE_BIT, ALL, RW);
+    barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, XF, VK_ACCESS_2_TRANSFER_READ_BIT, ALL, VK_ACCESS_2_MEMORY_READ_BIT);
+}
+
 int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     VkCtx *c = vk_ctx();
     if (!T.tried) init(c);
@@ -538,6 +574,7 @@ int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f) {
     if (f->own_out) {   // the caller brings T.out into the frame (vk_tup_result)
         barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, CS, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, ALL,
                 VK_ACCESS_2_MEMORY_READ_BIT);
+        game_out_fill(c, cb, &f->game_out, ow, oh);
     } else {
         barrier(cb, T.out.image, VK_IMAGE_ASPECT_COLOR_BIT, G, G, CS, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, XF,
                 VK_ACCESS_2_TRANSFER_READ_BIT);
