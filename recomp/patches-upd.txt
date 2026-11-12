@@ -8,9 +8,16 @@
 # frame size times the factors. No view asks in play, so the path is unused.
 # The first site reads the flags and says a view asked (w9 = 1), the second loads both factors from the patch page's
 # +0x58 (two floats) in place of 1.0. x8 is rewritten at main+0xed573c.
+# The view loop applies the factors when view 0's flag bit 3 is clear or they differ from the ones it last applied
+# (renderer +0x4a60), and it multiplies the render size it has (view +0x18, main+0xed5b54), not the frame size (view
+# +0x28, which it keeps equal to the resolution table at main+0xed5aa0). Each new application shrank the scene again:
+# at render_scale 67 it was 67 % of 67 % after a second one and 770x430 of a 3826x2138 frame after four, drawn in the
+# top left of the screen under a whole interface; players saw it after cutscenes (issues 29 and 49). Clearing bit 3
+# by hand reproduces it. The third site multiplies the frame size instead, so applying the factors again changes nothing.
 set scene XC3_SCENE_SCALE 0
 site scene main ed58cc b947d268 b947d268 52800029
 site scene main ed5730 b2091be8 @page:x8 f9402d08
+site scene main ed5b54 2d430500 2d450500
 
 # realtime (XC3_REALTIME, frame_rate.c): the frame step follows the time each frame is shown. The game's frame-step
 # update (main+0xf3c0) takes 60 / its vsync count per frame (main+0x1249b6c) as the frame rate (+0x210, an int), its
