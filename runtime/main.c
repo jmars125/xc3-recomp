@@ -381,9 +381,15 @@ static void host_probe(Cpu *c) { host_probe_hits++; c->x[0] = 42; }
 
 static void check_cpu(void) {
     __builtin_cpu_init();
+#ifdef __AVX2__   // the build's level (tools/build_game.py --cpu): v3 by default, v2 for CPUs without AVX2
     int ok = __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2");
     printf("cpu: x86-64-v3 (AVX2, FMA, BMI2) %s\n", ok ? "present" : "MISSING");
     CHECK(ok, "the lifted code is built for x86-64-v3");
+#else
+    int ok = __builtin_cpu_supports("sse4.2") && __builtin_cpu_supports("popcnt");
+    printf("cpu: x86-64-v2 (SSE4.2, POPCNT) %s\n", ok ? "present" : "MISSING");
+    CHECK(ok, "the lifted code is built for x86-64-v2");
+#endif
 }
 
 // Layout: ascending, no overlap, below 2^39, and inside the window mem_init reserved.

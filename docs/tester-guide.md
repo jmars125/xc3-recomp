@@ -6,7 +6,7 @@ from it may be shared.
 
 ## What you need
 
-- Windows 10 or later, an x86-64 CPU with AVX2, about 60 GB free.
+- Windows 10 or later, an x86-64 CPU with SSE4.2 (AVX2 is faster), about 60 GB free.
 - A GPU with Vulkan 1.3 and `VK_EXT_external_memory_host`, with a current driver.
 - *Xenoblade Chronicles 3* base game (1.0.0) and the 2.0.0 update (plus the optional add-on content), dumped from your own Switch as NSP or XCI.
 - `prod.keys` dumped from your own Switch. Never send it to anyone, and never paste it into a log or an issue.
