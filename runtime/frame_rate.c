@@ -275,8 +275,10 @@ static void world_clock(double dt, double step) {
 // cutscene ran ahead of its voices. The step update's object (main+0xf3c0, its address stored to the patch page's +0x70
 // by the realtime site at main+0xf3dc) has bit 2 of +0x1fc set while the game takes a fixed step instead of the
 // measured one: the title menus and every cutscene, clear in play. While it is set the step is 1/30 s, the frame rate
-// 30, the vsync count 2 and the pacer holds 30 fps. XC3_CUTSCENE_30=0 keeps the limit.
+// 30, the vsync count 2 and the pacer holds 30 fps. Story events and events played without save data (Event Theater,
+// the New Game prologue) are held too, below. XC3_CUTSCENE_30=0 keeps the limit.
 static int cut_on = -1;
+static uint32_t game_data_seen = 0xffffffffu;
 
 static int cutscene(void) {
     if (cut_on < 0) cut_on = !(cfg_get("XC3_CUTSCENE_30") && !cfg_bool("XC3_CUTSCENE_30"));
@@ -291,8 +293,22 @@ static int cutscene(void) {
     // minutes and went on at once at 30.
     uint64_t rep = 0;
     uint32_t id = 0;
-    return plat_mem_read(MOD_MAIN_BASE + 0x1b4d688, &rep, 8) && rep && plat_mem_read(rep, &rep, 8) && rep &&
-           plat_mem_read(rep + 0x1e0, &id, 4) && id;
+    if (plat_mem_read(MOD_MAIN_BASE + 0x1b4d688, &rep, 8) && rep && plat_mem_read(rep, &rep, 8) && rep &&
+        plat_mem_read(rep + 0x1e0, &id, 4) && id)
+        return 1;
+    // Event Theater and the New Game prologue: events played without save data (the word at main+0x1b903a0, one of a
+    // block that a save load sets to 1 and that stays 0 on the title, in Event Theater and through the prologue's
+    // events 10001 to 10003; it becomes 1 when the prologue reaches play, its first battle). There the real-time scenes
+    // clear the fixed-step flag and the play report's id two presents after they start, and the end of event 10003 (a
+    // fade to black, then back to the theater's list) waited about two minutes at 60 fps with the measured 1/60 s step,
+    // under a second at 30 fps or with the step held at 1/30 s (#24, #51).
+    uint32_t game_data = 1;
+    plat_mem_read(MOD_MAIN_BASE + 0x1b903a0, &game_data, 4);
+    if (game_data != game_data_seen) {
+        game_data_seen = game_data;
+        rt_log("frame rate: save data %s", game_data ? "in play" : "absent (title, Event Theater, New Game prologue)");
+    }
+    return !game_data;
 }
 
 void frame_step_present(uint64_t display_ns, int interval) {
@@ -301,7 +317,8 @@ void frame_step_present(uint64_t display_ns, int interval) {
     if (cut != cut_now) {
         cut_now = cut;
         sample_count = sample_next = 0;   // the average starts again at the new rate
-        rt_log("frame rate: %s", cut ? "cutscene, story event or title menu, 30 fps" : "play, the limit again");
+        rt_log("frame rate: %s",
+               cut ? "cutscene, story event, Event Theater or title menu, 30 fps" : "play, the limit again");
     }
     if (vsyncs_word) vsyncs_store();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
