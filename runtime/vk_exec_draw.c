@@ -1986,6 +1986,11 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
     }
     if (role == VK_TUP_FIRST) {
         TU.captured = 0;
+        if (TU.fix.image) {   // the last frame's result found no target of the frame's size and format (tup_fixup)
+            static unsigned missed;
+            if (!missed++ || missed % 600 == 0)
+                rt_log("vk: temporal upscale: the result did not reach the frame (%u frames so far)", missed);
+        }
         TU.fix.image = TU.done.image = VK_NULL_HANDLE;
         if (TU.failed || vk_tup_mode() == VK_TUP_OFF) return 0;
         float c4[12];
@@ -2024,6 +2029,7 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
     // The scaled path's output is twice the scene, which the game's copy halves into a scene-size target: the upscaler
     // writes the frame size into an image of its own instead, which tup_fixup brings into the frame.
     TU.f.own_out = res_scene_on();
+    TU.f.game_out = TU.f.own_out ? TU.f.out : (VkTupImage){0};
     if (TU.f.own_out) {
         unsigned out[2], scene[2];
         res_sizes(out, scene);
