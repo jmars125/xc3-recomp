@@ -126,7 +126,9 @@
 # gpu_index = 0
 # gpu_name = NVIDIA
 # Game resolution: the size the game draws its picture and interface in (1280x720 to 7680x4320). Above 1920x1080 the
-# game's texture heap and memory pool grow with it. Read at start.
+# game's texture heap and memory pool grow with it. Read at start. For an ultrawide monitor give it the monitor's shape
+# (and window_size the same), for example 2560x1080 or 3440x1440 (21:9) or 5120x1440 (32:9): the 3D view widens and
+# keeps its height, so the sides show more of the world. The settings menu (F1) lists the wide sizes on a wide monitor.
 # output_res = 1920x1080
 # 3D render scale: the scene's size relative to the game resolution: game (the game's own: half the game resolution,
 # rebuilt to the full size by its 2x2 temporal reconstruction or by a temporal upscaler) or a fixed percentage from
@@ -170,6 +172,11 @@
 # Picture shape when the window's differs from the game resolution's (a 16:9 game on a 16:10 screen): keep (its
 # proportions, with black bars) or stretch (over the whole window). Changes take effect at once.
 # picture_fit = keep
+# Interface on a game resolution wider than 16:9 (output_res above): 1 keeps the interface's proportions, with the HUD
+# that sits on a side (the minimap, the area name, the button prompts) at the screen's edges, menus in the middle and
+# talk bubbles and markers on what they mark; 0 stretches the interface over the whole width, as the game draws it.
+# Nothing changes at 16:9. Read at start.
+# ui_fit = 1
 # Frame generation: off, dlss (NVIDIA DLSS Frame Generation; an RTX 40 or newer card, hardware-accelerated GPU
 # scheduling on) or fsr (AMD FSR 3 frame generation; any GPU). It adds one generated frame between two drawn ones
 # and needs a temporal upscaler (upscaler = fsr3, dlss or dlaa): the game's depth and motion come from there. The

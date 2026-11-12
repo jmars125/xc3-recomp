@@ -499,6 +499,7 @@ NVN_API(nvnCommandBufferUpdateUniformBuffer) {
 }
 
 static void ui_note_target(const tex_t *t);
+static void ui_rect(const Cpu *c, float r[4], int viewport);
 // ---------- CommandBuffer: render state, payloads of nvn_obj.h
 // void nvnCommandBufferSetRenderTargets(NVNcommandBuffer *cmd, int n, const NVNtexture *const *colors,
 // const NVNtextureView *const *color_views, const NVNtexture *depth, const NVNtextureView *depth_view)
@@ -570,17 +571,26 @@ static void set_viewports(cmd_t *o, int first, int n, const float *v) {
 NVN_API(nvnCommandBufferSetViewports) {
     const float *v = arg_p(c, 3);
     int first = (int)arg_x(c, 1), n = (int)arg_x(c, 2);
+    if (first == 0 && n == 1) {
+        float one[4] = {v[0], v[1], v[2], v[3]};
+        ui_rect(c, one, 1);
+        set_viewports(cmd_of(c), 0, 1, one);
+        return;
+    }
     set_viewports(cmd_of(c), first, n, v);
 }
 // void nvnCommandBufferSetViewport(NVNcommandBuffer *cmd, int x, int y, int w, int h)
 NVN_API(nvnCommandBufferSetViewport) {
     float v[4] = {(float)(int)arg_x(c, 1), (float)(int)arg_x(c, 2), (float)(int)arg_x(c, 3), (float)(int)arg_x(c, 4)};
+    ui_rect(c, v, 1);
     set_viewports(cmd_of(c), 0, 1, v);
 }
 static void set_scissor(cmd_t *o, int x, int y, int w, int h) { *REC(o, OP_SCISSOR, p_scissor) = (p_scissor){x, y, w, h}; }
 // void nvnCommandBufferSetScissor(NVNcommandBuffer *cmd, int x, int y, int w, int h)
 NVN_API(nvnCommandBufferSetScissor) {
-    set_scissor(cmd_of(c), (int)arg_x(c, 1), (int)arg_x(c, 2), (int)arg_x(c, 3), (int)arg_x(c, 4));
+    float r[4] = {(float)(int)arg_x(c, 1), (float)(int)arg_x(c, 2), (float)(int)arg_x(c, 3), (float)(int)arg_x(c, 4)};
+    ui_rect(c, r, 0);
+    set_scissor(cmd_of(c), (int)r[0], (int)r[1], (int)r[2], (int)r[3]);
 }
 // void nvnCommandBufferSetScissors(NVNcommandBuffer *cmd, int first, int n, const int *xywh): the replay keeps one
 // scissor (index 0); other indices matter only to shaders that select a viewport index, so differing ones are reported
@@ -593,7 +603,11 @@ NVN_API(nvnCommandBufferSetScissors) {
             static int once;
             if (!once++) rt_log("nvn: SetScissors: differing scissor %d ignored (single-scissor replay)", first + i);
         }
-    if (first == 0 && n > 0) set_scissor(cmd_of(c), r[0], r[1], r[2], r[3]);
+    if (first == 0 && n > 0) {
+        float f[4] = {(float)r[0], (float)r[1], (float)r[2], (float)r[3]};
+        ui_rect(c, f, 0);
+        set_scissor(cmd_of(c), (int)f[0], (int)f[1], (int)f[2], (int)f[3]);
+    }
 }
 static void set_depth_range(cmd_t *o, float n, float f) { *REC(o, OP_DEPTH_RANGE, p_depth_range) = (p_depth_range){n, f}; }
 // void nvnCommandBufferSetDepthRange(NVNcommandBuffer *cmd, float near, float far)
@@ -694,64 +708,222 @@ NVN_API(nvnCommandBufferBindVertexBuffer) {
 }
 // The game lays its interface out on a 16:9 canvas whatever the frame's shape, and on a wider frame that stretches the
 // interface. Each element's first uniform block holds its clip-space transform as a 2x4 matrix (row 0 x, row 1 y) when
-// the interface renderer binds it (2.2.1: the call of the bind wrapper main+0xea5e90 that returns to main+0x1038b8c), so
-// a frame wider than 16:9 narrows row 0 here, around the centre of the frame. Only binds to the output-sized target count:
-// the game also draws interface pieces into textures, and those keep their own shape. An element as wide as the canvas
-// (fades, dim layers) stays as it is, so that it still covers the frame. Viewports and scissors stay as the game sets
-// them: the ones set on the interface path in 2.2.1 belong to the scene composite (main+0xea8cb4), and narrowing them
-// cut the 3D frame.
+// the interface renderer binds it (2.2.1: the bind wrapper main+0xea5ddc, whose NVN call returns to main+0xea5e90, called
+// from main+0x1038b88), so a frame wider than 16:9 narrows row 0 here, around the centre of the frame. Only binds to the
+// output-sized target count: the game also draws interface pieces into textures, and those keep their own shape. An
+// element as wide as the canvas (fades, dim layers) stays as it is, so that it still covers the frame.
+// A pane that clips its children (the minimap) sets a viewport and scissor of its own rectangle in frame pixels
+// (main+0x1038600, through main+0xea8c6c, which returns to main+0x10386f0); ui_rect narrows those like the elements. The
+// elements drawn inside such a viewport are placed in its clip space, which is narrow already, so ui_fit leaves them.
+// Full-frame viewports and scissors (the scene composite, main+0xea8cb4 from main+0xe9be58) stay as they are.
+#define UI_BIND_RET (MOD_MAIN_BASE + 0xea5e90)   // x30 in the NVN bind call
 #define UI_BIND_LR (MOD_MAIN_BASE + 0x1038b8c)   // the wrapper's return address, saved in its frame
+#define UI_CLIP_LR (MOD_MAIN_BASE + 0x10386f0)   // the clip rectangle setter's return address, saved in its frame
 #define UI_FULL_WIDTH 1.9f
-static _Thread_local int ui_on_output;
+static _Thread_local int ui_on_output, ui_in_rect;
+// The interface renderer also binds a camera, uniform block 1 of the vertex stage, before each run of elements: the
+// identity for the flat layouts (the HUD), a perspective projection for the layouts set up in 3D (the main menu on X,
+// tilted towards the view). That projection's x scale is the game's own, from the frame's real aspect (0.974 at 16:9,
+// 0.725 at 3440x1440), so those elements already keep their shape and their place about the centre, and narrowing them
+// again squeezed the menu to k * k of its width and, with its median right of the centre, moved it to the right edge.
+// ui_cam is the last camera block bound on the output target, 0 after a change of target.
+static _Thread_local uint64_t ui_cam;
 
 static void ui_note_target(const tex_t *t) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
     ui_on_output = t && t->d.width == out[0] && t->d.height == out[1];
+    ui_in_rect = 0;
+    ui_cam = 0;
 }
 
-// A HUD piece that stays on one side of the screen could move to that edge once narrowed (ui_shift), given the top-level
-// interface node it belongs to. XC3's node list is not found yet, so every piece narrows around the centre: the
-// interface keeps its 16:9 layout in the middle of the frame.
+// The return address saved in the guest frame at fp, or 0. The guest stack page is asked about once per thread and page:
+// asking the system on every interface bind costs a large share of a frame (XCX recomp: 60 fps to 10 at 2560x1080).
+static uint64_t ui_frame_lr(uint64_t fp) {
+    static _Thread_local uint64_t ok_page;
+    if (!fp || (fp & 7)) return 0;
+    if ((fp >> 12) != ok_page || ((fp + 15) >> 12) != ok_page) {
+        if (!plat_mem_readable(fp, 16)) return 0;
+        if ((fp >> 12) == ((fp + 15) >> 12)) ok_page = fp >> 12;
+    }
+    return *(uint64_t *)(uintptr_t)(fp + 8);
+}
+
+// The interface is a list of layouts drawn one after another (the loop at main+0x103487c calls each one's draw, which
+// returns to main+0x10348a0), and each piece of the HUD or a menu belongs to one of them. The draw (main+0x102cb44, its
+// children drawn by the same function) saves the loop's x19, the layout's list entry, at fp + 0x58 of its frame, which
+// tells the layouts apart. A layout that stays on one side of the screen moves to that edge once narrowed; one that spans
+// the centre, as menus and the world labels do, stays.
+#define UI_ROOT_LR (MOD_MAIN_BASE + 0x10348a0)
 #define UI_EDGE_SIDE 0.33f
 static uint64_t ui_node(const Cpu *c) {
-    (void)c;
+    uint64_t fp = c->x[29];
+    for (int d = 0; d < 24 && fp; d++) {
+        uint64_t lr = ui_frame_lr(fp);
+        if (!lr) return 0;
+        if (lr == UI_ROOT_LR) return *(uint64_t *)(uintptr_t)(fp + 0x58);   // the frame's 16 bytes passed ui_frame_lr
+        uint64_t next = *(uint64_t *)(uintptr_t)fp;
+        if (next <= fp) return 0;
+        fp = next;
+    }
     return 0;
 }
 
-// What a node's elements add to their clip-space x once narrowed. The average of the element centres seen so far decides,
-// so that one stray wide element in a node on the right does not hold the rest back.
+// What a layout's elements add to their clip-space x once narrowed, ported from the XCX recomp (xcx-recomp
+// nvn_api_cmd.c ui_shift, where the reasons for each rule are written up). The median of the layout's element centres in
+// the last frame picks a side (past UI_EDGE_SIDE), so that a few stray pieces do not hold the rest back and every element
+// of a layout moves by the same amount within a frame. A layout on a side stays there until its median comes back within
+// UI_EDGE_STAY of the centre; one drawn at the centre for UI_NODE_SETTLED frames moves only after asking for a side
+// UI_SIDE_HOLD frames in a row; one with a wide element past the side line on each side frames the screen and stays. A
+// layout goes to a side only if one of its elements reaches within UI_EDGE_REACH of that side's canvas edge: the HUD that
+// belongs on a side (the minimap, the area name, the button prompts) ends on the canvas edge.
+// What the game places from the world must stay where the 3D view shows it, and XC3 needs more than XCX here:
+// - A layout the game places as a whole holds its position in its root transform (layout + 0x100, x and y in canvas
+//   units; zero for the HUD): the icon of a far target over the field. It never moves to a side.
+// - The objective marker is a layout of its own placed on an inner pane, and one of its pieces reaches past 0.85 every
+//   other frame, so it went to the edge and back each frame. The reach counts only when the last two frames both have it.
+// - At 32:9 the world positions spread twice as far as at 21:9 (patches-upd.txt, uifit), so a marker in the outer part of
+//   the view also reaches the edge. A layout whose median moved by more than UI_NODE_MOVE between two frames does not
+//   move to a side for UI_MOVE_HOLD frames: world markers move with the camera, the HUD stays put.
+#define UI_EDGE_REACH 0.85f
+#define UI_EDGE_STAY 0.25f
+#define UI_EDGE_BAND 0.2f
+static int ui_spans(float lw, float rw) { return lw >= UI_EDGE_BAND && rw >= UI_EDGE_BAND; }
+#define UI_NODE_STALE 30     // frames without the node: its last layout is forgotten
+#define UI_NODE_SETTLED 60   // frames at the centre after which a node needs UI_SIDE_HOLD frames to move to a side
+#define UI_SIDE_HOLD 60
+#define UI_NODE_CENTRES 64   // element centres kept per node and frame for the median
+#define UI_NODE_MOVE 0.004f
+#define UI_MOVE_HOLD 120
+#define UI_LAYOUT_POS 0xe0   // the root transform's x and y, from the list entry (the layout object is entry - 0x20)
+static volatile uint32_t ui_frames;
+void nvn_ui_frame(void) { __atomic_add_fetch(&ui_frames, 1, __ATOMIC_RELAXED); }
+
+static float ui_median(const float *v, int n) {
+    float s[UI_NODE_CENTRES];
+    for (int i = 0; i < n; i++) {
+        int j = i;
+        for (; j > 0 && s[j - 1] > v[i]; j--) s[j] = s[j - 1];
+        s[j] = v[i];
+    }
+    return n & 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+// lo and hi: the node's leftmost and rightmost element ends; moving: it may not move to a side now.
+static int ui_side_for(int side, float mid, float lo, float hi, int moving) {
+    int want = side && mid * side > UI_EDGE_STAY ? side : mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
+    if ((want < 0 && lo > -UI_EDGE_REACH) || (want > 0 && hi < UI_EDGE_REACH)) return 0;
+    if (want && want != side && moving) return 0;
+    return want;
+}
+
 static float ui_shift(uint64_t node, float lo, float hi, float k) {
-    static _Thread_local struct { uint64_t node; float sum, n; } seen[32];
+    static _Thread_local struct {
+        uint64_t node;
+        uint32_t frame, centred, moved;   // the frame drawn last, the first of its run at the centre, the last move
+        float c[UI_NODE_CENTRES], lw, rw, lo, hi;   // lo, hi: the leftmost and rightmost element ends
+        float plo, phi, pmid;                       // the frame before: its ends and median
+        int n, pn, have, side, hold, posok;
+    } seen[32];
     static _Thread_local unsigned next;
     if (!node) return 0;
+    uint32_t frame = __atomic_load_n(&ui_frames, __ATOMIC_RELAXED);
     int i = 0;
     while (i < 32 && seen[i].node != node) i++;
     if (i == 32) {
         i = next++ % 32;
-        seen[i].node = node, seen[i].sum = 0, seen[i].n = 0;
+        memset(&seen[i], 0, sizeof seen[i]);
+        seen[i].node = node, seen[i].frame = seen[i].centred = frame, seen[i].lo = seen[i].plo = 1;
+        seen[i].hi = seen[i].phi = -1, seen[i].moved = frame - UI_MOVE_HOLD;
+        seen[i].posok = plat_mem_readable(node + UI_LAYOUT_POS, 8);
     }
-    seen[i].sum += (lo + hi) / 2, seen[i].n += 1;
-    float mid = seen[i].sum / seen[i].n;
-    return mid < -UI_EDGE_SIDE ? k - 1 : mid > UI_EDGE_SIDE ? 1 - k : 0;
+    if (seen[i].posok) {   // placed as a whole by the game: stays where it is put
+        const float *pos = (const float *)(uintptr_t)(node + UI_LAYOUT_POS);
+        if (pos[0] != 0 || pos[1] != 0) return 0;
+    }
+    if (seen[i].frame != frame) {   // the node's last frame decides its side for this one
+        int stale = frame - seen[i].frame > UI_NODE_STALE;
+        seen[i].have = !stale && seen[i].n > 0;
+        if (stale) seen[i].side = seen[i].hold = 0, seen[i].centred = frame, seen[i].pn = 0;
+        if (seen[i].have) {
+            float mid = ui_median(seen[i].c, seen[i].n);
+            if (seen[i].pn == seen[i].n && fabsf(mid - seen[i].pmid) > UI_NODE_MOVE) seen[i].moved = frame;
+            // both frames must reach a side: the ends the two frames share
+            float rlo = seen[i].pn ? fmaxf(seen[i].lo, seen[i].plo) : seen[i].lo;
+            float rhi = seen[i].pn ? fminf(seen[i].hi, seen[i].phi) : seen[i].hi;
+            int want = ui_spans(seen[i].lw, seen[i].rw) ? 0
+                     : ui_side_for(seen[i].side, mid, rlo, rhi, frame - seen[i].moved < UI_MOVE_HOLD);
+            if (want == seen[i].side) seen[i].hold = 0;
+            else if (seen[i].side || frame - seen[i].centred < UI_NODE_SETTLED || ++seen[i].hold >= UI_SIDE_HOLD)
+                seen[i].side = want, seen[i].hold = 0;
+            if (seen[i].side) seen[i].centred = frame;
+            seen[i].pmid = mid, seen[i].pn = seen[i].n, seen[i].plo = seen[i].lo, seen[i].phi = seen[i].hi;
+        }
+        seen[i].frame = frame, seen[i].n = 0, seen[i].lw = seen[i].rw = 0, seen[i].lo = 1, seen[i].hi = -1;
+    }
+    float centre = (lo + hi) / 2;
+    if (seen[i].n < UI_NODE_CENTRES) seen[i].c[seen[i].n++] = centre;
+    if (centre < -UI_EDGE_SIDE && hi - lo > seen[i].lw) seen[i].lw = hi - lo;
+    if (centre > UI_EDGE_SIDE && hi - lo > seen[i].rw) seen[i].rw = hi - lo;
+    if (lo < seen[i].lo) seen[i].lo = lo;
+    if (hi > seen[i].hi) seen[i].hi = hi;
+    if (!seen[i].have)   // the node's first frame: what it has drawn so far
+        seen[i].side = ui_spans(seen[i].lw, seen[i].rw) ? 0
+                     : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n), seen[i].lo, seen[i].hi, 0);
+    return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
+}
+
+// The camera block (ui_cam): 4x4, bound by the same wrapper as the elements' transforms.
+static void ui_note_cam(const Cpu *c, int st, uint64_t addr, uint64_t size) {
+    if (res_ui_fit() >= 1 || !ui_on_output || st != 0 || c->x[30] != UI_BIND_RET) return;
+    ui_cam = size >= 0x40 ? addr : 0;
 }
 
 static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     static _Thread_local struct { uint64_t addr; float x; } done[64];
     float k = res_ui_fit();
-    uint64_t fp = c->x[29];
-    if (k >= 1 || !ui_on_output || st != 0 || !fp || (fp & 7) || !plat_mem_readable(fp, 16) ||
-        *(uint64_t *)(uintptr_t)(fp + 8) != UI_BIND_LR || size < 0x80 || size > 0x400 || !plat_mem_readable(addr, 0x40))
+    if (k >= 1 || !ui_on_output || ui_in_rect || st != 0 || c->x[30] != UI_BIND_RET || size < 0x80 || size > 0x400 ||
+        ui_frame_lr(c->x[29]) != UI_BIND_LR)
         return;
+    // The blocks are read as they are, as the uniform snapshots do: they lie in the game's memory.
+    if (ui_cam) {   // a camera whose w row takes z is a perspective one: the element is placed for this frame already
+        const float *p = (const float *)(uintptr_t)ui_cam;
+        if (p[12] != 0 || p[13] != 0 || p[14] != 0) return;
+    }
     float *f = (float *)(uintptr_t)addr;
-    if (f[2] != 0 || f[6] != 0 || f[8] != 0 || f[9] != 0 || f[10] != 0 || f[11] != 0 || fabsf(f[0]) >= UI_FULL_WIDTH) return;
+    if (f[2] != 0 || f[6] != 0 || f[8] != 0 || f[9] != 0 || f[10] != 0 || f[11] != 0) return;
     unsigned slot = (unsigned)(addr >> 4) % 64;   // a block bound for a second draw is narrow already
     if (done[slot].addr == addr && done[slot].x == f[0]) return;
     float a = f[3], b = f[3] + f[0], lo = a < b ? a : b, hi = a < b ? b : a;
-    if (hi - lo >= 1 && (lo <= -0.99f || hi >= 0.99f)) return;   // a shade laid over a whole side keeps its full reach
+    // An element as wide as the canvas, or a shade laid over a whole side, keeps its full reach. Some elements only look
+    // that wide: they carry their shape in the vertices, in units of the canvas width on both axes, so the matrix's rows
+    // keep the canvas's 16:9 ratio, turned for spinning ones (the minimap's ring and compass). Those narrow like the rest,
+    // placed by their origin. The same rule in XCX: xcx-recomp nvn_api_cmd.c ui_fit.
+    if (fabsf(f[0]) >= UI_FULL_WIDTH || (hi - lo >= 1 && (lo <= -0.99f || hi >= 0.99f))) {
+        float rx = hypotf(f[0], f[1]), ry = hypotf(f[4], f[5]);
+        if (!(rx > 0) || fabsf(ry / rx - 16.0f / 9.0f) > 0.02f) return;
+        lo = hi = f[3];
+    }
     float shift = ui_shift(ui_node(c), lo, hi, k);
     f[0] *= k, f[1] *= k, f[3] = f[3] * k + shift;
     done[slot].addr = addr, done[slot].x = f[0];
+}
+
+// A clipping pane's viewport or scissor (x, y, w, h in frame pixels) narrows about the frame's centre like the elements.
+static void ui_rect(const Cpu *c, float r[4], int viewport) {
+    float k = res_ui_fit();
+    if (k >= 1 || !ui_on_output) return;
+    unsigned out[2], scene[2];
+    res_sizes(out, scene);
+    if (r[0] <= 0 && r[2] >= (float)out[0]) {   // full width: the scene composite or the end of a clipping pane
+        if (viewport) ui_in_rect = 0;
+        return;
+    }
+    if (ui_frame_lr(c->x[29]) != UI_CLIP_LR) return;
+    float mid = out[0] / 2.0f, lo = r[0] / mid - 1, hi = (r[0] + r[2]) / mid - 1;
+    float x = mid + (r[0] - mid) * k + ui_shift(ui_node(c), lo, hi, k) * mid, w = r[2] * k;
+    r[0] = floorf(x + 0.5f), r[2] = floorf(x + w + 0.5f) - r[0];
+    if (viewport) ui_in_rect = 1;
 }
 
 // Uniform and storage buffers: one record per binding (CB_SIZE/ADDRESS 4 words + CB_BIND 1 on hardware).
@@ -760,6 +932,7 @@ static void bind_buffers(const Cpu *c, uint32_t op) {   // (cmd, stage, first, n
     int st = (int)arg_x(c, 1), first = (int)arg_x(c, 2), n = (int)arg_x(c, 3);
     const NVNbufferRange *rg = arg_p(c, 4);
     for (int i = 0; i < n; i++) {
+        if (op == OP_BIND_UBO && first + i == 1) ui_note_cam(c, st, rg[i].address, rg[i].size);
         if (op == OP_BIND_UBO && first + i == 0) ui_fit(c, st, rg[i].address, rg[i].size);
         *REC(o, op, p_bind_buf) = (p_bind_buf){st, first + i, rg[i].address, rg[i].size};
         hw_fix(o, 20);
@@ -767,6 +940,7 @@ static void bind_buffers(const Cpu *c, uint32_t op) {   // (cmd, stage, first, n
 }
 static void bind_buffer(const Cpu *c, uint32_t op) {    // (cmd, stage, index, NVNbufferAddress address, size_t size)
     cmd_t *o = cmd_of(c);
+    if (op == OP_BIND_UBO && arg_x(c, 2) == 1) ui_note_cam(c, (int)arg_x(c, 1), arg_x(c, 3), arg_x(c, 4));
     if (op == OP_BIND_UBO && arg_x(c, 2) == 0) ui_fit(c, (int)arg_x(c, 1), arg_x(c, 3), arg_x(c, 4));
     *REC(o, op, p_bind_buf) = (p_bind_buf){(int)arg_x(c, 1), (int)arg_x(c, 2), arg_x(c, 3), arg_x(c, 4)};
     hw_fix(o, 20);

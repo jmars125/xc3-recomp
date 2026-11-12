@@ -30,6 +30,7 @@ from installer import layout as layouts  # noqa: E402
 from installer import state as statefile  # noqa: E402
 from installer.events import Reporter  # noqa: E402
 from installer.runner import Context  # noqa: E402
+from installer import steps as installer_steps  # noqa: E402
 from installer.steps import all_steps  # noqa: E402
 from installer.guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, Catalog, Form, Model, Process,  # noqa: E402
                                 amount, describe_event, parse_line, windows_ui_language)
@@ -403,6 +404,23 @@ class EndToEndTest(unittest.TestCase):
         self.assertTrue(cancelled)
         self.assertEqual((code, model.result), (3, 'cancelled'))
         self.assertIsNone(model.error)
+
+
+class TranslatorIdentityTest(unittest.TestCase):
+    """The prepare step keeps shader-cache/ when the new translator has the identity the cache was keyed with."""
+
+    def test_identity_comes_from_the_id_not_the_exe_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            old, new = Path(d) / 'old' / 'xc3_xlate.exe', Path(d) / 'new' / 'xc3_xlate.exe'
+            for exe, body in ((old, b'build 1'), (new, b'build 2')):   # NativeAOT output differs from build to build
+                exe.parent.mkdir()
+                exe.write_bytes(body)
+                exe.with_suffix('.id').write_text('A0' * 32 + '\n', encoding='ascii')
+            self.assertEqual(installer_steps.xlate_identity(old), installer_steps.xlate_identity(new))
+            new.with_suffix('.id').write_text('b1' * 32 + '\n', encoding='ascii')
+            self.assertNotEqual(installer_steps.xlate_identity(old), installer_steps.xlate_identity(new))
+            new.with_suffix('.id').unlink()   # no .id: the game keys its cache with the exe's sha256, so does this
+            self.assertEqual(installer_steps.xlate_identity(new), installer_steps.file_sha256(new))
 
 
 if __name__ == '__main__':

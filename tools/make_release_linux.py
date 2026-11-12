@@ -204,14 +204,18 @@ def build_bin(out, llvm, sysroot):
 # ---- runtime/ ----------------------------------------------------------------------------------------------------------
 
 def runtime_lib(out, llvm, sysroot):
-    build = CHECK / 'rtlib'
-    shutil.rmtree(build, ignore_errors=True)
-    run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', mr.VERSION_TAG,
-         '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--toolchain', llvm, '--sysroot', sysroot,
-         '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja', '--gen', mr.RUNTIME_LAYOUT,
-         '--out', build])
+    """Build the runtime library of each x86-64 level (make_release.py RUNTIME_LIBS) into runtime/; returns the v3
+    build folder, whose dependency files list the sysroot headers."""
     rt = out / 'runtime'
-    shutil.copy2(build / 'libxc3rt.a', rt / 'libxc3rt.a')
+    for level, name in mr.RUNTIME_LIBS.items():
+        lib_build = CHECK / ('rtlib' if level == 'v3' else f'rtlib-{level}')
+        shutil.rmtree(lib_build, ignore_errors=True)
+        run([sys.executable, ROOT / 'tools' / 'build_game.py', '--make-runtime-lib', '--version', mr.VERSION_TAG,
+             '--expected', ROOT / 'tools' / 'data' / mr.EXPECTED, '--toolchain', llvm, '--sysroot', sysroot,
+             '--cpu', level, '--deps', out / 'runtime' / 'deps', '--ninja', out / 'bin' / 'ninja',
+             '--gen', mr.RUNTIME_LAYOUT, '--out', lib_build])
+        shutil.copy2(lib_build / 'libxc3rt.a', rt / name)
+    build = CHECK / 'rtlib'
     for p in sorted((ROOT / 'runtime').rglob('*')):
         if p.suffix in mr.RUNTIME_SUFFIXES and p.is_file():
             (rt / p.relative_to(ROOT / 'runtime')).parent.mkdir(parents=True, exist_ok=True)

@@ -286,8 +286,16 @@ class App:
             types = [(self.cat('ui.type_keys'), '*.keys'), (self.cat('ui.type_all'), '*.*')]
         if name == 'dlc':   # every add-on is a file of its own: the dialog takes several, the field lists them
             paths = filedialog.askopenfilenames(title=self.cat(pick_id), filetypes=types)
+            if isinstance(paths, str):   # some Tk builds on Linux return the Tcl list as one string
+                paths = self.root.tk.splitlist(paths)
             if paths:
-                self.vars[name].set(';'.join(os.path.normpath(p) for p in paths))
+                # A pick adds to the files already listed, so the add-ons can be chosen one at a time or from
+                # different folders; choosing a file that is listed already keeps one entry.
+                listed = [p.strip() for p in self.vars[name].get().split(';') if p.strip()]
+                for p in (os.path.normpath(p) for p in paths):
+                    if p not in listed:
+                        listed.append(p)
+                self.vars[name].set(';'.join(listed))
             return
         path = filedialog.askopenfilename(title=self.cat(pick_id), filetypes=types)
         if path:

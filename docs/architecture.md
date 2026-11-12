@@ -94,6 +94,11 @@ Every guest thread is a host thread. XC3 assumes Horizon's scheduler: three appl
   (MacNativeGames' sites); `resolution.c` sets them from `output_res` and `render_scale` and grows the texture heap
   and the application pool to match. When the window is larger than the output, `vk_fsr.c` runs AMD FSR 1 (EASU,
   RCAS) on the present.
+- Ultrawide. A game resolution wider than 16:9 widens the game's own 3D view (Hor+). The interface is laid out on a
+  16:9 canvas, so `nvn_api_cmd.c` narrows each interface element's transform as it is bound, and a clipping pane's
+  viewport and scissor, by 16:9 over the frame's aspect (`ui_fit`, `ui_rect`). A layout that stays on one side moves to
+  that screen edge (`ui_shift`). The `uifit` patch set spreads positions the game projects from the world (talk
+  bubbles, markers) by the inverse, so they stay on their targets. `ui_fit = 0` keeps the stretched interface.
 - Occlusion queries never block the CPU; a result that is not ready counts as visible.
 - ASTC textures are uploaded as they are where the device reports `textureCompressionASTC_LDR`, and decoded by a compute shader everywhere else (`vk_astc.c`, `XC3_ASTC`). The CPU decoder (`tex_astc*.c`) is the fallback and the test oracle.
 - Draw state. A draw whose program, bound state and textures repeat reuses the previous draw's shaders and skips rebuilding its descriptor sets; descriptor sets are written through update templates (`vk_exec_draw.c`, `vk_pipeline.c`).

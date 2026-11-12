@@ -475,12 +475,21 @@ NVN_API(nvnQueueFenceSync) {
 // The replay thread (XC3_REPLAY_ASYNC) gives them the value of the submit it replayed, right after replaying it: the
 // game thread's next submit came too late, after the replay of several queued submits during a load had registered
 // more than 256, and gave them a later submit's value.
-static sync_t *replayed_syncs[256];
-static int replayed_sync_count;
+// The list grows: a single submit can reach more than 256 (a player's game stopped on a fixed list of 256 after 36600
+// frames with the asynchronous replay, where each replayed submit fences its own). Each new size above 256 is logged
+// once, so a log shows how many one submit held.
+static sync_t **replayed_syncs;
+static int replayed_sync_count, replayed_sync_cap;
 static PlatMutex replayed_sync_lock = PLAT_MUTEX_INIT;
 void nvn_fence_sync_replayed(sync_t *s) {
     plat_mutex_lock(&replayed_sync_lock);
-    if (replayed_sync_count == 256) rt_fatal("nvn: more than 256 CommandBufferFenceSync in one submit");
+    if (replayed_sync_count == replayed_sync_cap) {
+        int cap = replayed_sync_cap ? replayed_sync_cap * 2 : 256;
+        sync_t **p = realloc(replayed_syncs, sizeof *p * (size_t)cap);
+        if (!p) rt_fatal("nvn: out of memory (%d CommandBufferFenceSync in one submit)", cap);
+        if (replayed_sync_cap) rt_log("nvn: more than %d CommandBufferFenceSync in one submit", replayed_sync_cap);
+        replayed_syncs = p, replayed_sync_cap = cap;
+    }
     replayed_syncs[replayed_sync_count++] = s;
     plat_mutex_unlock(&replayed_sync_lock);
 }

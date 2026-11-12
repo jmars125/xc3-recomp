@@ -66,3 +66,35 @@ site tour main f3d0 aa0003f3 aa0003f3 @call:f00
 set canvas XC3_UI_CANVAS 1
 site canvas main 10377b4 f9449d08 @page:x8 91018108
 site canvas main 10377e4 f944a108 @page:x8 91019108
+
+# uifit (XC3_UI_FIT, resolution.c): on a frame wider than 16:9 the runtime narrows the interface about the screen centre
+# (nvn_api_cmd.c ui_fit), which would pull anything placed at a 3D position, such as talk bubbles, quest markers and
+# enemy labels, towards the centre. The game places those on the canvas as (1 - x) times half the canvas width, x the
+# projected position, in two ways:
+# - main+0x126ff90 projects a world position for a screen size its one caller (main+0x243468, 12 callers: talk
+#   bubbles, field icons) passes as 1280x720. The site (main+0x1270144) is the (1 - x); x9 and s5 are dead there.
+# - Three functions call the canvas width getter main+0x100dcf8 for it (main+0x587f48, +0x799904, +0x83f5f4: quest
+#   markers); x8 and s10 are dead at each site (the getter clobbers x8, s10 is set after it).
+# Each site multiplies x by the patch page's +0x68 (1 / the fit, resolution.c ui_fit_init) first, so the position lands
+# where the wider 3D view shows it once narrowed. The same site in XCX: xcx-recomp patches-upd.txt, uifit at a17580.
+set uifit XC3_UI_FIT 1
+site uifit main 1270144 1e213801 @page:x9 bd406925 1e250821 1e213801
+site uifit main 587f48 1e203909 @page:x8 bd40690a 1e2a0800 1e203909
+site uifit main 799904 1e203909 @page:x8 bd40690a 1e2a0800 1e203909
+site uifit main 83f5f4 1e203909 @page:x8 bd40690a 1e2a0800 1e203909
+
+# orbs (XC3_ETHER_ORBS, ether_orbs.c): a cap on the ether orbs of an Ether Channel. Extracting ether adds an orb to
+# a list of 8 inline slots (main+0x493bd0: slots of 0x30 bytes at +0x10, the count at +0x190) without a check, and the
+# update (main+0x493098) walks count slots and writes through each slot's first word, the orb's effect handle. A 9th
+# orb is moved over the count at +0x190, which becomes that handle plus 1: the update then walks memory past the list
+# and writes through whatever it finds there (issue 30: an access violation writing address 0x28 in main+0x493098
+# after collecting ether). The first site loads the count and calls ether_orbs.c orbs_push, which logs it and makes
+# x8 the slot, min(count, 7); x30 is dead there (the bl at main+0x493d18 sets it). The second releases the handle the
+# slot holds (main+0x32e118, the release the update gives an orb that ended; it does nothing on an empty slot) before
+# main+0x32e0fc moves the new handle in without releasing. The count is at most 8, so count - (count >> 3) is
+# min(count, 7): the third site stores that plus 1 as the count. So a full list ends its newest orb for the new one
+# and the count stays 8. x8 and x9 are reloaded after the call; no site reads or sets the flags.
+set orbs XC3_ETHER_ORBS 1
+site orbs main 493d00 f940ca68 f940ca68 @call:f10
+site orbs main 493d0c 910042b4 910042b4 aa1403e0 97fa6903
+site orbs main 493d50 91000508 cb480d08 91000508

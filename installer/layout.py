@@ -77,6 +77,11 @@ class Layout:
         """The expected hashes of the base game (BASE) or an update."""
         return self.tools / 'data' / f'expected-xc3-{version}.json'
 
+    def runtime_lib_for(self, cpu):
+        """The runtime library built for x86-64 level cpu ('v3' or 'v2'): libxc3rt.a, or libxc3rt-v2.a beside it
+        (tools/make_release.py RUNTIME_LIBS; a dev checkout: build_game.py --make-runtime-lib --cpu v2, renamed)."""
+        return self.runtime_lib if cpu == 'v3' else self.runtime_lib.with_name(f'libxc3rt-{cpu}.a')
+
     def missing(self):
         """Paths the steps need that do not exist."""
         need = [self.python, self.tools / 'extract.py', self.tools / 'build_game.py', self.recomp / 'gen.py',

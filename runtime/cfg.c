@@ -60,7 +60,7 @@ static const struct { const char *key, *section; } sections[] = {
     {"REALTIME", "frame rate"}, {"CLOTH_REALTIME", "frame rate"}, {"HIGHFPS_FIX", "frame rate"},
     {"FULLSCREEN", "display"}, {"WINDOW_SIZE", "display"}, {"PERF_OVERLAY", "display"}, {"VK_PRESENT", "display"}, {"VRR", "display"},
     {"GPU_INDEX", "display"}, {"OUTPUT_RES", "display"}, {"RENDER_SCALE", "display"}, {"DYNAMIC_RES", "display"}, {"UPSCALER", "display"},
-    {"SHARPNESS", "display"}, {"DLSS_PRESET", "display"}, {"REFLEX", "display"}, {"PICTURE_FIT", "display"}, {"FRAME_GEN", "display"}, {"FRAME_GEN_MULTI", "display"},
+    {"SHARPNESS", "display"}, {"DLSS_PRESET", "display"}, {"REFLEX", "display"}, {"PICTURE_FIT", "display"}, {"UI_FIT", "display"}, {"FRAME_GEN", "display"}, {"FRAME_GEN_MULTI", "display"},
     {"DEVICE_PROFILE", "display"}, {"HDR", "display"}, {"HDR_PEAK_NITS", "display"}, {"HDR_GAME_NITS", "display"},
     {"HDR_UI_NITS", "display"}, {"HDR_HIGHLIGHTS", "display"}, {"HDR_SATURATION", "display"}, {"HDR_GAMMA", "display"},
     {"MENU_LANG", "language"}, {"LANG", "language"}, {"OPERATION_MODE", "language"},
@@ -102,7 +102,7 @@ static const CfgMeta metas[] = {
     {"HDR", "0", "0|1", RESTART}, {"HDR_PEAK_NITS", "1000", "400..4000", LIVE}, {"HDR_GAME_NITS", "203", "80..500", LIVE},
     {"HDR_UI_NITS", "203", "80..500", LIVE}, {"HDR_HIGHLIGHTS", "50", "0..100", LIVE},
     {"HDR_SATURATION", "100", "0..200", LIVE}, {"HDR_GAMMA", "2.2", "srgb|2.2|2.4", LIVE},
-    {"PICTURE_FIT", "keep", "keep|stretch", LIVE},
+    {"PICTURE_FIT", "keep", "keep|stretch", LIVE}, {"UI_FIT", "1", "0|1", RESTART},
     {"DEVICE_PROFILE", "auto", "auto|desktop|deck", RESTART},
     // Game
     {"FPS_LIMIT", "60", "30|40|45|60|90|120|144|165|240|360|display", LIVE}, {"FPS60", "1", "0|1", LIVE}, {"FRAME_QUEUE", "0", "0|1", LIVE},

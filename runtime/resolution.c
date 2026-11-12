@@ -101,15 +101,16 @@ int res_scene_on(void) { return R.scale > 0; }
 int res_scene_whole(void) { return R.scale >= 100; }
 
 
-// World positions projected for the narrowed interface (patches-upd.txt, uifit) spread by the inverse of res_ui_fit.
+// World positions projected for the narrowed interface (patches-upd.txt, uifit) spread by the inverse of res_ui_fit, so
+// talk bubbles and markers stay on what they mark in the wider 3D view.
 static void ui_fit_init(void) {
     int set = rt_patch_set("uifit");
     uint8_t *page = rt_patch_page();
     float k = res_ui_fit(), f = 1 / k;
+    if (k < 1) rt_log("resolution: interface fit %.3f (ui_fit = 0 stretches it)", k);
     if (set < 0 || !page) return;
     memcpy(page + 0x68, &f, sizeof f);
     rt_patch_switch(set, k < 1);
-    rt_log("resolution: interface fit %.3f", k);
 }
 
 // The layout manager's canvas (patches-upd.txt, canvas): the shipped 1280x720 of the table's second size, which every
@@ -185,14 +186,14 @@ void res_sizes(unsigned out[2], unsigned scene[2]) {
     scene[0] = (unsigned)(out[0] * f), scene[1] = (unsigned)(out[1] * f);
 }
 
-// The interface's horizontal scale on a frame wider than the game's 16:9 canvas (nvn_api_cmd.c ui_fit), 1 otherwise.
-// XC3_UI_FIT=0 keeps the stretched interface.
+// The interface's horizontal scale on a frame wider than the game's 16:9 canvas (nvn_api_cmd.c ui_fit), 1 otherwise:
+// 16:9 divided by the frame's aspect, 0.744 at 3440x1440 and 0.5 at 5120x1440. ui_fit = 0 (XC3_UI_FIT) keeps the
+// stretched interface. At 16:9 and narrower nothing changes: the fit and the uifit patch set stay off.
 float res_ui_fit(void) {
     static float k = -1;
     if (k < 0) {
-        const char *s = cfg_get("XC3_UI_FIT");
         float wide = 16.0f / 9 * R.oh / R.ow;
-        k = (!R.on || (s && !strcmp(s, "0")) || wide >= 1) ? 1 : wide;
+        k = (!R.on || !cfg_bool("XC3_UI_FIT") || wide >= 1) ? 1 : wide;
     }
     return k;
 }
