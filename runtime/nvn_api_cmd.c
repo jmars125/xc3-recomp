@@ -159,6 +159,38 @@ static const tex_t *tex_pin(const NVNtexture *nt) {
     return r;
 }
 
+// ---------- program pins
+// A bind on the hardware records the program's shader addresses, so a recording keeps the shaders it was made with when
+// the game later calls SetShaders on the NVNprogram or finalizes it. Records therefore point at an immutable host copy
+// per program set-up (prog_t.serial), as texture pins do. With the asynchronous replay this lets nvnProgramFinalize
+// return without waiting for the queued submissions (vk_backend.c, vk_be_program_release). A program without shaders
+// (serial 0) binds as one with no stages. The copies are kept for the whole run: about 120 bytes per SetShaders.
+static PlatMutex prog_pin_lock = PLAT_MUTEX_INIT;
+static nvn_hmap prog_pins = {.klen = 8};    // serial -> prog_t copy
+
+static const prog_t *prog_pin(const NVNprogram *np) {
+    const prog_t *p = (const prog_t *)np;
+    if (!p) return NULL;
+    static const prog_t empty = {.magic = NVN_PROG_MAGIC};
+    uint64_t serial = p->serial;
+    if (!serial) return &empty;
+    plat_mutex_lock_shared(&prog_pin_lock);
+    const prog_t *r = nvn_hm_get(&prog_pins, &serial);
+    plat_mutex_unlock_shared(&prog_pin_lock);
+    if (r) return r;
+    plat_mutex_lock(&prog_pin_lock);
+    r = nvn_hm_get(&prog_pins, &serial);
+    if (!r) {
+        prog_t *copy = malloc(sizeof *copy);
+        if (!copy) rt_fatal("nvn: program pin copy");
+        *copy = *p;
+        nvn_hm_put(&prog_pins, &serial, copy);
+        r = copy;
+    }
+    plat_mutex_unlock(&prog_pin_lock);
+    return r;
+}
+
 // ---------- recording copies
 // A handle points just past a copy_prefix. Copies are indexed by the 64 KiB block of their control-memory position, so
 // adding control memory again releases the copies recorded there without walking every live copy. 4 KiB pages cost
@@ -615,7 +647,7 @@ NVN_API(nvnCommandBufferSetRenderEnableConditional) {
 }
 // void nvnCommandBufferBindProgram(NVNcommandBuffer *cmd, const NVNprogram *program, int stages)
 NVN_API(nvnCommandBufferBindProgram) {
-    *REC(cmd_of(c), OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){arg_p(c, 1), (int)arg_x(c, 2)};
+    *REC(cmd_of(c), OP_BIND_PROGRAM, p_bind_program) = (p_bind_program){prog_pin(arg_p(c, 1)), (int)arg_x(c, 2)};
 }
 // void nvnCommandBufferBind{Blend,Color,ChannelMask,Multisample,Polygon,DepthStencil}State(NVNcommandBuffer *cmd,
 // const NVN*State *state): the state object's bytes are copied (p_bind_state.kind order)

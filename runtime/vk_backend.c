@@ -425,7 +425,9 @@ static void vk_be_texture_release(const tex_t *t) {
     plat_mutex_unlock(&rl);
     replay_enqueue(&it);
 }
-static void vk_be_program_release(const prog_t *p) { replay_drain(DR_PROG_RELEASE); vk_program_release(p); }
+// Recordings bind a host copy of the program (nvn_api_cmd.c, prog_pin), so the queued submissions no longer read the
+// NVNprogram the game finalizes: no drain. It used to wait for the whole queue, about 50 ms a time on an integrated GPU.
+static void vk_be_program_release(const prog_t *p) { vk_program_release(p); }
 // Asynchronous: the handles (nvn_submit_prepare_async ran under the front end's submit lock) are copied and queued;
 // the value returned is the one the replay will signal.
 static uint64_t vk_be_submit(const uint64_t *handles, int n) {

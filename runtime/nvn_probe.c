@@ -544,7 +544,9 @@ static void parse_all(uint64_t h) {
         case OP_DEPTH_RANGE: CHECK(as_f(a)[0] == 0.125f && as_f(a)[1] == 0.875f, "DEPTH_RANGE payload"); break;
         case OP_BIND_PROGRAM: {
             const p_bind_program *p = a;
-            CHECK(p->prog == (const prog_t *)(const void *)&prog && p->stages == 3, "BIND_PROGRAM payload");
+            CHECK(p->prog && p->prog->magic == ((const prog_t *)(const void *)&prog)->magic &&
+                  p->prog->serial == ((const prog_t *)(const void *)&prog)->serial && p->stages == 3,
+                  "BIND_PROGRAM payload");
             break;
         }
         case OP_BIND_STATE: {
