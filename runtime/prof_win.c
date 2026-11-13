@@ -67,7 +67,7 @@ static volatile uint64_t cur_frame; // last presented frame
 static uint64_t frame_lo, frame_hi; // XC3_PROFILE_FRAMES=<lo>-<hi>: sample only while presents lo..hi-1 are pending
 static int64_t world_lo, world_hi;  // XC3_PROFILE_FRAMES=w<lo>-<hi>: only while the world clock is in [lo, hi) s (us)
 
-#define SLOW_RING (1u << 15)        // XC3_PROFILE_SLOW: about 0.5 s of samples of every thread
+#define SLOW_RING (1u << 18)        // XC3_PROFILE_SLOW: about 1.5 s of samples of every thread (160 threads)
 #define SLOW_DUMPS 64
 typedef struct { uint64_t t; DWORD tid; uint32_t depth; uint64_t rip[PROF_DEPTH]; } Sample;
 static Sample ring[SLOW_RING];
@@ -112,6 +112,31 @@ static void count_stack(const uint64_t *rip, uint32_t depth) {
 
 // Unwinds the stack copied to stk_buf from real address lo (n bytes). Registers that point into the copied range are
 // moved into the copy, so frame-pointer frames read the copy too. Returns the number of frames.
+// Where the unwind may look up function tables: the exe and system DLLs that stay loaded. Outside them it stops: a
+// driver or helper DLL loading or unloading while a thread runs in it made RtlLookupFunctionEntry fault on its tables
+// (XC3_PROFILE_SLOW and XC3_PROFILE_CHAINS crashed at start on an AMD integrated GPU and an RTX 5090).
+static struct { uintptr_t lo, hi; } unw_mods[8];
+static int n_unw_mods;
+
+static void unw_mods_init(void) {
+    static const wchar_t *const names[] = {NULL, L"ntdll.dll", L"kernel32.dll", L"kernelbase.dll", L"win32u.dll",
+                                           L"ucrtbase.dll", L"user32.dll"};
+    for (unsigned i = 0; i < sizeof names / sizeof *names; i++) {
+        HMODULE h = GetModuleHandleW(names[i]);
+        MODULEINFO mi;
+        if (h && GetModuleInformation(GetCurrentProcess(), h, &mi, sizeof mi)) {
+            unw_mods[n_unw_mods].lo = (uintptr_t)mi.lpBaseOfDll;
+            unw_mods[n_unw_mods++].hi = (uintptr_t)mi.lpBaseOfDll + mi.SizeOfImage;
+        }
+    }
+}
+
+static int unw_known(uintptr_t a) {
+    for (int i = 0; i < n_unw_mods; i++)
+        if (a >= unw_mods[i].lo && a < unw_mods[i].hi) return 1;
+    return 0;
+}
+
 static uint32_t unwind_copy(CONTEXT *c, uintptr_t lo, size_t n, uint64_t *rip) {
     uintptr_t buf = (uintptr_t)stk_buf, end = buf + n;
     DWORD64 *regs[] = {&c->Rbx, &c->Rbp, &c->Rsi, &c->Rdi, &c->R12, &c->R13, &c->R14, &c->R15};
@@ -121,6 +146,7 @@ static uint32_t unwind_copy(CONTEXT *c, uintptr_t lo, size_t n, uint64_t *rip) {
     uint32_t d = 0;
     while (d < PROF_DEPTH && c->Rip && c->Rsp >= buf && c->Rsp + 8 <= end) {
         rip[d++] = c->Rip;
+        if (!unw_known((uintptr_t)c->Rip)) break;
         DWORD64 base;
         PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c->Rip, &base, NULL);
         if (f) {
@@ -354,6 +380,7 @@ int prof_sampler_start(void) {
         exe_lo = (uintptr_t)mi.lpBaseOfDll;
         exe_hi = exe_lo + mi.SizeOfImage;
     }
+    unw_mods_init();
     sampler = CreateThread(NULL, 0, sampler_main, NULL, 0, NULL);
     if (!sampler) {
         rt_log("prof: cannot start the sampler (error %lu)", GetLastError());

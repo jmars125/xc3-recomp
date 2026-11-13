@@ -7,6 +7,11 @@
 // Guest layouts (SDK 19.3.2): AudioOutBuffer {next, data, capacity, size} at +0, +8, +0x10, +0x18, filled by the SDK's
 // own SetAudioOutBufferInfo; AudioOutParameter {int32 sample rate, uint16 channel count, uint16 0xCAFE}, 0 meaning the
 // default. The AudioOut object itself is only a key here.
+//
+// A watch thread (watch_main) checks every open AudioOut four times a second: it signals the release event of an
+// AudioOut without a device (nothing else would), reports each AudioOut 5 s and 60 s after it starts (how much the device
+// took, the loudest sample, the gain), and recovers a device that stops taking data, first by opening the stream
+// again, then by running the AudioOut without a device so the game's audio thread keeps going.
 #include <SDL3/SDL.h>
 #include <stdint.h>
 #include <string.h>
@@ -27,15 +32,34 @@ typedef struct {
     float volume, gain;      // gain: what the stream has, the game's volume times the player's
     SDL_AudioStream *stream;
     uint64_t appended, consumed_at_stop, start_ns;   // byte counts; start_ns: the device-less clock
+    uint64_t started_ns, seen, moved_ns;   // seen: consumed() at the last watch; moved_ns: when it last changed
+    uint64_t appends, nonzero;             // buffers appended, buffers with a nonzero sample
+    int peak, reported, reopened;          // peak: the loudest sample appended (0..32768); reported: reports made
     Queued q[QUEUE_MAX];
     int nq;
 } Out;
 
 static Out outs[OUT_MAX];
 static PlatMutex lock = PLAT_MUTEX_INIT;
-static int sdl_ready = -1;
+static int sdl_ready = -1, watching;
+
+#define STALL_NS 2000000000ull   // a started AudioOut with data queued whose device took nothing for this long
+static const uint64_t REPORT_NS[] = {5000000000ull, 60000000000ull};   // the reports, after the first start
 
 static uint64_t now_ns(void) { return plat_now_ns(); }
+
+// The SDL audio subsystem for both outputs (this file and audio_mixer.c output_open). On Linux SDL 3 tries PipeWire
+// before PulseAudio. On a ROG Ally running SteamOS (issue #35) the PipeWire driver opened its default device and took
+// every byte, yet nothing was heard, while SDL_AUDIO_DRIVER=pulseaudio played through the speakers. PulseAudio comes
+// first here: PipeWire systems serve it through pipewire-pulse, PulseAudio systems natively, and SDL moves on to the
+// next name when a driver cannot start. SDL_AUDIO_DRIVER in the environment still decides (SDL lets it override a
+// hint of normal priority).
+int audio_sdl_init(void) {
+#ifdef __linux__
+    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "pulseaudio,pipewire,alsa,jack,sndio,oss");
+#endif
+    return SDL_InitSubSystem(SDL_INIT_AUDIO) ? 1 : 0;
+}
 
 static Out *find(uint64_t guest) {
     for (int i = 0; i < OUT_MAX; i++)
@@ -71,6 +95,88 @@ static void SDLCALL device_pull(void *user, SDL_AudioStream *s, int additional, 
     if (ev) kern_signal_system_event(ev);
 }
 
+static SDL_AudioStream *open_stream(Out *o) {
+    SDL_AudioSpec spec = {SDL_AUDIO_S16LE, (int)o->channels, RATE};
+    SDL_AudioStream *s = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    if (!s) {
+        rt_log("audout: opening the default playback device failed (%s)", SDL_GetError());
+        return NULL;
+    }
+    SDL_SetAudioStreamGetCallback(s, device_pull, o);
+    SDL_AudioDeviceID dev = SDL_GetAudioStreamDevice(s);
+    SDL_AudioSpec ds = {0};
+    int frames = 0;
+    const char *name = SDL_GetAudioDeviceName(dev);
+    if (!SDL_GetAudioDeviceFormat(dev, &ds, &frames)) ds = (SDL_AudioSpec){0};
+    const char *drv = SDL_GetCurrentAudioDriver();
+    rt_log("audout: SDL driver %s, device '%s', %d Hz %d channels format %#x, %d frames per pull", drv ? drv : "?",
+           name ? name : "?", ds.freq, ds.channels, (unsigned)ds.format, frames);
+    return s;
+}
+
+// The playback devices SDL sees, once: a missing or wrong default shows here.
+static void list_devices(void) {
+    int n = 0, v = SDL_GetVersion();
+    SDL_AudioDeviceID *ids = SDL_GetAudioPlaybackDevices(&n);
+    const char *drv = SDL_GetCurrentAudioDriver();
+    rt_log("audout: %d playback device%s with the %s driver (SDL %d.%d.%d)", n, n == 1 ? "" : "s", drv ? drv : "?",
+           SDL_VERSIONNUM_MAJOR(v), SDL_VERSIONNUM_MINOR(v), SDL_VERSIONNUM_MICRO(v));
+    for (int i = 0; ids && i < n; i++) {
+        const char *name = SDL_GetAudioDeviceName(ids[i]);
+        rt_log("audout:   %u '%s'", (unsigned)ids[i], name ? name : "?");
+    }
+    SDL_free(ids);
+}
+
+// Under lock (exclusive). *signal: the release event to signal once the lock is gone, for an AudioOut without a device.
+static void watch_one(Out *o, uint64_t now, uint64_t *signal) {
+    if (o->state != STATE_STARTED) return;
+    uint64_t took = consumed(o);
+    if (took != o->seen || o->appended == took) o->seen = took, o->moved_ns = now;
+    if (o->reported < 2 && now - o->started_ns >= REPORT_NS[o->reported]) {
+        o->reported++;
+        float player = audio_player_volume();
+        rt_log("audout: %#llx %.1f s after start: %llu buffers (%llu with sound, loudest sample %d of 32768), %llu bytes "
+               "appended, the %s took %llu; gain %.2f (the game's %.2f, the player's %.2f)",
+               (unsigned long long)o->guest, (double)(now - o->started_ns) / 1e9, (unsigned long long)o->appends,
+               (unsigned long long)o->nonzero, o->peak, (unsigned long long)o->appended,
+               o->stream ? "device" : "clock", (unsigned long long)took, o->volume * player, o->volume, player);
+    }
+    if (o->stream && now - o->moved_ns >= STALL_NS) {
+        // SDL calls device_pull with the stream's lock held and device_pull only tries `lock`, so destroying the
+        // stream here, under `lock`, cannot deadlock with it.
+        SDL_DestroyAudioStream(o->stream);
+        o->stream = o->reopened ? NULL : open_stream(o);
+        rt_log("audout: %#llx: the device took nothing for %.1f s with %llu bytes queued; %s",
+               (unsigned long long)o->guest, (double)(now - o->moved_ns) / 1e9,
+               (unsigned long long)(o->appended - took),
+               o->stream ? "opened the device again" : "running without a device (timed)");
+        o->reopened = 1;
+        // The data queued on the old stream counts as played: consumed() of a new stream is appended minus its own
+        // queue, and the clock without a device starts from everything appended.
+        o->consumed_at_stop = o->appended;
+        o->start_ns = now;
+        o->seen = o->appended, o->moved_ns = now;
+        o->gain = 1.0f;
+        if (o->stream) SDL_ResumeAudioStreamDevice(o->stream);
+    }
+    if (!o->stream && o->event && o->nq && consumed(o) >= o->q[0].end) *signal = o->event;
+}
+
+static void watch_main(void *arg) {
+    (void)arg;
+    for (;;) {
+        plat_sleep_ms(250);
+        uint64_t ev[OUT_MAX] = {0}, now = now_ns();
+        plat_mutex_lock(&lock);
+        for (int i = 0; i < OUT_MAX; i++)
+            if (outs[i].guest) watch_one(&outs[i], now, &ev[i]);
+        plat_mutex_unlock(&lock);
+        for (int i = 0; i < OUT_MAX; i++)
+            if (ev[i]) kern_signal_system_event(ev[i]);
+    }
+}
+
 static uint32_t open_out(Cpu *c, uint64_t guest, uint64_t event, const uint8_t *param) {
     int32_t rate = 0;
     uint16_t channels = 0;
@@ -83,13 +189,18 @@ static uint32_t open_out(Cpu *c, uint64_t guest, uint64_t event, const uint8_t *
     Out *o = find(guest);
     if (!o) o = find(0);
     if (!o) rt_fatal("audout: more than %d AudioOuts open", OUT_MAX);
-    if (sdl_ready < 0) sdl_ready = SDL_InitSubSystem(SDL_INIT_AUDIO) ? 1 : 0;
-    *o = (Out){.guest = guest, .event = event, .channels = channels, .state = STATE_STOPPED, .volume = 1.0f, .gain = 1.0f};
-    if (sdl_ready) {
-        SDL_AudioSpec spec = {SDL_AUDIO_S16LE, channels, RATE};
-        o->stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-        if (o->stream) SDL_SetAudioStreamGetCallback(o->stream, device_pull, o);
+    if (sdl_ready < 0) {
+        sdl_ready = audio_sdl_init();
+        if (sdl_ready) list_devices();
+        else rt_log("audout: SDL audio init failed (%s)", SDL_GetError());
     }
+    if (o->guest && o->stream) {   // opened again without a close: the old stream would keep its device
+        rt_log("audout: %#llx opened again without CloseAudioOut", (unsigned long long)guest);
+        SDL_DestroyAudioStream(o->stream);
+    }
+    *o = (Out){.guest = guest, .event = event, .channels = channels, .state = STATE_STOPPED, .volume = 1.0f, .gain = 1.0f};
+    if (sdl_ready) o->stream = open_stream(o);
+    if (!watching) watching = plat_thread_spawn(watch_main, NULL, "audout watch", 0);
     plat_mutex_unlock(&lock);
     rt_log("audout: opened %#llx, %u channels at %d Hz, %s", (unsigned long long)guest, channels, RATE,
            o->stream ? "on the default device" : "without a device (timed)");
@@ -116,6 +227,8 @@ static void ov_close(Cpu *c) {
     plat_mutex_lock(&lock);
     Out *o = need(c, "CloseAudioOut");
     SDL_AudioStream *s = o->stream;
+    rt_log("audout: closed %#llx after %llu bytes (%llu of %llu buffers with sound)", (unsigned long long)o->guest,
+           (unsigned long long)o->appended, (unsigned long long)o->nonzero, (unsigned long long)o->appends);
     memset(o, 0, sizeof *o);
     plat_mutex_unlock(&lock);
     if (s) SDL_DestroyAudioStream(s);
@@ -128,6 +241,8 @@ static void ov_start(Cpu *c) {
     if (o->state != STATE_STARTED) {
         o->state = STATE_STARTED;
         o->start_ns = now_ns();
+        if (!o->started_ns) o->started_ns = o->start_ns;
+        o->seen = consumed(o), o->moved_ns = o->start_ns;
         if (o->stream) SDL_ResumeAudioStreamDevice(o->stream);
     }
     plat_mutex_unlock(&lock);
@@ -157,6 +272,16 @@ static void ov_append(Cpu *c) {
     int ok = o->nq < QUEUE_MAX;
     if (ok) {
         size -= size % frame_bytes(o);
+        int peak = 0;   // for the report in watch_one
+        for (const int16_t *p = data, *e = p + size / 2; p < e; p++) {
+            int v = *p < 0 ? -*p : *p;
+            if (v > peak) peak = v;
+        }
+        o->appends++;
+        if (peak && !o->nonzero++)
+            rt_log("audout: %#llx: the first buffer with sound, %.1f s after start (loudest sample %d)",
+                   (unsigned long long)o->guest, o->started_ns ? (double)(now_ns() - o->started_ns) / 1e9 : 0.0, peak);
+        if (peak > o->peak) o->peak = peak;
         if (o->stream && size) {
             float gain = o->volume * audio_player_volume();
             if (gain != o->gain && SDL_SetAudioStreamGain(o->stream, gain)) o->gain = gain;
