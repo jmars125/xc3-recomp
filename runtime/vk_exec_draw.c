@@ -2174,13 +2174,32 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
 // empty frame. So after that copy the first pass that draws into another target of the frame's size and format, the
 // one the interface goes on, gets first the copy's target stretched in or, with a temporal upscaler, its result at the
 // frame size. The game's own path draws its copy into the frame and sets nothing here.
+//
+// At DLAA's 1:1 the scene's own targets have the frame's size and format too: a result still waiting when the next
+// frame began went into its first scene target, not the frame (issue #67). So the target must also be one of the images
+// presented lately (tup_presented), unless none of those has the frame's size and format (the first frames, a new
+// window size).
+static struct {
+    VkImage img[4];   // the images presented last, newest first
+    uint32_t w, h;    // their size and format
+    VkFormat fmt;
+} TP;
+
+static int tup_presented(VkImage img, uint32_t w, uint32_t h, VkFormat fmt) {
+    if (TP.w != w || TP.h != h || TP.fmt != fmt || !TP.img[0]) return -1;   // nothing presented in that size and format
+    for (int i = 0; i < 4; i++)
+        if (TP.img[i] == img) return 1;
+    return 0;
+}
+
 static void tup_fixup(VkExec *ex) {
     if (!TU.fix.image) return;
     const VkExecTarget *t = &ex->color[0];
     unsigned out[2], scene[2];
     res_sizes(out, scene);
     if (!t->image || !t->img || t->image == TU.fix.image || t->image == TU.copy_dst || t->img->width != out[0] ||
-        t->img->height != out[1] || t->img->format != TU.fix.format) {
+        t->img->height != out[1] || t->img->format != TU.fix.format ||
+        !tup_presented(t->image, t->img->width, t->img->height, t->img->format)) {
         static int n;
         if (t->img && cfg_get("XC3_TUP_DEBUG") && n++ < 40)
             rt_log("vk: fixup waits: target %ux%u fmt %d (fix %ux%u fmt %d, out %ux%u)%s", t->img->width, t->img->height,
@@ -2191,6 +2210,79 @@ static void tup_fixup(VkExec *ex) {
     VkTupImage dst = {t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width, t->img->height};
     if (ex->in_pass) vk_exec_pass_end(ex);
     vk_tup_copy(ex->cb, &TU.fix, &dst);
+    TU.fix.image = VK_NULL_HANDLE;
+}
+
+// A read of the frame while the result waits for it: the game's own copy has written the frame by then. When the menu
+// opens, a pass shrinks the frame (fragment shader 3444fa67f4a6dd2e, into 320x180) and the frame is copied aside before
+// anything draws into it, for the menu's background and its opening; they found an empty frame, and the menu opened
+// on red and black frames over a dark background with no scene behind it (issue #67). So the result goes into a
+// presented image (tup_presented) that a draw samples (tup_fixup_sampled) or a texture copy reads
+// (vk_exec_xfer.c copy_t2t) before that read. Outside a pass; 1: it did.
+int vk_exec_tup_read(VkExec *ex, VkImage img, uint32_t w, uint32_t h, VkFormat fmt) {
+    if (!TU.fix.image || img == TU.fix.image || img == TU.copy_dst || fmt != TU.fix.format) return 0;
+    unsigned out[2], scene[2];
+    res_sizes(out, scene);
+    if (w != out[0] || h != out[1] || tup_presented(img, w, h, fmt) != 1) return 0;
+    VkTupImage dst = {img, fmt, VK_IMAGE_ASPECT_COLOR_BIT, w, h};
+    vk_tup_copy(ex->cb, &TU.fix, &dst);
+    TU.fix.image = VK_NULL_HANDLE;
+    if (cfg_get("XC3_TUP_DEBUG")) rt_log("vk: temporal upscale: the result went into the frame before a read of it");
+    return 1;
+}
+
+static void tup_fixup_sampled(VkExec *ex, const GfxShader *fs) {
+    const GfxShaderRes *res;
+    int n = gfx_shader_resources(fs, GFX_RES_TEX, &res);
+    for (int r = 0; r < n; r++)
+        for (int k = 0; k < (res[r].count ? res[r].count : 1); k++) {
+            int slot = res[r].slot + k;
+            VkTupImage im;
+            if (slot < 0 || slot >= 128 || !ex->tex[NVN_STAGE_FS][slot] || !tup_image(ex, slot, &im)) continue;
+            if (im.image == TU.fix.image || im.image == TU.copy_dst || tup_presented(im.image, im.w, im.h, im.format) != 1)
+                continue;
+            int reopen = ex->in_pass;
+            if (reopen) vk_exec_pass_end(ex);
+            int done = vk_exec_tup_read(ex, im.image, im.w, im.h, im.format);
+            if (reopen) {
+                ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
+                vk_exec_pass_begin(ex);
+            }
+            if (done) return;
+        }
+}
+
+// The present of a frame whose copy ran (VK_TUP_COPY) but no pass drew into a target of the frame's size and format
+// afterwards: opening and closing the menu, and the frames around a container's or another map object's prompt, draw
+// no interface, so tup_fixup never ran and the frame went out black for a few frames (issue #67), while the result
+// waited for the next frame's first target of that size and format, a scene target of its own at DLAA's 1:1. The game's
+// own path draws its copy straight into the frame, so the result goes into the presented image here, after the frame's
+// submission in queue order and before the present's blit (vk_backend.c present_image flushes the upload batch). Each
+// present also notes its image for tup_presented.
+void vk_exec_tup_present(VkImage img, VkFormat fmt, uint32_t w, uint32_t h) {
+    if (img && (TP.img[0] != img || TP.w != w || TP.h != h || TP.fmt != fmt)) {
+        if (TP.w != w || TP.h != h || TP.fmt != fmt) memset(&TP, 0, sizeof TP);
+        int k = 0;
+        while (k < 3 && TP.img[k] != img) k++;   // k: where img was, or the oldest
+        memmove(&TP.img[1], &TP.img[0], sizeof TP.img[0] * (size_t)k);
+        TP.img[0] = img, TP.w = w, TP.h = h, TP.fmt = fmt;
+    }
+    if (!TU.fix.image) return;
+    unsigned out[2], scene[2];
+    res_sizes(out, scene);
+    static unsigned brought, missed;
+    if (img && img != TU.fix.image && img != TU.copy_dst && w == out[0] && h == out[1] && fmt == TU.fix.format) {
+        VkTupImage dst = {img, fmt, VK_IMAGE_ASPECT_COLOR_BIT, w, h};
+        VkCommandBuffer cb = vk_upload_begin();
+        vk_tup_copy(cb, &TU.fix, &dst);
+        vk_upload_end();
+        if (!brought++ || cfg_get("XC3_TUP_DEBUG"))
+            rt_log("vk: temporal upscale: a frame without an interface pass got the result at its present (%u so far)",
+                   brought);
+    } else if (!missed++ || missed % 600 == 0) {
+        rt_log("vk: temporal upscale: the result did not reach the frame: its present is %ux%u format %d (%u frames so "
+               "far)", w, h, (int)fmt, missed);
+    }
     TU.fix.image = VK_NULL_HANDLE;
 }
 
@@ -2244,6 +2336,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     }
     if (!vs || (has_fs && !fs) || (has_gs && !gs)) return 0;
     if (fs && tup_draw(ex, fs)) return 0;
+    if (fs && TU.fix.image) tup_fixup_sampled(ex, fs);
     uint32_t fbl = feedback_prepare(ex, fs);
     VkPipeState s = ex->pipe;
     for (int b = 0; b < 16; b++)   // a stream with a stride that is not a multiple of 4 is repacked (realign_stream)

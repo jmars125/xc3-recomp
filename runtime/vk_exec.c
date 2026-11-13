@@ -211,6 +211,12 @@ WEAK void vk_exec_op_xfer(VkExec *ex, uint32_t op, const void *payload) {
     rt_fatal("vk: op %s is not replayed yet", nvn_op_name(op));
 }
 
+WEAK void vk_exec_tup_present(VkImage img, VkFormat fmt, uint32_t w, uint32_t h) { (void)img, (void)fmt, (void)w, (void)h; }
+WEAK int vk_exec_tup_read(VkExec *ex, VkImage img, uint32_t w, uint32_t h, VkFormat fmt) {
+    (void)ex, (void)img, (void)w, (void)h, (void)fmt;
+    return 0;
+}
+
 enum { W_UNRENDERABLE, W_LEVEL, W_LAYER, W_VIEW_FORMAT, W_BLOCK_VIEW, W_BLOCK_LAYERS, W_CLEAR_TARGET, W_CLEAR_MASK, W_STENCIL_MASK, W_COUNT };
 
 static void warn_once(int key, const char *fmt, ...) {
