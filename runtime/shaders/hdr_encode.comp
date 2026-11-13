@@ -24,9 +24,16 @@
 // scene, the highlights are expanded towards the display's peak by luminance (the hue kept): y -> y (1 + h y^4
 // (peak / game - 1)), which leaves the darks and the midtones as they were and takes the SDR white to the peak at
 // h = 1. The interface is told apart from the scene by the picture without it (hl, vk_tup.c vk_tup_hudless: the
-// upscaler's output before the game draws its interface): where the two differ, the interface was drawn there, and
-// it stays at its own white (ui nits) without expansion. Without that picture (no temporal upscaler) nothing is
-// expanded and the whole picture sits at the game's white.
+// upscaler's output before the game draws its interface). The game blends its interface over that picture in the
+// 8-bit target, code = bare (1 - a) + ui a, so the least coverage a that explains the difference is estimated per
+// pixel: a channel the interface darkened needs a >= (bare - code) / bare, one it brightened a >= (code - bare) /
+// (1 - bare). The expansion fades with that coverage, taken from the bare scene's luminance so that a faint layer
+// (the soft shadows behind the HUD, the menus' gradients) dims the expanded scene as it dimmed the SDR one, and the
+// white goes from the scene's to the interface's (ui nits) as the coverage reaches 1, where the interface stays
+// unexpanded. A yes or no test of "differs from the bare picture" instead left the scene unexpanded under every faint
+// layer, a flat grey region with a hard edge around HUD elements over bright skies (issue #57) and over the
+// characters in the party menu (issue #56). Without that picture (no temporal upscaler) nothing is expanded and the
+// whole picture sits at the interface's white.
 // p0: game nits (the scene's white), ui nits, peak nits, gamma correction (0 none, 1: 2.2, 2: 2.4).
 // p1: highlights (h, 0..1), 1 when hl is the picture without the interface, saturation (1 unchanged), unused.
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -54,6 +61,10 @@ vec3 srgb_decode(vec3 c) {
 // The colour an sRGB code shows on a display of power g.
 vec3 gamma_decode(vec3 c, float g) { return pow(c, vec3(g)); }
 
+vec3 decode(vec3 code) {
+    return pc.p0.w == 1.0 ? gamma_decode(code, 2.2) : pc.p0.w == 2.0 ? gamma_decode(code, 2.4) : srgb_decode(code);
+}
+
 vec3 pq(vec3 nits) {
     const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
     vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));
@@ -64,19 +75,25 @@ void main() {
     ivec2 at = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(at, pc.size))) return;
     vec3 code = clamp(texelFetch(src, at + pc.offset, 0).rgb, 0.0, 1.0);
-    bool ui = true;
+    float a = 1.0;   // the interface's coverage
+    vec3 bare = code;
     if (pc.p1.y > 0.5) {
-        vec3 bare = clamp(texelFetch(hl, at + pc.offset, 0).rgb, 0.0, 1.0);
-        ui = any(greaterThan(abs(code - bare), vec3(1.5 / 255.0)));
+        bare = clamp(texelFetch(hl, at + pc.offset, 0).rgb, 0.0, 1.0);
+        vec3 d = code - bare;
+        d = sign(d) * max(abs(d) - 1.5 / 255.0, 0.0);   // rounding in the 8-bit blend is no interface
+        vec3 need = mix(max(d, 0.0) / max(1.0 - bare, 1e-4), max(-d, 0.0) / max(bare, 1e-4), lessThan(d, vec3(0.0)));
+        a = clamp(max(need.r, max(need.g, need.b)), 0.0, 1.0);
     }
-    vec3 c = pc.p0.w == 1.0 ? gamma_decode(code, 2.2) : pc.p0.w == 2.0 ? gamma_decode(code, 2.4) : srgb_decode(code);
+    vec3 c = decode(code);
     float y = dot(c, vec3(0.2126, 0.7152, 0.0722));
-    float white = ui ? pc.p0.y : pc.p0.x;
-    if (!ui && y > 0.0) {
+    float white = mix(pc.p0.x, pc.p0.y, a);
+    if (a < 1.0 && y > 0.0) {
+        float yb = dot(decode(bare), vec3(0.2126, 0.7152, 0.0722));
         float k = max(pc.p0.z / pc.p0.x - 1.0, 0.0);
-        float e = y * (1.0 + pc.p1.x * pow(y, 4.0) * k);
+        float h = pc.p1.x * (1.0 - a) * (1.0 - a);
+        float e = y * (1.0 + h * pow(yb, 4.0) * k);
         c *= e / y;
-        if (pc.p1.z != 1.0) c = max(mix(vec3(e), c, pc.p1.z), vec3(0.0));   // saturation around the grey of e
+        if (pc.p1.z != 1.0) c = max(mix(vec3(e), c, mix(1.0, pc.p1.z, 1.0 - a)), vec3(0.0));   // saturation around the grey of e
     }
     // Rec. 709 to Rec. 2020 (rows)
     c = c * mat3(0.6274038960, 0.3292830384, 0.0433130657,
