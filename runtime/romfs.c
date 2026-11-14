@@ -23,6 +23,7 @@
 #include <strings.h>
 
 #include "cfg.h"
+#include "dispatch.h"
 #include "fs.h"
 #include "host.h"
 #include "romfs_config.h"
@@ -40,7 +41,7 @@ typedef struct { uint64_t offset, size; uint32_t name, len; } Entry;
 _Static_assert(sizeof(Entry) == 24, "index entry layout");
 
 typedef struct { uint32_t volume, pad; uint64_t file_id, size, write_time, create_time; } Identity;   // no padding
-typedef struct { uint64_t index, size; char *path, *name; Identity id; } Overlay;
+typedef struct { uint64_t index, size; char *path, *name; Identity id; int mod; } Overlay;   // mod: from the mods folder
 
 static uint8_t *index_bytes;
 static size_t index_size;
@@ -442,7 +443,7 @@ static void mod_files(const char *dir, const char *rel, size_t *used, size_t *sk
         }
         char *copy = strdup(file), *r = strdup(name);
         need(copy && r, "overlay path copy");
-        overlays[noverlay++] = (Overlay){i, id.size, copy, r, id};
+        overlays[noverlay++] = (Overlay){i, id.size, copy, r, id, 1};
         ++*used;
     }
     for (size_t k = 0; k < l.dirs.n; k++) {
@@ -510,6 +511,78 @@ static void overlay_init(void) {
         if (overlays[k].index == overlays[k - 1].index)
             rt_fatal("RomFS overlay: %s and %s replace the same file %s", overlays[k - 1].path, overlays[k].path,
                      overlays[k].name);
+}
+
+// ---- file loader (xcnx-file-loader for this build)
+// XC3 reads nearly all its data from bf3.ard through ml::DevFileArchiver::getFileInfo(this, media, name, result) at
+// main+0x1257798. xcnx-file-loader (roccodev, Skyline plugin) hides every loose RomFS file from the archives, so the
+// game falls back to opening it from the RomFS; this build's mod files are RomFS overlay files, so that opening is
+// served by romfs_open. The plugin cannot run here; the set fileload (recomp/patches-upd.txt) replaces
+// `ldr x9, [x8, #0x98]` (main+0x12577b4: x8 = this + media * 0x90, x9 the media's archive count, which the next two
+// instructions turn into "no archives: return false") with a call to fileload_hook, which reads the count itself and
+// gives 0 for a name a mod file replaces or adds. Names are compared lowercase and with the leading "/" the game
+// passes cut off, as the plugin's list ("/bdat/x.bdat") is built. The plugin skips
+// the top-level entries bf3.ard, bf3.arh, movie, sound and skyline; so does this. fileload_init (rt_patches_init)
+// registers the hook; the table of names is made by the first call, when the game has long set up its file system.
+#define FILELOAD_HOOK 0xf80          // patch page offset of fileload_hook (patches-upd.txt, @call:f80)
+#define ARCHIVE_COUNT 0x98           // offset of the archive count in the media's block (x8)
+
+static uint64_t *hidden;             // sorted hashes of the lowercase RomFS paths of the mod files
+static size_t nhidden;
+static PlatOnce hidden_once = PLAT_ONCE_INIT;
+
+static uint64_t name_hash(const char *s) {   // FNV-1a over the lowercase bytes
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (; *s; s++) {
+        unsigned char ch = (unsigned char)*s;
+        if (ch >= 'A' && ch <= 'Z') ch = (unsigned char)(ch + 32);
+        h = (h ^ ch) * 0x100000001b3ull;
+    }
+    return h;
+}
+
+static int hash_order(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+static int top_level_skipped(const char *name) {
+    static const char *const skip[] = {"bf3.ard", "bf3.arh", "movie", "sound", "skyline"};
+    size_t n = strcspn(name, "/");
+    for (size_t k = 0; k < sizeof skip / sizeof *skip; k++)
+        if (strlen(skip[k]) == n && !strncasecmp(name, skip[k], n)) return 1;
+    return 0;
+}
+
+static void hidden_build(void *param) {
+    (void)param;
+    fs_init();
+    hidden = malloc((noverlay ? noverlay : 1) * sizeof *hidden);
+    need(hidden != NULL, "file loader table");
+    for (size_t k = 0; k < noverlay; k++)
+        if (overlays[k].mod && !top_level_skipped(overlays[k].name)) hidden[nhidden++] = name_hash(overlays[k].name);
+    if (nhidden) qsort(hidden, nhidden, sizeof *hidden, hash_order);
+    rt_log("file loader: %zu mod files hidden from the archives", nhidden);
+}
+
+static void fileload_hook(Cpu *c) {
+    uint64_t count = *(volatile uint64_t *)(uintptr_t)(c->x[8] + ARCHIVE_COUNT);
+    const char *name = (const char *)(uintptr_t)c->x[2];
+    if (count && name) {
+        plat_once(&hidden_once, hidden_build, NULL);
+        if (nhidden) {
+            if (*name == '/') name++;   // the plugin's names are "/bdat/x.bdat" (it cuts only "rom:"); the table's have no "/"
+            uint64_t h = name_hash(name);
+            if (bsearch(&h, hidden, nhidden, sizeof h, hash_order)) count = 0;
+        }
+    }
+    c->x[9] = count;
+}
+
+// After rt_patches_init has committed the patch page and read the switches, before the host functions are sealed.
+void fileload_init(void) {
+    if (!rt_patch_enabled(rt_patch_set("fileload")) || !rt_patch_page()) return;
+    rt_register_host((uint64_t)(uintptr_t)rt_patch_page() + FILELOAD_HOOK, fileload_hook);
 }
 
 // ---- start

@@ -45,7 +45,7 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
   kept at its own brightness
 - Variable refresh rate (`vrr`): for G-SYNC and FreeSync monitors, each frame shows when it is ready and the frame
   rate stays a little under the refresh rate (116 at 120 Hz), inside the monitor's range
-- RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
+- RomFS mods made for emulators, including mods that need the xcnx-file-loader plugin: see [Mods](#mods)
 
 Every setting is in the F1 menu and in `xc3.ini` ([xc3.ini.example](xc3.ini.example) lists every key). The setup puts
 the NVIDIA (Streamline, DLSS) and AMD (FidelityFX) libraries next to `xc3.exe`.
@@ -64,6 +64,27 @@ Requirements: Windows 10 or later, an x86-64 CPU with SSE4.2 (AVX2 runs it a lit
 4. Play `xc3.exe` from the install folder.
 
 To update, run a newer `XC3-Setup.exe` on the same folder; saves and settings are kept. Controls: [docs/controls.md](docs/controls.md).
+
+## Mods
+
+Mods made for Switch emulators or Atmosphere work when their `romfs` folder is under a `mods` folder next to `xc3.exe`.
+Any folder named `romfs` found up to four levels down counts as one mod, and the names of the folders above it do not
+matter, so `mods\My Mod\romfs\...` and the `atmosphere\contents\<title id>\romfs` layout of an SD card both work.
+Giving each mod its own folder is the easy way to keep them apart: moving a folder away turns that mod off, and when two
+mods provide the same file, the one whose folder path sorts first wins. A `romfs` folder directly in `mods` works too,
+but everything in it counts as one mod. Restart the game after adding or removing a mod.
+
+Mods that need the [xcnx-file-loader](https://github.com/RoccoDev/xcnx-file-loader) plugin, such as the Ultimate
+Rebalance mod, work without it: they replace files that the game normally reads from its archive (`bf3.ard`), and the
+game takes those from the mods folder when one is there. Do not install the plugin itself. If a mod comes with an
+`exefs` folder, leave it or delete it; it is skipped.
+
+Code mods cannot run in a recompiled game: `exefs` patches, cheats and Skyline plugins are skipped, with a line in
+`logs\xc3.log` saying so.
+
+To check that a mod was found, look in `logs\xc3.log` for the `mods:` lines, and for `file loader: N mod files hidden
+from the archives` with N above 0 (written when the game first loads data). Setting the environment variable
+`XC3_FILE_LOADER=0` before starting the game turns the archive handling off.
 
 ## Credits
 

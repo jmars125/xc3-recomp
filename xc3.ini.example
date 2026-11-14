@@ -248,7 +248,9 @@
 [files]
 # Mods made for emulators: unpack each into this folder, as for Ryujinx or yuzu (mods\<name>\romfs\... or
 # mods\contents\<title id>\<name>\romfs\...). Their romfs files replace or add game files; when two mods change the same
-# file, the first by folder name wins. exefs and cheat mods do not apply. Default: mods next to xc3.exe; 0 turns mods off.
+# file, the first by folder name wins. exefs and cheat mods do not apply, so the xc3-file-loader plugin is not needed:
+# files the game would take from its archive (bf3.ard) are served from the mods folder too (the environment variable
+# XC3_FILE_LOADER=0 turns that off; see Mods in the README). Default: mods next to xc3.exe; 0 turns mods off.
 # mods = mods
 # Folder of replacement files listed in a manifest.tsv with their SHA-256 (romfs.c, overlay_load). Default: none.
 # romfs_mods =

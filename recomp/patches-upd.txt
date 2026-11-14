@@ -105,3 +105,12 @@ set orbs XC3_ETHER_ORBS 1
 site orbs main 493d00 f940ca68 f940ca68 @call:f10
 site orbs main 493d0c 910042b4 910042b4 aa1403e0 97fa6903
 site orbs main 493d50 91000508 cb480d08 91000508
+
+# fileload (XC3_FILE_LOADER, romfs.c fileload_hook): the equivalent of xcnx-file-loader for the mods folder. The game's
+# archive lookup ml::DevFileArchiver::getFileInfo(this, media, name, result) (main+0x1257798, the plugin's hook; update
+# 2.2.1) finds a media's archive count in x9 (main+0x12577b4, x8 = this + media * 0x90, the count at x8 + 0x98); with
+# 0 it returns false at once (cbz at main+0x12577bc, exit at main+0x12578d4: w0 = 0, registers restored), and the game
+# then opens the file from the RomFS. The site loads the count in the hook, which gives 0 for a name that a mod file
+# replaces or adds. x30 is saved by the prologue and restored by the exit.
+set fileload XC3_FILE_LOADER 1
+site fileload main 12577b4 f9404d09 @call:f80

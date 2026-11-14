@@ -18,6 +18,8 @@
 
 #include "host.h"
 
+void fileload_init(void);   // romfs.c: the file loader hook (set fileload)
+
 #if __has_include("patches.h")
 #include "patches.h"
 #endif
@@ -53,6 +55,7 @@ void rt_patches_init(void) {
         if (n >= sizeof list) n = sizeof list - 1;
     }
     rt_log("patches: %s (page %#llx)", list, RT_PATCH_PAGE);
+    fileload_init();
 #endif
 }
 
