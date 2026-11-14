@@ -1689,11 +1689,14 @@ static void bind_pipeline(VkExec *ex, VkPipelineBindPoint bp, VkPipeline p) {
     if (!k) B.st_valid = 0;
 }
 
+// The scaled scene's composite in cutscenes (scene_widen): this draw's viewport and scissor cover its whole target.
+static int widen_now, widen_prev;
+
 static void record_fixed(VkExec *ex) {
     VkCommandBuffer cb = ex->cb;
     if (ex->dirty & VK_EXEC_DIRTY_VIEWPORT) {
         float x = 0, y = 0, w = (float)ex->pass_w, h = (float)ex->pass_h;
-        if (ex->has_vp) x = ex->vp[0][0], y = ex->vp[0][1], w = ex->vp[0][2], h = ex->vp[0][3];
+        if (ex->has_vp && !widen_now) x = ex->vp[0][0], y = ex->vp[0][1], w = ex->vp[0][2], h = ex->vp[0][3];
         if (w < 1) w = 1;
         if (h < 1) h = 1;
         VkViewport v = {x, y + h, w, -h, ex->depth_range[0], ex->depth_range[1]};   // the y flip: negative height
@@ -1701,7 +1704,7 @@ static void record_fixed(VkExec *ex) {
         ex->recorded++;
     }
     if (ex->dirty & VK_EXEC_DIRTY_SCISSOR) {
-        VkRect2D r = vk_exec_scissor(ex);
+        VkRect2D r = widen_now ? (VkRect2D){{0, 0}, {ex->pass_w, ex->pass_h}} : vk_exec_scissor(ex);
         vkCmdSetScissorWithCount(cb, 1, &r);
         ex->recorded++;
     }
@@ -2194,6 +2197,33 @@ static void tup_fixup(VkExec *ex) {
     TU.fix.image = VK_NULL_HANDLE;
 }
 
+// On the scaled-scene path (res_scene_on) the game draws the scene into the frame only in some scenes, and then at the
+// scene's size: the real-time scenes of events (Event Theater's prologue; the prologue's first battle of a new game in
+// issue #69) composite it through fragment shaders 3444fa67f4a6dd2e and 75ce7f12a9b636c5 into targets of the frame's
+// size, and Event Theater's menu copies its 3D background (e98d22f95e30dbc6) the same way, each through a viewport of
+// the scene's size at the top left. Nothing stretches that afterwards (tup_fixup only brings in the copy of play), so
+// the scene stayed in the top left corner under a whole interface.
+// Such a draw (into a target of the frame's size, through a viewport at the origin smaller than the frame with the
+// frame's aspect) gets a viewport and scissor of the whole target: its full-screen triangle then samples the scene over
+// all of the frame. The next draw records the game's own viewport and scissor again.
+static void scene_widen(VkExec *ex) {
+    if (widen_prev) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
+    widen_prev = widen_now = 0;
+    if (!res_scene_on() || !ex->has_vp) return;
+    const VkExecTarget *t = &ex->color[0];
+    unsigned out[2], scene[2];
+    res_sizes(out, scene);
+    if (!t->image || t->width != out[0] || t->height != out[1] || ex->pass_w != out[0] || ex->pass_h != out[1]) return;
+    const float *v = ex->vp[0];
+    double w = v[2], h = v[3];
+    if (v[0] != 0 || v[1] != 0 || w >= out[0] || h >= out[1] || w < out[0] / 4.0 || h < out[1] / 4.0) return;
+    if (fabs(w * out[1] - h * out[0]) > out[0] + out[1]) return;   // not the frame's aspect, to a pixel or so
+    widen_now = widen_prev = 1;
+    ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
+    static int said;
+    if (!said++) rt_log("vk: scaled scene: a draw of %gx%g into the %ux%u frame is stretched over it", w, h, out[0], out[1]);
+}
+
 static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (ex->render_disabled) return 0;
     cb_res(ex);
@@ -2207,6 +2237,7 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (!ex->in_pass || TU.fix.image) tup_fixup(ex);
     if (!ex->in_pass) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     vk_exec_pass_begin(ex);
+    scene_widen(ex);
     VkRect2D sc = vk_exec_scissor(ex);
     if (!sc.extent.width || !sc.extent.height) return 0;
     if (!ex->bound[NVN_STAGE_VS]) return warn_once(W_PROGRAM, "a draw without a bound vertex program is skipped"), 0;
