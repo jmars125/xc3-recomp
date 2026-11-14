@@ -112,8 +112,13 @@ void vk_caps_init(VkCtx *c) {
     // Gathers (TLD4) pick their four texels with Maxwell's rounding; AMD and Intel round a coordinate that sits between
     // two texels the other way, which draws dark lines along object edges in shadow-map filtering (docs/maxwell.md 2.10;
     // BotW and TotK on AMD). The translator biases gather coordinates by the host's sub-texel precision; NVIDIA rounds
-    // as Maxwell does. XC3_GATHER_BIAS=<bits> forces it (0: off).
-    uint32_t gather = env_u32("XC3_GATHER_BIAS", c->props.vendorID == 0x10de ? 0 : l->subTexelPrecisionBits);
+    // as Maxwell does. Only AMD's own drivers (Windows, AMDVLK) and Intel's Windows driver get the bias, as in Ryujinx
+    // (Ryujinx.Graphics.Vulkan VulkanRenderer.cs, the gather bias precision given for AMD and Intel on Windows alone):
+    // Mesa's drivers (RADV on the Steam Deck, ANV) get none there. With the bias on RADV the Nopon's fur drew as smooth
+    // see-through blobs on the Deck (issue #24). XC3_GATHER_BIAS=<bits> forces it (0: off).
+    int biased = drv.driverID == VK_DRIVER_ID_AMD_PROPRIETARY || drv.driverID == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                 drv.driverID == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS;
+    uint32_t gather = env_u32("XC3_GATHER_BIAS", biased ? l->subTexelPrecisionBits : 0);
     gfx_shader_set_host(vk_caps.float64, vk_caps.sbuf_align, told, gather);
     if (gather) rt_log("vk caps: gather coordinates biased for %u sub-texel bits (XC3_GATHER_BIAS)", gather);
 
