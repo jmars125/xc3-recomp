@@ -275,7 +275,8 @@ static void world_clock(double dt, double step) {
 // cutscene ran ahead of its voices. The step update's object (main+0xf3c0, its address stored to the patch page's +0x70
 // by the realtime site at main+0xf3dc) has bit 2 of +0x1fc set while the game takes a fixed step instead of the
 // measured one: the title menus and every cutscene, clear in play. While it is set the step is 1/30 s, the frame rate
-// 30, the vsync count 2 and the pacer holds 30 fps. XC3_CUTSCENE_30=0 keeps the limit.
+// 30, the vsync count 2 and the pacer holds 30 fps. Pre-rendered movies and story events are held too, below.
+// XC3_CUTSCENE_30=0 keeps the limit.
 static int cut_on = -1;
 
 static int cutscene(void) {
@@ -285,6 +286,13 @@ static int cutscene(void) {
     uint32_t flags = 0;
     memcpy(&obj, (uint8_t *)rt_patch_page() + 0x70, 8);
     if (obj && plat_mem_read(obj + 0x1fc, &flags, 4) && (flags & 4)) return 1;
+    // A pre-rendered movie: from the decoder's construction to its destruction (ov_movie.c movie_playing). The movies
+    // are 30 fps and ov_movie.c hands their frames over on the host clock, but the game ends a movie by its own clock,
+    // which advances with the frame step: after a movie played at 60 fps showed its last frame, the screen stayed
+    // black for about 100 s until the game stopped the decoder and went on to the next scene or back to Event
+    // Theater's list (#24, #51). At 30 fps it stops at once.
+    // The XCX runtime held movies the same way (xcx-recomp frame_rate.c cutscene).
+    if (movie_playing()) return 1;
     // A story event playing: the play report's object (*[*main+0x1b4d688], read in main+0x325708, as Lucky7's
     // runtime/hle/xc2.c xc3_event_tour reads it) holds the event's id at +0x1e0 until the event ends. Events between
     // cutscenes (fades, staged moves) step without the fixed-step flag; at 120 fps the end of event 10005 waited for
@@ -301,7 +309,7 @@ void frame_step_present(uint64_t display_ns, int interval) {
     if (cut != cut_now) {
         cut_now = cut;
         sample_count = sample_next = 0;   // the average starts again at the new rate
-        rt_log("frame rate: %s", cut ? "cutscene, story event or title menu, 30 fps" : "play, the limit again");
+        rt_log("frame rate: %s", cut ? "cutscene, movie, story event or title menu, 30 fps" : "play, the limit again");
     }
     if (vsyncs_word) vsyncs_store();
     double step = 0, dt = last_ns ? (double)(display_ns - last_ns) * 1e-9 : 0;
