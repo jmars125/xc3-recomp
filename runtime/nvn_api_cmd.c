@@ -777,6 +777,9 @@ static uint64_t ui_node(const Cpu *c) {
 // UI_SIDE_HOLD frames in a row; one with a wide element past the side line on each side frames the screen and stays. A
 // layout goes to a side only if one of its elements reaches within UI_EDGE_REACH of that side's canvas edge: the HUD that
 // belongs on a side (the minimap, the area name, the button prompts) ends on the canvas edge.
+// An element as wide as the canvas counts as wide on the side its origin lies on: the Map menu's drifting cloud layers
+// are such elements placed past both side lines, and with its list panel on the left the menu went wholly to the left
+// half of a 32:9 frame (#55). The minimap's ring is one too, but nothing of its layout is wide on the left.
 // What the game places from the world must stay where the 3D view shows it, and XC3 needs more than XCX here:
 // - A layout the game places as a whole holds its position in its root transform (layout + 0x100, x and y in canvas
 //   units; zero for the HUD): the icon of a far target over the field. It never moves to a side.
@@ -817,7 +820,8 @@ static int ui_side_for(int side, float mid, float lo, float hi, int moving) {
     return want;
 }
 
-static float ui_shift(uint64_t node, float lo, float hi, float k) {
+// wide: an element as wide as the canvas (ui_fit), passed as its origin, lo == hi.
+static float ui_shift(uint64_t node, float lo, float hi, int wide, float k) {
     static _Thread_local struct {
         uint64_t node;
         uint32_t frame, centred, moved;   // the frame drawn last, the first of its run at the centre, the last move
@@ -861,10 +865,10 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
         }
         seen[i].frame = frame, seen[i].n = 0, seen[i].lw = seen[i].rw = 0, seen[i].lo = 1, seen[i].hi = -1;
     }
-    float centre = (lo + hi) / 2;
+    float centre = (lo + hi) / 2, width = wide ? 2 : hi - lo;
     if (seen[i].n < UI_NODE_CENTRES) seen[i].c[seen[i].n++] = centre;
-    if (centre < -UI_EDGE_SIDE && hi - lo > seen[i].lw) seen[i].lw = hi - lo;
-    if (centre > UI_EDGE_SIDE && hi - lo > seen[i].rw) seen[i].rw = hi - lo;
+    if (centre < -UI_EDGE_SIDE && width > seen[i].lw) seen[i].lw = width;
+    if (centre > UI_EDGE_SIDE && width > seen[i].rw) seen[i].rw = width;
     if (lo < seen[i].lo) seen[i].lo = lo;
     if (hi > seen[i].hi) seen[i].hi = hi;
     if (!seen[i].have)   // the node's first frame: what it has drawn so far
@@ -895,6 +899,7 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     unsigned slot = (unsigned)(addr >> 4) % 64;   // a block bound for a second draw is narrow already
     if (done[slot].addr == addr && done[slot].x == f[0]) return;
     float a = f[3], b = f[3] + f[0], lo = a < b ? a : b, hi = a < b ? b : a;
+    int wide = 0;
     // An element as wide as the canvas, or a shade laid over a whole side, keeps its full reach. Some elements only look
     // that wide: they carry their shape in the vertices, in units of the canvas width on both axes, so the matrix's rows
     // keep the canvas's 16:9 ratio, turned for spinning ones (the minimap's ring and compass). Those narrow like the rest,
@@ -908,8 +913,9 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
         if (!(rx > 0) || fabsf(ry / rx - 16.0f / 9.0f) > 0.02f) return;
         if (f[1] == 0 && f[4] == 0 && f[0] > 0 && f[5] < 0 && fabsf(f[3] + 1) < 0.001f && fabsf(f[7] - 1) < 0.001f) return;
         lo = hi = f[3];
+        wide = 1;
     }
-    float shift = ui_shift(ui_node(c), lo, hi, k);
+    float shift = ui_shift(ui_node(c), lo, hi, wide, k);
     f[0] *= k, f[1] *= k, f[3] = f[3] * k + shift;
     done[slot].addr = addr, done[slot].x = f[0];
 }
@@ -926,7 +932,7 @@ static void ui_rect(const Cpu *c, float r[4], int viewport) {
     }
     if (ui_frame_lr(c->x[29]) != UI_CLIP_LR) return;
     float mid = out[0] / 2.0f, lo = r[0] / mid - 1, hi = (r[0] + r[2]) / mid - 1;
-    float x = mid + (r[0] - mid) * k + ui_shift(ui_node(c), lo, hi, k) * mid, w = r[2] * k;
+    float x = mid + (r[0] - mid) * k + ui_shift(ui_node(c), lo, hi, 0, k) * mid, w = r[2] * k;
     r[0] = floorf(x + 0.5f), r[2] = floorf(x + w + 0.5f) - r[0];
     if (viewport) ui_in_rect = 1;
 }
