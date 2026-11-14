@@ -899,9 +899,14 @@ static void ui_fit(const Cpu *c, int st, uint64_t addr, uint64_t size) {
     // that wide: they carry their shape in the vertices, in units of the canvas width on both axes, so the matrix's rows
     // keep the canvas's 16:9 ratio, turned for spinning ones (the minimap's ring and compass). Those narrow like the rest,
     // placed by their origin. The same rule in XCX: xcx-recomp nvn_api_cmd.c ui_fit.
+    // The screen fades and dim layers (the title's fade-out, cutscene fades to and from black, the purple tint of a
+    // field event) have that shape too, a quad of the whole canvas in canvas units, and their origin is the canvas's
+    // top left corner. Narrowed from that corner they stopped short of the right side of a wide frame (#68), so an
+    // unturned element placed at the corner keeps its full reach.
     if (fabsf(f[0]) >= UI_FULL_WIDTH || (hi - lo >= 1 && (lo <= -0.99f || hi >= 0.99f))) {
         float rx = hypotf(f[0], f[1]), ry = hypotf(f[4], f[5]);
         if (!(rx > 0) || fabsf(ry / rx - 16.0f / 9.0f) > 0.02f) return;
+        if (f[1] == 0 && f[4] == 0 && f[0] > 0 && f[5] < 0 && fabsf(f[3] + 1) < 0.001f && fabsf(f[7] - 1) < 0.001f) return;
         lo = hi = f[3];
     }
     float shift = ui_shift(ui_node(c), lo, hi, k);
