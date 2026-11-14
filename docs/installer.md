@@ -29,7 +29,8 @@ The install folder (`main.c` `portable_paths()` reads this layout; it stays port
   xc3-install.json              what built this folder: release version, input hashes, finished steps
 ```
 
-`XC3_PROFILE_DIR` overrides the `profile/` folder. A `profile/` folder with no saves is skipped while the profile baked
+`XC3_PROFILE_DIR` overrides the `profile/` folder. `xc3.exe --game <install folder>` takes `exefs/`, `romfs/` and `profile/` from another
+folder (the same as `--exefs`, `--romfs` and `--profile` together); `xc3.ini`, `logs/` and the upscaler DLLs stay next to the exe. A `profile/` folder with no saves is skipped while the profile baked
 into the exe at build time has some (a developer build copied into an install folder): the log says so and how to move
 them.
 
@@ -69,10 +70,17 @@ A cancelled or failed setup resumes from the last finished step (`xc3-install.js
 `installer/` (stdlib only; `installer/layout.py` maps the release folder and, in a repository, the dev toolchain):
 
 ```
-python -m installer --base FILE --update FILE --keys FILE --lang CODE --dest DIR [--root DIR] [--temp DIR] [--verify]
+python -m installer --base FILE --update FILE --keys FILE [--dlc FILE ...] --lang CODE --dest DIR [--root DIR] [--temp DIR]
+                     [--verify] [--progress-lines]
 ```
 
 - On a folder with `xc3-install.json` only `--dest` is needed; the game files only when the extraction must run again.
+- `--dlc` takes any number of files, after one option or by repeating it (`--dlc=a.nsp --dlc=b.nsp`).
+- `--default-lang CODE` is the language of a first install when `--lang` is missing; a folder with `xc3-install.json`
+  keeps the one it recorded. A launcher passes it instead of `--lang`, which would reset the language on every run.
+- `--progress-lines` prints `progress <0 to 1> <text>` lines in place of the JSON events, the setup protocol of a
+  launcher that runs this without a window (`LineReporter` in `installer/events.py`). Every step weighs the same, so the
+  number is a position, not a time estimate.
 - stdout: one JSON event per line, types `start`, `plan`, `step` (started, done, skipped), `progress` (step, phase,
   done/total/unit), `space` (bytes needed and free on the install disk and the temp disk), `warning`, `error`, `end` (`installer/events.py`). Messages are ids with parameters;
   `installer/text/en.json` holds their English text. The human-readable log goes to `<temp>/logs/`.
@@ -109,6 +117,7 @@ bin/upscalers/        AMD FSR 3 (MIT) and NVIDIA Streamline DLLs (MIT) with the 
 data/                 shader_list.tsv (MacNativeGames, MIT)
 THIRD_PARTY_NOTICES.md
 xc3.ini.example, VERSION  the default ini; the release string (the repository's VERSION plus the commit)
+recomplauncher.json    how RecompLauncher sets the game up and starts it ("RecompLauncher")
 ```
 
 - SDL3 comes from the upstream release, not MSYS2: MSYS2's DLL imports the LGPL libiconv.
@@ -127,7 +136,7 @@ Xft against the sniper sysroot so Russian text uses system TrueType fonts. The s
 ```
 AppRun                starts python/bin/python3 -m installer.gui (no bytecode written into the read-only mount)
 xc3-setup.desktop, xc3-setup.png
-installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, VERSION   as on Windows
+installer/, recomp/, tools/, data/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, recomplauncher.json, VERSION   as on Windows
 python/               python-build-standalone 3.14 (with tkinter) + the installer's packages; a .pth puts the folder,
                       tools/ and recomp/ on sys.path
 llvm/                 LLVM 23 (clang, lld, llvm-ar) and llvm/sysroot: the files of the Steam Runtime 3 "sniper" SDK the
@@ -214,3 +223,22 @@ Without Actions, the same two scripts build the packages locally; on Windows run
 
 - Re-warm the driver cache on start after a move, GPU or driver change.
 - NSZ and XCZ input.
+
+## RecompLauncher
+
+[RecompLauncher](https://recomplauncher.com) installs this release and sets the game up from the player's own files with
+`recomplauncher.json` (repository root; `tools/make_release.py` copies it to the top of both packages). It reads the
+base game, the update, the four add-on files and `prod.keys` as named inputs and runs the setup without a window:
+
+```
+python/python.exe -m installer --base=… --update=… --dlc=… --keys=… --default-lang=en-US --dest=<release>/game --progress-lines
+```
+
+On Linux the unpacked AppImage's `AppRun -m installer …` does the same (it hands a leading `-m` to the bundled Python).
+The game is built into `game/` inside the release folder, which a launcher update leaves alone, and started from there.
+`--progress-lines` is the launcher's progress protocol, and `--default-lang` keeps a player's language across runs.
+The window and the command line are unchanged without these arguments.
+
+The manifest's settings edit `game/xc3.ini`, so each setting's key and values are the ones `xc3.ini.example` documents:
+change both together. `tests/recomplauncher_manifest_test.py` checks the file's own consistency; validate it against
+the schema at https://recomplauncher.com/schema/recomplauncher.json after an edit.

@@ -1,0 +1,207 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "XC3 Recomp",
+  "repo": "jmars125/xc3-recomp",
+  "inputs": [
+    {
+      "id": "base",
+      "label": "Xenoblade Chronicles 3 base game (NSP or XCI), version 1.0.0",
+      "role": "game",
+      "formats": [
+        { "type": "file", "extensions": ["nsp", "xci"], "requires": ["keys"] }
+      ]
+    },
+    {
+      "id": "update",
+      "label": "Update 2.2.1 (NSP)",
+      "role": "update",
+      "formats": [
+        { "type": "file", "extensions": ["nsp"] }
+      ]
+    },
+    {
+      "id": "dlc1",
+      "label": "Expansion Pass, Wave 1 (NSP)",
+      "role": "dlc",
+      "optional": true,
+      "formats": [
+        { "type": "file", "extensions": ["nsp"] }
+      ]
+    },
+    {
+      "id": "dlc2",
+      "label": "Expansion Pass, Wave 2 (NSP)",
+      "role": "dlc",
+      "optional": true,
+      "formats": [
+        { "type": "file", "extensions": ["nsp"] }
+      ]
+    },
+    {
+      "id": "dlc3",
+      "label": "Expansion Pass, Wave 3 (NSP)",
+      "role": "dlc",
+      "optional": true,
+      "formats": [
+        { "type": "file", "extensions": ["nsp"] }
+      ]
+    },
+    {
+      "id": "dlc4",
+      "label": "Expansion Pass, Wave 4: Future Redeemed (NSP)",
+      "role": "dlc",
+      "optional": true,
+      "formats": [
+        { "type": "file", "extensions": ["nsp"] }
+      ]
+    },
+    {
+      "id": "keys",
+      "label": "Nintendo Switch prod.keys",
+      "role": "key",
+      "shared": "switch.prod-keys"
+    }
+  ],
+  "prepare": {
+    "program": ["python/python.exe", "AppRun"],
+    "args": [
+      "-m", "installer",
+      "--base={input:base}",
+      "--update={input:update}",
+      "--dlc={input:dlc1}",
+      "--dlc={input:dlc2}",
+      "--dlc={input:dlc3}",
+      "--dlc={input:dlc4}",
+      "--keys={input:keys}",
+      "--default-lang=en-US",
+      "--dest={install}/game",
+      "--progress-lines"
+    ],
+    "label": "Building the game from your files",
+    "timeout": 14400
+  },
+  "start": {
+    "program": ["game/xc3.exe", "game/xc3"]
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "ini",
+      "file": [{ "path": "{install}/game/xc3.ini" }]
+    }
+  ],
+  "saves": ["{install}/game/profile"],
+  "folders": {
+    "saves": [{ "path": "{install}/game/profile" }],
+    "logs": [{ "path": "{install}/game/logs" }]
+  },
+  "settings": [
+    {
+      "id": "window",
+      "label": "Window",
+      "help": "Windowed opens a window. Fullscreen fills the screen without borders (F11 switches in the game).",
+      "choices": [
+        { "label": "Windowed", "set": { "fullscreen": "0" } },
+        { "label": "Fullscreen", "set": { "fullscreen": "1" } }
+      ],
+      "defaults": { "fullscreen": "0" }
+    },
+    {
+      "id": "resolution",
+      "label": "Resolution",
+      "help": "The size the game draws in and the size of its window. A resolution above 1080p needs more memory and a faster graphics card.",
+      "choices": [
+        { "label": "720p", "set": { "output_res": "1280x720", "window_size": "1280x720" } },
+        { "label": "1080p", "set": { "output_res": "1920x1080", "window_size": "1920x1080" } },
+        { "label": "1440p", "set": { "output_res": "2560x1440", "window_size": "2560x1440" } },
+        { "label": "4K", "set": { "output_res": "3840x2160", "window_size": "3840x2160" } }
+      ],
+      "defaults": { "output_res": "1920x1080", "window_size": "1920x1080" }
+    },
+    {
+      "id": "frame_rate",
+      "label": "Frame rate limit",
+      "help": "The game keeps its speed right at every rate. Display follows your monitor's refresh rate.",
+      "choices": [
+        { "label": "30", "set": { "fps_limit": "30" } },
+        { "label": "60", "set": { "fps_limit": "60" } },
+        { "label": "120", "set": { "fps_limit": "120" } },
+        { "label": "144", "set": { "fps_limit": "144" } },
+        { "label": "240", "set": { "fps_limit": "240" } },
+        { "label": "Display", "set": { "fps_limit": "display" } }
+      ],
+      "defaults": { "fps_limit": "60" }
+    },
+    {
+      "id": "upscaler",
+      "label": "Upscaling",
+      "help": "FSR 3 works on any graphics card. DLSS and DLAA need an NVIDIA RTX card and fall back to FSR 3 without one. A change to DLSS or DLAA takes a restart.",
+      "choices": [
+        { "label": "Bilinear", "set": { "upscaler": "bilinear" } },
+        { "label": "FSR 1", "set": { "upscaler": "fsr" } },
+        { "label": "FSR 3", "set": { "upscaler": "fsr3" } },
+        { "label": "DLSS", "set": { "upscaler": "dlss" } },
+        { "label": "DLAA", "set": { "upscaler": "dlaa" } }
+      ],
+      "defaults": { "upscaler": "fsr" }
+    },
+    {
+      "id": "frame_generation",
+      "label": "Frame generation",
+      "help": "Adds a generated frame between two drawn ones. It needs FSR 3, DLSS or DLAA above, and a restart. DLSS frame generation needs an RTX 40 or 50 card.",
+      "choices": [
+        { "label": "Off", "set": { "frame_gen": "off" } },
+        { "label": "FSR 3", "set": { "frame_gen": "fsr" } },
+        { "label": "DLSS", "set": { "frame_gen": "dlss" } }
+      ],
+      "defaults": { "frame_gen": "off" }
+    },
+    {
+      "id": "vrr",
+      "label": "Variable refresh rate",
+      "help": "Shows each frame when it is ready, for G-SYNC and FreeSync screens. It needs VRR switched on in the graphics driver.",
+      "choices": [
+        { "label": "Off", "set": { "vrr": "0" } },
+        { "label": "On", "set": { "vrr": "1" } }
+      ],
+      "defaults": { "vrr": "0" }
+    },
+    {
+      "id": "overlay",
+      "label": "Performance overlay",
+      "help": "The frame rate in the top right corner of the game (F10 cycles it in the game).",
+      "choices": [
+        { "label": "Off", "set": { "perf_overlay": "off" } },
+        { "label": "Frame rate", "set": { "perf_overlay": "fps" } },
+        { "label": "Full", "set": { "perf_overlay": "full" } }
+      ],
+      "defaults": { "perf_overlay": "off" }
+    },
+    {
+      "id": "language",
+      "label": "Game language",
+      "help": "The language of the game's text. It takes a restart.",
+      "choices": [
+        { "label": "English (US)", "set": { "lang": "en-US" } },
+        { "label": "English (UK)", "set": { "lang": "en-GB" } },
+        { "label": "Japanese", "set": { "lang": "ja" } },
+        { "label": "French", "set": { "lang": "fr" } },
+        { "label": "French (Canada)", "set": { "lang": "fr-CA" } },
+        { "label": "German", "set": { "lang": "de" } },
+        { "label": "Italian", "set": { "lang": "it" } },
+        { "label": "Spanish", "set": { "lang": "es" } },
+        { "label": "Spanish (Latin America)", "set": { "lang": "es-419" } },
+        { "label": "Dutch", "set": { "lang": "nl" } },
+        { "label": "Portuguese", "set": { "lang": "pt" } },
+        { "label": "Portuguese (Brazil)", "set": { "lang": "pt-BR" } },
+        { "label": "Russian", "set": { "lang": "ru" } }
+      ],
+      "defaults": { "lang": "en-US" }
+    }
+  ],
+  "actions": [
+    { "id": "saves", "label": "Saves", "help": "Your saves and the game's profile.", "open": "saves" },
+    { "id": "logs", "label": "Logs", "help": "xc3.log of the last runs, for a bug report.", "open": "logs" }
+  ]
+}
