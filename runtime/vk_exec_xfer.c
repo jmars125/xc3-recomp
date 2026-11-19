@@ -489,6 +489,7 @@ static void copy_t2t(VkExec *ex, const p_copy_t2t *p) {
     }
     VkImageSubresourceLayers sl = sub_layers(&s), dl = sub_layers(&d);
     vk_exec_pass_end(ex);
+    vk_exec_tup_read(ex, s.img->image, s.img->width, s.img->height, s.img->format);   // the frame, before its copy
     vk_exec_barrier(ex);
     if (s.img->samples > 1 && d.img->samples == 1) {
         VkImageResolve rv = {sl, sub_offset(&s), dl, sub_offset(&d), sub_extent(&s)};

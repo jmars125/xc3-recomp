@@ -154,6 +154,12 @@ extern VkExecFrame vk_exec_frame;
 void vk_exec_frame_written(const tex_t *t);                    // vk_texture_gpu_written: t rendered or copied into
 uint64_t vk_exec_recording_fence(void);                        // fence of the submission this thread records, else 0
 void vk_exec_frame_log(const tex_t *presented, uint64_t frame);
+// Called at each present before the upload batch is flushed: notes the presented image (w x h in fmt), and the scaled
+// scene's result still waiting for the frame (vk_exec_draw.c tup_fixup) goes into it through the upload batch.
+void vk_exec_tup_present(VkImage img, VkFormat fmt, uint32_t w, uint32_t h);
+// Before a read of img (w x h in fmt) outside a pass: the scaled scene's result still waiting for the frame goes into
+// it when img is a presented image (vk_exec_draw.c). 1: it did.
+int vk_exec_tup_read(VkExec *ex, VkImage img, uint32_t w, uint32_t h, VkFormat fmt);
 
 // XC3_DUMP=<frame> (vk_dump.c): between presents frame-1 and frame, every pass's targets and every dispatch's storage
 // images are copied out and written as PNGs to XC3_DUMP_DIR (default "dump"), with passes.txt (targets, pipelines,
