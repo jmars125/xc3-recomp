@@ -82,6 +82,9 @@ using PfnReflexSetOptions = sl::Result (*)(const sl::ReflexOptions &);
 #define MAX_EXTS 32
 #define RING 16   // frames whose tagging state the present can still look up
 
+static const char *const dlss_mode_names[] = {"off", "performance", "balanced", "quality", "ultra performance",
+                                              "ultra quality", "DLAA"};   // sl::DLSSMode order
+
 struct {
     HMODULE lib;
     int started;     // slInit succeeded
@@ -561,10 +564,8 @@ extern "C" int vk_sl_evaluate(VkCommandBuffer cb, uint64_t id, const VkSlImage *
             return 0;
         }
         S.last_mode = (uint32_t)o.mode, S.last_w = out->w, S.last_h = out->h, S.last_preset = preset;
-        static const char *const names[] = {"off", "performance", "balanced", "quality", "ultra performance",
-                                            "ultra quality", "DLAA"};
         uint32_t m = (uint32_t)o.mode;
-        rt_log("vk: DLSS (%s, model %c) upscales %ux%u to %ux%u", m < 7 ? names[m] : "?",
+        rt_log("vk: DLSS (%s, model %c) upscales %ux%u to %ux%u", m < 7 ? dlss_mode_names[m] : "?",
                preset ? (char)('A' + preset - 1) : '-', color->w, color->h, out->w, out->h);
     }
 
@@ -586,6 +587,13 @@ extern "C" int vk_sl_evaluate(VkCommandBuffer cb, uint64_t id, const VkSlImage *
         return 0;
     }
     return 1;
+}
+
+// The DLSS mode of the last evaluation, for the overlay (menu.cpp perf_picture): "DLAA", "quality", ...; NULL before the
+// first one.
+extern "C" const char *vk_sl_dlss_mode(void) {
+    uint32_t m = S.last_mode;
+    return S.last_w && m < 7 ? dlss_mode_names[m] : nullptr;
 }
 
 extern "C" int vk_sl_fg_inputs(VkCommandBuffer cb, uint64_t id, const VkSlImage *depth, const VkSlImage *motion,
