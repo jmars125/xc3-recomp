@@ -6,6 +6,9 @@ this file only draws. The window text is in installer/text/<en|ru>.json under "u
 
     --selftest [--shots DIR]   build every screen in both languages and close by itself (PNG per screen with --shots)
     --lang en|ru               window language (default: the Windows display language)
+    --dest DIR --base FILE --update FILE --keys FILE --dlc FILE...
+                               fill in the form (the CLI's names); without --dest, the install folder the window last
+                               started a run for (guilogic.remember_path). A folder with an installation offers Play
 """
 import argparse
 import json
@@ -24,7 +27,8 @@ except ImportError:
 from . import ini
 from . import layout as layouts
 from .guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, UI_LANGUAGES, Catalog, Form, Model, Process,
-                       amount, default_game_language, describe_event, parse_line, windows_ui_language)
+                       amount, default_game_language, describe_event, game_exe, load_last_dest, parse_line, play,
+                       prefill, remember_path, save_last_dest, windows_ui_language)
 
 POLL_MS = 100
 GLYPH = {PENDING: '\u25cb', RUNNING: '\u25b6', DONE: '\u2714', SKIPPED: '\u2013', FAILED: '\u2716'}
@@ -42,13 +46,13 @@ def fix_tcl_paths():
 
 
 class App:
-    def __init__(self, root, ui_lang, layout, run_args=None):
+    def __init__(self, root, ui_lang, layout, run_args=None, values=None):
         self.root, self.layout = root, layout
         self.cat = Catalog(ui_lang)
         self.model = Model()
         self.process = None
         self.closing = False
-        self.run_args = run_args or {}   # extra CLI options for tests: temp, verify
+        self.run_args = run_args or {}   # extra CLI options for tests: temp, verify; remember (the file)
         self.log_entries = []            # events and raw lines of the run, rendered by render_log
         self.bound = []                  # (widget, option, id, params) retranslated on a language switch
         self.vars = {n: tk.StringVar() for n in ('base', 'update', 'dlc', 'keys', 'dest')}
@@ -91,6 +95,14 @@ class App:
         self.frames = {'form': self.build_form(), 'run': self.build_run(), 'finish': self.build_finish()}
         self.vars['lang'].set(self.lang_label(self.lang_code))
         self.vars['dest'].trace_add('write', lambda *_: self.refresh_form())
+        self.remember = self.run_args.get('remember') or remember_path(layout)
+        values = dict(values or {})
+        if not values.get('dest'):
+            values['dest'] = load_last_dest(self.remember)
+        for name, value in values.items():
+            if value:
+                self.vars[name].set(value)
+        self.refresh_form()
         self.show('form')
 
     # ---- text -----------------------------------------------------------------------------------------------------
@@ -179,6 +191,8 @@ class App:
         bar.pack(side='bottom', fill='x', pady=(12, 0))
         self.start_button = self.button(bar, 'ui.start', self.start)
         self.start_button.pack(side='right')
+        self.form_play = self.button(bar, 'ui.play', self.play)   # packed by refresh_form for an installed folder
+        self.form_play_shown = False
         self.form_intro = self.label(f, 'ui.intro', wraplength=620, justify='left')
         self.form_intro.pack(anchor='w', pady=(0, 8))
         self.notice(f).pack(fill='x', pady=(0, 10))
@@ -249,6 +263,8 @@ class App:
         self.button(bar, 'ui.close', self.on_close).pack(side='right')
         self.open_button = self.button(bar, 'ui.open_folder', self.open_folder)
         self.open_button.pack(side='right', padx=(0, 8))
+        self.play_button = self.button(bar, 'ui.play', self.play)
+        self.play_button.pack(side='right', padx=(0, 8))
         self.back_button = self.button(bar, 'ui.back', lambda: self.show('form'))
         self.back_button.pack(side='left')
         self.finish_title = ttk.Label(f, style='Title.TLabel', wraplength=620, justify='left')
@@ -276,6 +292,15 @@ class App:
                 self.vars['lang'].set(self.lang_label(state['lang']))
         else:
             self.update_hint.configure(text='')
+        # An installed folder: Start becomes Update, and Play starts the game without running the setup.
+        self.start_button.configure(text=self.cat('ui.start_update' if state is not None else 'ui.start'))
+        playable = form.playable()
+        if playable != self.form_play_shown:
+            if playable:
+                self.form_play.pack(side='right', padx=(0, 8))
+            else:
+                self.form_play.pack_forget()
+            self.form_play_shown = playable
         self.fit()
 
     def pick_file(self, name, pick_id):
@@ -316,6 +341,7 @@ class App:
             self.fit()
             return
         self.form_error.configure(text='')
+        save_last_dest(self.remember, Path(form.dest.strip()).resolve())
         command = form.command(self.layout.python, root=self.layout.root if self.layout.dev else None,
                                temp=self.run_args.get('temp'), verify=self.run_args.get('verify', False))
         self.begin(command, self.layout.root)
@@ -492,6 +518,14 @@ class App:
             self.open_button.state(['!disabled'])
         else:
             self.open_button.state(['disabled' if not Path(m.dest or '.').is_dir() else '!disabled'])
+        self.play_button.state(['!disabled' if result == 'ok' and m.dest and game_exe(m.dest).is_file()
+                                else 'disabled'])
+
+    def play(self):
+        """Starts the game from the install folder (its working directory) and closes the window."""
+        dest = self.model.dest if self.screen == 'finish' else self.vars['dest'].get().strip()
+        if dest and play(dest) is not None:
+            self.root.destroy()
 
     def open_folder(self):
         dest = self.model.dest
@@ -549,7 +583,7 @@ def selftest(layout, shots=None):
     fix_tcl_paths()
     root = tk.Tk()
     root.geometry('+60+40')
-    app = App(root, 'en', layout)
+    app = App(root, 'en', layout, run_args={'remember': Path(os.devnull)})   # the selftest remembers nothing
     steps, mixed = [], []
 
     def shot(name):
@@ -623,13 +657,18 @@ def main(argv=None):
     ap.add_argument('--shots', type=Path)
     ap.add_argument('--lang', choices=UI_LANGUAGES)
     ap.add_argument('--root', type=Path)
+    ap.add_argument('--dest', type=Path, help='install folder to fill in')
+    ap.add_argument('--base', type=Path, help='base game, XCI or NSP, to fill in')
+    ap.add_argument('--update', type=Path, help='2.2.1 update NSP to fill in')
+    ap.add_argument('--keys', type=Path, help='prod.keys to fill in')
+    ap.add_argument('--dlc', type=Path, nargs='*', help='add-on content NSPs to fill in')
     args = ap.parse_args(argv)
     layout = layouts.find(args.root)
     if args.selftest:
         return selftest(layout, args.shots)
     fix_tcl_paths()
     root = tk.Tk()
-    App(root, args.lang or windows_ui_language(), layout)
+    App(root, args.lang or windows_ui_language(), layout, values=prefill(args))
     root.mainloop()
     return 0
 

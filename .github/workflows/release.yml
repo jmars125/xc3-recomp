@@ -91,6 +91,7 @@ jobs:
     timeout-minutes: 120
     env:
       PACKAGE: XC3-Setup-${{ needs.version.outputs.version }}-linux.AppImage
+      TARBALL: XC3-Setup-${{ needs.version.outputs.version }}-linux.tar.gz
     steps:
       - uses: actions/checkout@v7
       - name: Version of this build
@@ -112,7 +113,7 @@ jobs:
       - run: sudo apt-get install -y make pkg-config
       - run: >-
           xvfb-run -a python tools/make_release_linux.py --out build/release/XC3-Setup-linux
-          --appimage build/release/${{ env.PACKAGE }}
+          --appimage build/release/${{ env.PACKAGE }} --tarball build/release/${{ env.TARBALL }}
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.PACKAGE }}
@@ -120,6 +121,13 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1   # the release holds the packages; this copy only passes them to the later jobs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.TARBALL }}
+          path: build/release/${{ env.TARBALL }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
   # A fresh runner with none of the build's toolchain: each package unpacks and passes the check-only installer pass.
   verify:
@@ -133,6 +141,9 @@ jobs:
             wrapper: ""
           - runner: ubuntu-24.04
             package: XC3-Setup-${{ needs.version.outputs.version }}-linux.AppImage
+            wrapper: xvfb-run -a
+          - runner: ubuntu-24.04
+            package: XC3-Setup-${{ needs.version.outputs.version }}-linux.tar.gz
             wrapper: xvfb-run -a
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30

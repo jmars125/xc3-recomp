@@ -56,6 +56,25 @@ static void mesa_cache_beside_exe(void) {
     plat_setenv("MESA_SHADER_CACHE_DIR", dir);
 }
 
+// NVIDIA's Linux driver keeps its shader cache in ~/.cache/nvidia/GLCache by default; for the same reasons it goes to
+// nv-cache beside the exe unless __GL_SHADER_DISK_CACHE_PATH names a folder. The folder is made first (the driver may
+// not make a folder it was pointed at), and __GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1 keeps the driver from trimming it to
+// its default size limit, unless the player set that variable too. The Windows driver reads neither variable: its
+// cache stays under %LOCALAPPDATA%\NVIDIA (docs/installer.md).
+static void nv_cache_beside_exe(void) {
+#ifndef _WIN32
+    char dir[PLAT_PATH_MAX * 2];
+    if (plat_getenv("__GL_SHADER_DISK_CACHE_PATH", dir, sizeof dir)) return;
+    int len = plat_exe_path(dir, sizeof dir - 16);
+    char *cut = len ? plat_last_sep(dir) : NULL;
+    if (!cut) return;
+    strcpy(cut + 1, "nv-cache");
+    plat_fs_mkdir(dir);
+    plat_setenv("__GL_SHADER_DISK_CACHE_PATH", dir);
+    if (!getenv("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP")) plat_setenv("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
+#endif
+}
+
 // upscaler = dlss or dlaa, or frame_gen = dlss: Streamline (vk_sl.cpp) starts before the instance, which then has the
 // extensions its features ask for. Switching to DLSS in the menu later takes a restart.
 static int wants_dlss(void) {
@@ -65,6 +84,7 @@ static int wants_dlss(void) {
 
 static int create_instance(void) {
     mesa_cache_beside_exe();
+    nv_cache_beside_exe();
     const char *ext[24];
     uint32_t n_ext = (uint32_t)gfx_window_vk_extensions(ext, 7);
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};

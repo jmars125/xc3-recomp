@@ -33,6 +33,22 @@ The install folder (`main.c` `portable_paths()` reads this layout; it stays port
 into the exe at build time has some (a developer build copied into an install folder): the log says so and how to move
 them.
 
+### Game command line
+
+For launchers and shortcuts, `xc3[.exe]` takes these before any mode (`runtime/main.c` `launcher_args`); `--help`
+prints them:
+
+| Option | Effect |
+|---|---|
+| `--set KEY=VALUE` | one setting for this run, repeatable. `KEY` is any `xc3.ini` key (any case, `XC3_` optional); it becomes the environment variable `XC3_KEY`, which wins over `xc3.ini` and is never saved into it. An unknown key prints a warning |
+| `--config FILE` | read and save this settings file instead of `xc3.ini` beside the exe |
+| `--game DIR` | `DIR/exefs`, `DIR/romfs` and `DIR/profile` at once; a later `--exefs`, `--romfs` or `--profile` wins |
+| `--fullscreen` | `--set fullscreen=1` |
+| `--window WxH` | `--set window_size=WxH --set fullscreen=0` |
+| `--exefs DIR`, `--romfs DIR`, `--profile DIR` | one folder each |
+
+Every setting also has an environment variable (`XC3_<KEY>`), which wins over `xc3.ini` the same way.
+
 ## Updating the port
 
 The player runs a newer installer on the same folder. It reads `xc3-install.json`, keeps `romfs/`, `exefs/`,
@@ -84,9 +100,15 @@ python -m installer --base FILE --update FILE --keys FILE --lang CODE --dest DIR
   the merged RomFS (15.9 GiB) before it deletes them. The check computes the exact figure.
 - Window (`python -m installer.gui`, `installer/gui.py` draws, `installer/guilogic.py` decides): form, step list with
   progress, space line, collapsible log, Cancel (Ctrl+Break to the CLI's process group, then it waits for the exit),
-  finish screen with Open folder. English or Russian, chosen from the Windows display language, switchable in the
-  window; every sentence is an id in `installer/text/<en|ru>.json`. A folder with `xc3-install.json` needs only the
+  finish screen with Play and Open folder. English or Russian, chosen from the Windows display language, switchable in
+  the window; every sentence is an id in `installer/text/<en|ru>.json`. A folder with `xc3-install.json` needs only the
   folder. `--selftest [--shots DIR]` builds every screen in both languages and closes itself.
+- The window as a launcher: it remembers the install folder of the last run it started in `xc3-setup.json` beside the
+  setup (beside `XC3-Setup.exe`, beside the AppImage file through `$APPIMAGE`, or in the unpacked tarball's folder) and
+  opens with it. When that folder, or one typed in, holds `xc3-install.json` and the game exe, the form offers Play
+  next to Update (Start's label there). Play starts `xc3.exe` (`xc3` on Linux) with the install folder as its working
+  directory and closes the window. `--dest DIR`, `--base FILE`, `--update FILE`, `--keys FILE` and `--dlc FILE...`
+  (the CLI's names) fill in the form; `XC3-Setup.exe` and `AppRun` pass their arguments on to the window unchanged.
 - `tests/installer_gui_test.py`: event model, form, catalogs, cancel, the self-closing window and one end-to-end run
   of the CLI in `--verify` mode (needs `build/install-test` and `build/extracted/v121`; see its docstring).
 - `tests/installer_test.py`: bookkeeping with fake steps. `tests/installer_e2e.py`: a dev-mode run with the files of
@@ -120,7 +142,9 @@ xc3.ini.example, VERSION  the default ini; the release string (the repository's 
 
 `tools/make_release_linux.py` builds the same setup for Linux and packs it as `XC3-Setup-<version>-linux.AppImage` (the static
 type-2 runtime: no libfuse2 needed on the host). The player makes it executable and starts it; on a Steam Deck, from
-Desktop Mode. Building the release also needs `make` and `pkg-config`. The bundled Tcl/Tk 9.0.4 is rebuilt with
+Desktop Mode. The same folder also ships as `XC3-Setup-<version>-linux.tar.gz` (one top folder, `XC3-Setup-linux/`) for
+launchers and players who unpack instead of mounting: `XC3-Setup-linux/AppRun` starts the same window from wherever
+it was unpacked. Building the release also needs `make` and `pkg-config`. The bundled Tcl/Tk 9.0.4 is rebuilt with
 Xft against the sniper sysroot so Russian text uses system TrueType fonts. The setup builds the game into the folder they pick, as on Windows, and the game is `xc3` there with
 `libSDL3.so.0` beside it. The folder inside the AppImage:
 
@@ -146,7 +170,12 @@ bin/                  xc3_xlate, hactool, ninja, libSDL3.so.0
 - The setup's temp folder is `.setup-temp` inside the install folder (`--temp` changes it): the AppImage is mounted
   read-only, and a Steam Deck's `/home` is often too full for the generated C while the game goes to the SD card.
 - The game keeps Mesa's shader cache in `mesa-cache` beside `xc3` unless `MESA_SHADER_CACHE_DIR` is set, for the
-  same reason: RADV fills its default folder in `~/.cache` up to 1 GB.
+  same reason: RADV fills its default folder in `~/.cache` up to 1 GB. NVIDIA's driver cache goes to `nv-cache` beside
+  `xc3` the same way (`__GL_SHADER_DISK_CACHE_PATH`, with `__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1`) unless the player
+  set `__GL_SHADER_DISK_CACHE_PATH`. Everything the game writes then stays in the install folder.
+- The one known exception is NVIDIA's driver on Windows, which reads no such variable: its shader cache stays under
+  `%LOCALAPPDATA%\NVIDIA` (`DXCache`, `GLCache`), and the setup's prepare step fills it there. Deleting the install
+  folder leaves that cache behind; the driver trims it on its own.
 - The window follows `LANG` for English or Russian, cancels through SIGTERM to the CLI's process group (the CLI handles
   it as Ctrl+Break on Windows) and opens the finished folder with `xdg-open`.
 - Requirements beyond Windows': Linux 6.7 or later (the write watch, `docs/building.md`) and glibc 2.34.
@@ -157,7 +186,8 @@ bin/                  xc3_xlate, hactool, ninja, libSDL3.so.0
 `MOD_MAIN_BASE`, all the runtime reads of the module layout, from `tools/runtime-layout/layout.h`; nothing game-derived
 reaches a runner or a package.
 
-Each run builds `XC3-Setup-<version>-windows.zip` on Windows and `XC3-Setup-<version>-linux.AppImage` on Linux, with
+Each run builds `XC3-Setup-<version>-windows.zip` on Windows and `XC3-Setup-<version>-linux.AppImage` plus
+`XC3-Setup-<version>-linux.tar.gz` on Linux, with
 `check_content`, the check-only installer pass and the window's `--selftest` inside `tools/make_release.py` and
 `tools/make_release_linux.py`. Runners have no GPU, so the host check runs on Mesa's CPU Vulkan driver
 (`.github/actions/software-vulkan`). A second runner then unpacks each package and repeats those checks

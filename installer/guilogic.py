@@ -130,6 +130,10 @@ class Form:
     def update_mode(self):
         return self.installed_state() is not None
 
+    def playable(self):
+        """The folder holds an installation with its game exe: the window offers Play next to Update."""
+        return self.update_mode() and game_exe(self.dest.strip()).is_file()
+
     def problems(self):
         """Ids of the entries that are missing or wrong, in screen order. A folder with xc3-install.json needs only
         itself; the CLI asks for the game files when it must extract again."""
@@ -170,6 +174,70 @@ class Form:
         if verify:
             cmd.append('--verify')
         return cmd
+
+
+def prefill(args):
+    """Form values from the window's command line (gui.py main: --base, --update, --dlc, --keys, --dest, the CLI's
+    names), so a launcher can open the window filled in. Values the command line leaves out stay empty."""
+    values = {name: str(getattr(args, name) or '') for name in ('base', 'update', 'keys', 'dest')}
+    values['dlc'] = ';'.join(str(p) for p in (args.dlc or []))
+    return values
+
+
+# ---- the remembered install folder and Play ----------------------------------------------------------------------
+
+REMEMBER = 'xc3-setup.json'
+
+
+def remember_path(layout, environ=None):
+    """Where the window keeps the last install folder: beside the setup. That is beside the AppImage file when the
+    window runs from one ($APPIMAGE; its own folder is a read-only mount), build/ in a repository, else the release
+    folder (beside XC3-Setup.exe, or the unpacked Linux tarball)."""
+    environ = os.environ if environ is None else environ
+    if environ.get('APPIMAGE'):
+        return Path(environ['APPIMAGE']).resolve().parent / REMEMBER
+    return Path(layout.root) / ('build' if layout.dev else '') / REMEMBER
+
+
+def load_last_dest(path):
+    """The remembered install folder, or '' when nothing was saved or the file is unreadable."""
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return ''
+    dest = data.get('dest') if isinstance(data, dict) else None
+    return dest if isinstance(dest, str) else ''
+
+
+def save_last_dest(path, dest):
+    """Remembers dest; a folder the setup cannot write to (a read-only location) only loses the convenience."""
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps({'dest': str(dest)}) + '\n', encoding='utf-8')
+        return True
+    except OSError:
+        return False
+
+
+def game_exe(dest):
+    return Path(dest) / ('xc3.exe' if os.name == 'nt' else 'xc3')
+
+
+def play(dest):
+    """Starts the installed game with the install folder as its working directory, detached from the window (closing
+    the setup leaves it running). Returns the Popen, or None when the folder has no game exe or it cannot start."""
+    exe = game_exe(dest)
+    if not exe.is_file():
+        return None
+    if os.name == 'nt':
+        extra = {'creationflags': 0x00000008 | CREATE_NEW_PROCESS_GROUP}   # DETACHED_PROCESS
+    else:
+        extra = {'start_new_session': True}
+    try:
+        return subprocess.Popen([str(exe)], cwd=str(Path(dest)), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, close_fds=True, **extra)
+    except OSError:
+        return None
 
 
 # ---- events -> state ---------------------------------------------------------------------------------------------

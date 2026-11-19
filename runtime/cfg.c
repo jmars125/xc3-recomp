@@ -151,6 +151,8 @@ static int is_known(const char *key) {
     return 0;
 }
 
+int cfg_known(const char *key) { return is_known(key); }
+
 static void clear(void) {
     for (int i = 0; i < n_entries; i++) free(entries[i].key), free(entries[i].value);
     n_entries = 0;
@@ -611,6 +613,8 @@ int cfg_save_to(const char *path) {
 }
 
 static char ini_path[1024];
+
+void cfg_set_path(const char *path) { snprintf(ini_path, sizeof ini_path, "%s", path); }
 
 static int find_ini(void) {
     if (ini_path[0]) return 1;

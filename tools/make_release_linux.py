@@ -21,7 +21,9 @@ the .NET 10 SDK and Python 3.12+ with Pillow (.venv). The folder holds:
     recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, VERSION
     AppRun, xc3-setup.desktop, xc3-setup.png   the AppImage entry: python/bin/python3 -m installer.gui
 
---appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --prove compiles
+--appimage packs the folder with appimagetool and the static type-2 runtime (no libfuse2 on the host). --tarball packs
+the same folder as a .tar.gz with one top folder, XC3-Setup-linux/, for launchers that unpack instead of mounting: its
+AppRun runs from anywhere. --prove compiles
 generated/upd (2.0.0) and links build/release-linux-check/xc3 with the folder's tools only, then runs the probes beside it;
 it reads game-derived files, so it is a local step, never CI's. Everything else needs no game files
 (.github/workflows/release.yml): libxc3rt.a takes the module layout from tools/runtime-layout.
@@ -427,7 +429,7 @@ exec "$HERE/python/bin/python3" -m installer.gui "$@"
 DESKTOP = '''[Desktop Entry]
 Type=Application
 Name=XC3 Recomp Setup
-Comment=Builds Tears of the Kingdom for this PC from your own game files
+Comment=Builds Xenoblade Chronicles 3 for this PC from your own game files
 Exec=AppRun
 Icon=xc3-setup
 Categories=Game;
@@ -450,6 +452,23 @@ def write_appimage(out, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, ARCH='x86_64', APPIMAGE_EXTRACT_AND_RUN='1')
     run([tool, '--no-appstream', '--runtime-file', runtime, out, path], env=env)
+    print(f'{path}: {mr.mib(path.stat().st_size)}')
+
+
+def write_tarball(out, path):
+    """The folder as one gzip tarball under the top folder XC3-Setup-linux/, symlinks kept as links (llvm/sysroot
+    and .DirIcon hold relative ones) and modes kept (AppRun, python, llvm/bin), owners reset to 0 so the archive
+    does not carry the build machine's user."""
+    import tarfile
+
+    def anon(info):
+        info.uid = info.gid = 0
+        info.uname = info.gname = ''
+        return info
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(path, 'w:gz', compresslevel=6) as t:
+        t.add(out, arcname='XC3-Setup-linux', filter=anon)
     print(f'{path}: {mr.mib(path.stat().st_size)}')
 
 
@@ -554,6 +573,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--out', type=Path, required=True, help='release folder (replaced)')
     ap.add_argument('--appimage', type=Path, help='also pack the folder as this AppImage')
+    ap.add_argument('--tarball', type=Path, help='also pack the folder as this .tar.gz (top folder XC3-Setup-linux/)')
     ap.add_argument('--prove', action='store_true', help='only run the compile-and-probe check on an existing folder')
     args = ap.parse_args()
     out = args.out.resolve()
@@ -579,6 +599,8 @@ def main():
     mr.sizes(out)
     if args.appimage:
         write_appimage(out, args.appimage.resolve())
+    if args.tarball:
+        write_tarball(out, args.tarball.resolve())
 
 
 if __name__ == '__main__':
