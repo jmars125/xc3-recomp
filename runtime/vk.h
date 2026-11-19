@@ -126,6 +126,7 @@ typedef struct {
                                        // resolution draws less than the targets hold); 0: all of it
 } VkTupFrame;
 int vk_tup_mode(void);                           // XC3_UPSCALER as a VK_TUP_* mode
+int vk_tup_running(void);                        // the VK_TUP_* mode that ran in the last half second
 int vk_tup_role(const GfxShader *fs);            // VK_TUP_FIRST..LAST for the game's reconstruction draws
 int vk_tup_record(VkCommandBuffer cb, const VkTupFrame *f);   // outside a pass; 0 = nothing recorded
 int vk_tup_result(VkTupImage *o);                // the image vk_tup_record wrote for own_out

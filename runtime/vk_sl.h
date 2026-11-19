@@ -36,6 +36,7 @@ PFN_vkCreateDevice vk_sl_create_device(VkInstance inst);
 void vk_sl_device(VkInstance inst, VkPhysicalDevice phys, VkDevice dev, uint32_t family, uint32_t first_queue, int exts_ok);
 int vk_sl_ready(void);                                      // DLSS can run
 int vk_sl_fg_ready(void);                                   // DLSS Frame Generation can run
+const char *vk_sl_dlss_mode(void);   // the last evaluation's DLSS mode ("DLAA", "quality", ...), NULL before one
 PFN_vkVoidFunction vk_sl_proc(VkDevice dev, const char *name);   // Streamline's proxy of a device function, or NULL
 // Streamline's proxy of an instance function while DLSS Frame Generation is wanted (the window's surface), or NULL.
 PFN_vkVoidFunction vk_sl_instance_proc(VkInstance inst, const char *name);

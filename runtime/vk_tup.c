@@ -122,6 +122,13 @@ int vk_tup_mode(void) {
     return dlss || dlaa || !strcmp(u, "fsr3") ? VK_TUP_FSR3 : VK_TUP_OFF;
 }
 
+// The upscaler that ran in the last half second (VK_TUP_OFF: none, the game's own reconstruction), for the overlay
+// (menu.cpp perf_picture). Read without the lock: two words the replay thread writes once a frame.
+int vk_tup_running(void) {
+    uint64_t last = T.last_ns, now = kern_now_ns();
+    return last && now >= last && now - last < 500000000ull ? T.mode : VK_TUP_OFF;
+}
+
 static const char *mode_name(int m) { return m == VK_TUP_DLSS ? "DLSS" : m == VK_TUP_DLAA ? "DLAA" : "FSR 3"; }
 
 static int knob(const char *key) {   // test keys, unset by default

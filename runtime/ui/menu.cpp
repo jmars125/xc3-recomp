@@ -40,6 +40,8 @@ void vk_queue_unlock(void);
 void res_sizes(unsigned out[2], unsigned scene[2]);
 int res_scene_whole(void);
 int vk_sl_ready(void);
+const char *vk_sl_dlss_mode(void);
+int vk_tup_running(void);   // VK_TUP_* (vk.h): 0 off, 1 FSR 3, 2 DLSS, 3 DLAA
 double frame_step_limit_hz(void);
 extern const int rt_game_version;
 extern const char rt_game_name[];   // the game version shown, "2.0.0" (tools/build_game.py)
@@ -1025,13 +1027,32 @@ static void perf_label(UiTextId label, const ImVec4 &c) {
 
 static float perf_gb(float mb) { return mb < 0 ? -1 : mb / 1024; }
 
-// The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), how the
-// present scales the image to the window (gfx_present.c, the last present), the frame limit and the presentation mode
-// in use, and frame generation: the generator running and the frames shown per drawn one (vk_fg_shown_ratio).
+// The temporal upscaler that ran last (vk_tup.c vk_tup_running): DLSS with the mode Streamline was given, which is
+// DLAA only when the scene is drawn whole, FSR 3, or none (the game's own reconstruction). While the Upscaler setting
+// waits for a restart (upscaler_note), the one chosen follows. The overlay had no such line, so DLAA running looked the
+// same as DLAA waiting for a restart (#96).
+static void perf_upscaler(char *b, size_t n) {
+    char run[48];
+    int m = vk_tup_running();
+    const char *mode = vk_sl_dlss_mode();
+    if ((m == 2 || m == 3) && mode && !strcmp(mode, "DLAA")) snprintf(run, sizeof run, "%s", menu_text(UI_MENU_UPSCALER_DLAA));
+    else if (m == 2 || m == 3) snprintf(run, sizeof run, "%s %s", menu_text(UI_MENU_UPSCALER_DLSS), mode ? mode : "");
+    else if (m == 1) snprintf(run, sizeof run, "%s", menu_text(UI_MENU_UPSCALER_FSR3));
+    else snprintf(run, sizeof run, "%s", menu_text(UI_MENU_OV_TUP_GAME));
+    const char *u = cfg_value("XC3_UPSCALER");
+    UiTextId chosen = !strcmp(u, "dlaa") ? UI_MENU_UPSCALER_DLAA : UI_MENU_UPSCALER_DLSS;
+    if (upscaler_note()) snprintf(b, n, menu_text(UI_MENU_OV_FMT_TUP_PENDING), run, menu_text(chosen));
+    else snprintf(b, n, "%s", run);
+}
+
+// The picture lines: the window, the game image the present shows and the 3D scene it holds (resolution.c), the
+// temporal upscaler (perf_upscaler), how the present scales the image to the window (gfx_present.c, the last present),
+// the frame limit and the presentation mode in use, and frame generation: the generator running and the frames shown
+// per drawn one (vk_fg_shown_ratio).
 static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     unsigned out[2], scene[2];
     res_sizes(out, scene);
-    char v[7][64];
+    char v[8][64];
     snprintf(v[0], sizeof v[0], menu_text(UI_MENU_OV_FMT_SIZE), t->width, t->height);
     snprintf(v[1], sizeof v[1], menu_text(UI_MENU_OV_FMT_SIZE), (unsigned)t->image_w, (unsigned)t->image_h);
     snprintf(v[2], sizeof v[2], menu_text(UI_MENU_OV_FMT_SCENE), scene[0], scene[1], scene[0] * 100.0 / out[0]);
@@ -1049,14 +1070,17 @@ static void perf_picture(const MenuTarget *t, const ImVec4 &c) {
     const char *fg = vk_fg_status();
     if (fg) snprintf(v[6], sizeof v[6], "%s x%.1f", fg, vk_fg_shown_ratio());
     else snprintf(v[6], sizeof v[6], "%s", menu_text(UI_MENU_FRAME_GEN_OFF));
-    static const UiTextId labels[7] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE, UI_MENU_OV_SCALING,
-                                       UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT, UI_MENU_FRAME_GEN};
+    perf_upscaler(v[7], sizeof v[7]);
+    static const UiTextId labels[8] = {UI_MENU_OV_WINDOW, UI_MENU_OV_OUTPUT, UI_MENU_OV_SCENE, UI_MENU_OV_SCALING,
+                                       UI_MENU_OV_LIMIT, UI_MENU_OV_PRESENT, UI_MENU_FRAME_GEN, UI_MENU_UPSCALER};
+    static const int order[8] = {0, 1, 2, 7, 3, 4, 5, 6};   // the upscaler after the 3D scene it works on
     if (!ImGui::BeginTable("##perfp", 2, ImGuiTableFlags_SizingFixedFit)) return;
     float vw = 0;
     for (auto &s : v) vw = fmaxf(vw, ImGui::CalcTextSize(s).x);
     ImGui::TableSetupColumn("##p0", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("##p1", ImGuiTableColumnFlags_WidthFixed, vw);
-    for (int i = 0; i < 7; i++) {
+    for (int k = 0; k < 8; k++) {
+        int i = order[k];
         perf_label(labels[i], c);
         ImGui::TableNextColumn();
         perf_right(v[i], false);
