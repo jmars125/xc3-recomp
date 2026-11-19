@@ -128,7 +128,8 @@ static void present_image(const tex_t *t, const int crop[4], uint64_t at_ns, uin
         j.has_crop = 1;
         for (int i = 0; i < 4; i++) j.crop[i] = crop[i];
     }
-    vk_upload_flush(0);   // an upload vk_texture_get just recorded goes before the blit
+    vk_exec_tup_present(img->image, img->format, img->width, img->height);
+    vk_upload_flush(0);   // an upload vk_texture_get just recorded, and the fixup, go before the blit
     plat_mutex_lock(&pl);
     if (!present_thread) {
         if (!plat_thread_spawn(present_main, NULL, "vk present", 0)) rt_fatal("vk: cannot start the present thread");

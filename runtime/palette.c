@@ -42,10 +42,10 @@ typedef struct {
     int mirrored;                          // the left half of a pair of palettes
 } Diamond;
 
-typedef struct { const char *file; Diamond d[4]; int n; } Layout;
+typedef struct { const char *file, *future_redeemed; Diamond d[4]; int n; } Layout;
 
 static const Layout layouts[] = {
-    {"mnu417_cont01.wilay",
+    {"mnu417_cont01.wilay", "mnu403_cont01.wilay",
      {{"mc_Btn", {"mc_BtnR01", "mc_BtnR02", "mc_BtnR04", "mc_BtnR03"}, "mc_Info",
        {"mc_InfoR01", "mc_InfoR02", "mc_InfoR04", "mc_InfoR03"}, 0},
       {"mc_Btn", {"mc_BtnL01", "mc_BtnL02", "mc_BtnL04", "mc_BtnL03"}, "mc_Info",
@@ -53,15 +53,23 @@ static const Layout layouts[] = {
       {"mc_InterLinkAnim", {"mc_InterLinkR01", "mc_InterLinkR02", NULL, "mc_InterLinkR03"}, NULL, {0}, 0},
       {"mc_InterLinkAnim", {"mc_InterLinkL01", "mc_InterLinkL02", NULL, "mc_InterLinkL03"}, NULL, {0}, 1}},
      4},
-    {"mnu414_cont06.wilay",
+    {"mnu414_cont06.wilay", "mnu414_cont10.wilay",
      {{"mc_Btn", {"mc_BtnR01", "mc_BtnR02", NULL, "mc_BtnR03"}, "mc_Info", {"mc_InfoR01", "mc_InfoR02", NULL, "mc_InfoR03"},
        0}},
      1},
-    {"mnu501_cont01.wilay",
+    {"mnu501_cont01.wilay", NULL,
      {{"mc_ShortcutAll", {"mc_IconBtnX", "mc_IconBtnY", "mc_IconBtnA", "mc_IconBtnB"}, "mc_ShortcutAll",
        {"mc_BtnX", "mc_BtnY", "mc_BtnA", "mc_BtnB"}, 0}},
      1},
 };
+
+static const Layout *find_layout(const char *name) {
+    for (size_t i = 0; i < sizeof layouts / sizeof *layouts; i++) {
+        const Layout *l = &layouts[i];
+        if (!strcmp(l->file, name) || (l->future_redeemed && !strcmp(l->future_redeemed, name))) return l;
+    }
+    return NULL;
+}
 
 typedef struct { uint8_t *p; size_t n; uint32_t syms, nsyms, tracks, rows, ntracks; } Lagp;
 
@@ -228,9 +236,7 @@ static int diamond_moves(const Lagp *f, const Diamond *d, Move *m, int *n) {
 }
 
 int palette_patch(uint8_t *file, size_t size, const char *name) {
-    const Layout *l = NULL;
-    for (size_t i = 0; i < sizeof layouts / sizeof *layouts; i++)
-        if (!strcmp(layouts[i].file, name)) l = &layouts[i];
+    const Layout *l = find_layout(name);
     Lagp f;
     if (!l || !lagp_open(&f, file, size)) return 0;
     static Move m[MAX_MOVES];   // under prompts.c's lock
@@ -245,7 +251,5 @@ int palette_patch(uint8_t *file, size_t size, const char *name) {
 }
 
 int palette_file(const char *name) {
-    for (size_t i = 0; i < sizeof layouts / sizeof *layouts; i++)
-        if (!strncmp(layouts[i].file, name, 28)) return 1;
-    return 0;
+    return find_layout(name) != NULL;
 }

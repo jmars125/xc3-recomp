@@ -25,6 +25,7 @@
 #include "cfg.h"
 #include "fs.h"
 #include "host.h"
+#include "ov.h"
 #include "romfs_config.h"
 #include "romfs_path.h"
 #include "platform/platform.h"
@@ -363,7 +364,9 @@ static void heapdef_overlay(void) {
 // Every folder named romfs under the mods folder (XC3_MODS, default "mods" next to xc3.exe; "0" = off) is one mod, as
 // emulators unpack them: mods/<name>/romfs/..., or deeper (mods/contents/<title id>/<name>/romfs). Its files replace
 // or add RomFS files, with no manifest and no hash check. Mods apply in path order; a file a manifest overlay or an
-// earlier mod already serves is skipped. exefs folders patch ARM code, which this build does not run: skipped.
+// earlier mod already serves is skipped. exefs folders patch ARM code, which this build does not run: skipped. Most
+// game files are entries of the bf3.arh archives, not RomFS files: a mod file with an archive entry's path is added
+// to the RomFS, and mod_archive.c makes the game read it in place of the entry.
 typedef struct { char **paths; size_t n; } PathList;
 
 static void path_push(PathList *l, const char *p) {
@@ -412,7 +415,15 @@ static int served(uint64_t i, const char *name) {
     return 0;
 }
 
-// Adds the files under dir (romfs-relative prefix rel) of one mod; counts into *used and *skipped.
+// The game asks for lower-case paths (every RomFS and archive path is lower case): a mod file named in another case
+// is served under its lower-case path, as the emulators' case-insensitive file systems do.
+static void lower_case(char *s) {
+    for (; *s; s++)
+        if (*s >= 'A' && *s <= 'Z') *s = (char)(*s - 'A' + 'a');
+}
+
+// Adds the files under dir (romfs-relative prefix rel) of one mod; counts into *used and *skipped. The top-level
+// skyline folder holds Skyline plugins (xc3-file-loader among them), Switch code this build does not run: skipped.
 static void mod_files(const char *dir, const char *rel, size_t *used, size_t *skipped) {
     Listing l = list_dir(dir);
     char name[4200];
@@ -421,6 +432,7 @@ static void mod_files(const char *dir, const char *rel, size_t *used, size_t *sk
         if (snprintf(name, sizeof name, "%s%s", rel, base_name(file)) >= (int)sizeof name ||
             !romfs_path_valid_relative(name))
             continue;
+        lower_case(name);
         uint64_t i = lower(name);
         if (!(i < file_count && !strcmp(entry_name(entry(i)), name))) i = ADDED;
         if (served(i, name)) {
@@ -446,8 +458,15 @@ static void mod_files(const char *dir, const char *rel, size_t *used, size_t *sk
         ++*used;
     }
     for (size_t k = 0; k < l.dirs.n; k++) {
-        if (snprintf(name, sizeof name, "%s%s/", rel, base_name(l.dirs.paths[k])) < (int)sizeof name)
+        if (!*rel && !strcasecmp(base_name(l.dirs.paths[k]), "skyline")) {
+            rt_log("mods: %s skipped: Skyline plugins patch the Switch code, which this build replaces",
+                   l.dirs.paths[k]);
+            continue;
+        }
+        if (snprintf(name, sizeof name, "%s%s/", rel, base_name(l.dirs.paths[k])) < (int)sizeof name) {
+            lower_case(name);
             mod_files(l.dirs.paths[k], name, used, skipped);
+        }
     }
     list_free(&l.dirs);
     list_free(&l.files);
@@ -490,6 +509,17 @@ static void mods_load(void) {
     rt_log("mods: %zu files from %s", noverlay - before, dir);
 }
 
+// The language pack of the game language (ov.h ov_language_pack), after the mods: a mod that replaces one of its files
+// wins, so a fix can be laid over a pack. ov_system.c game_language makes the game run in the language the pack replaces.
+static void language_pack_load(void) {
+    char dir[2100];
+    const char *code = ov_language();
+    if (!ov_language_pack(code, dir, sizeof dir)) return;
+    size_t before = noverlay;
+    mods_find(dir, 4);
+    rt_log("mods: language pack %s: %zu files from %s", code, noverlay - before, dir);
+}
+
 static void overlay_init(void) {
     // XC3_ROMFS_PATCHES unset: romfs-patches next to romfs-index.bin if it has a manifest (tools/make_romfs_patches.py)
     char def[2100];
@@ -503,6 +533,7 @@ static void overlay_init(void) {
     for (int i = 0; i < 2; i++)
         if (dirs[i] && *dirs[i] && strcmp(dirs[i], "0")) overlay_load(dirs[i]);
     mods_load();
+    language_pack_load();
     heapdef_overlay();
     added_init();
     if (noverlay) qsort(overlays, noverlay, sizeof *overlays, overlay_order);
@@ -595,6 +626,7 @@ static void init_once(void *param) {
         }
     }
     overlay_init();
+    mod_archive_init();
     rt_log("RomFS ready: %llu files, %zu overlays, %zu added, %.2f s", (unsigned long long)file_count, noverlay,
            nadded, now_s() - t0);
 #endif
@@ -634,6 +666,39 @@ const char *romfs_overlay(size_t k, const char **file, uint64_t *size, int *is_a
     *size = overlays[k].size;
     *is_added = overlays[k].index >= file_count;
     return overlays[k].name;
+}
+
+size_t romfs_added_count(void) { return nadded; }
+
+const char *romfs_added(size_t k, const char **file, uint64_t *size) {
+    if (k >= nadded) return NULL;
+    const Overlay *o = &overlays[overlay_slot(file_count + k) - 1];
+    if (file) *file = o->path;
+    if (size) *size = o->size;
+    return added[k];
+}
+
+int romfs_added_has(const char *p) {
+    size_t k = added_lower(p);
+    return k < nadded && !strcmp(added[k], p);
+}
+
+uint8_t *romfs_read_original(const char *p, uint64_t *size) {
+    uint64_t i = lower(p);
+    if (i >= file_count || strcmp(entry_name(entry(i)), p)) return NULL;
+    Entry e = entry(i);
+    uint8_t *b = e.size <= (256u << 20) ? malloc(e.size ? (size_t)e.size : 1) : NULL;
+    for (uint64_t done = 0; b && done < e.size;) {
+        uint32_t chunk = e.size - done > READ_CHUNK ? READ_CHUNK : (uint32_t)(e.size - done);
+        int64_t r = read_at(image, b + done, chunk, e.offset + done);
+        if (r <= 0) {
+            free(b);
+            return NULL;
+        }
+        done += (uint64_t)r;
+    }
+    if (b) *size = e.size;
+    return b;
 }
 
 int romfs_owns(const char *path) {

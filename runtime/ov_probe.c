@@ -265,7 +265,7 @@ static void probe_oe(void) {
         {NULL, "en-US", "en-US"}, {NULL, "be-BY", "en-US"}, {NULL, "xx", "en-US"},     {NULL, "ja-JP", "ja"},
         {NULL, "fr-CA", "fr-CA"}, {NULL, "es-MX", "es-419"}, {NULL, "es_ES", "es"},     {NULL, "zh-Hant-TW", "zh-Hant"},
         {NULL, "zh-CN", "zh-Hans"}, {NULL, "en-GB", "en-GB"}, {NULL, "ru", "ru"},       {"ja", "fr-FR", "ja"},
-        {"en-US", NULL, "en-US"}};
+        {"en-US", NULL, "en-US"}, {NULL, "pt-BR", "es"}, {NULL, "pt-PT", "es"}};   // no language pack: Spanish
     int bad = 0;
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         set_env("XC3_LANG", cases[i].lang);
@@ -829,13 +829,17 @@ static void probe_fonts(void) {
            (unsigned long long)size, path);
 }
 
-// The host catalog (ui_text.c): every menu id has its own English and Russian text, the software keyboard keeps its
+// The host catalog (ui_text.c): every menu id has its own English, Russian and Brazilian Portuguese text, the software keyboard keeps its
 // game-language rows, and menu_text follows XC3_MENU_LANG.
 static void probe_menu_text(void) {
-    static const char *const langs[] = {"en", "ja", "fr", "de", "it", "es", "nl", "pt", "ru", "zh-Hans", "zh-Hant", "ko"};
+    static const char *const langs[] = {"en", "ja", "fr", "de", "it", "es", "nl", "pt", "pt-BR", "ru", "zh-Hans", "zh-Hant",
+                                        "ko"};
     for (int id = UI_MENU_FIRST; id <= UI_MENU_LAST_ID; id++) {
-        CHECK(ui_text_defined("en", (UiTextId)id) && ui_text_defined("ru", (UiTextId)id), "menu text id %d lacks en or ru", id);
-        CHECK(*ui_text_in("en", (UiTextId)id) && *ui_text_in("ru", (UiTextId)id), "menu text id %d is empty", id);
+        CHECK(ui_text_defined("en", (UiTextId)id) && ui_text_defined("ru", (UiTextId)id) &&
+                  ui_text_defined("pt-BR", (UiTextId)id),
+              "menu text id %d lacks en, ru or pt-BR", id);
+        CHECK(*ui_text_in("en", (UiTextId)id) && *ui_text_in("ru", (UiTextId)id) && *ui_text_in("pt-BR", (UiTextId)id),
+              "menu text id %d is empty", id);
     }
     CHECK(!ui_text_defined("en", UI_TEXT_COUNT) && !*ui_text_in("ru", UI_TEXT_COUNT), "an id past the catalog gives text");
     // other languages fall back to English for the menu, and keep their own keyboard texts
@@ -843,7 +847,7 @@ static void probe_menu_text(void) {
     CHECK(!strcmp(ui_text_in("ru", UI_SWKBD_OK), "ОК") && !strcmp(ui_text_in("de", UI_SWKBD_CANCEL), "Abbrechen") &&
           !strcmp(ui_text_in("en", UI_SWKBD_OK), "OK"), "keyboard texts changed");
     // language names: the same string in every row
-    for (int id = UI_MENU_LANGNAME_EN; id <= UI_MENU_LANGNAME_KO; id++)
+    for (int id = UI_MENU_LANGNAME_EN; id <= UI_MENU_LANGNAME_PT_BR; id++)
         for (size_t i = 1; i < sizeof langs / sizeof *langs; i++)
             CHECK(!strcmp(ui_text_in(langs[i], (UiTextId)id), ui_text_in("en", (UiTextId)id)), "language name %d differs in %s", id, langs[i]);
     CHECK(!strcmp(ui_text_in("en", UI_MENU_LANGNAME_RU), "Русский"), "Russian is not shown as Russian");
@@ -853,12 +857,14 @@ static void probe_menu_text(void) {
     // menu_text follows the setting live
     cfg_set("XC3_MENU_LANG", "ru");
     CHECK(menu_text(UI_MENU_CONTINUE) == ui_text_in("ru", UI_MENU_CONTINUE), "menu_text ignores MENU_LANG=ru");
+    cfg_set("XC3_MENU_LANG", "pt-BR");
+    CHECK(menu_text(UI_MENU_CONTINUE) == ui_text_in("pt-BR", UI_MENU_CONTINUE), "menu_text ignores MENU_LANG=pt-BR");
     cfg_set("XC3_MENU_LANG", "en");
     CHECK(menu_text(UI_MENU_CONTINUE) == ui_text_in("en", UI_MENU_CONTINUE), "menu_text did not follow MENU_LANG=en");
     cfg_set("XC3_MENU_LANG", "");
     const char *sys = plat_ui_language();
-    int ru = !strncmp(sys, "ru", 2);
-    CHECK(menu_text(UI_MENU_CONTINUE) == ui_text_in(ru ? "ru" : "en", UI_MENU_CONTINUE), "menu_text auto ignores the system language");
+    const char *want = !strncmp(sys, "ru", 2) ? "ru" : !strncmp(sys, "pt", 2) ? "pt-BR" : "en";
+    CHECK(menu_text(UI_MENU_CONTINUE) == ui_text_in(want, UI_MENU_CONTINUE), "menu_text auto ignores the system language");
 }
 
 static void probe_main(Cpu *c) {

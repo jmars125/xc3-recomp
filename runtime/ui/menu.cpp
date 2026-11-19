@@ -26,6 +26,7 @@ extern "C" {
 #include "cfg.h"
 #include "input.h"
 #include "input_map.h"
+#include "ov.h"
 #include "perfmon.h"
 #include "platform/platform.h"
 #include "sysinfo.h"
@@ -496,27 +497,34 @@ static void row_gpu(void) {
     opt_choice_list("XC3_GPU_INDEX", UI_MENU_GPU, vals, names, g_gpu_n + 1, UI_MENU_GPU_DESC);
 }
 
-// The game language: one entry per language XC3 ships (a Switch code that names it), each under its own name. The
-// Switch's Portuguese is not among them.
+// The game language: one entry per language XC3 ships (a Switch code that names it), each under its own name, and
+// Brazilian Portuguese when a language pack provides it (ov.h ov_language_pack).
 static void row_game_lang(void) {
     static const struct { const char *code; UiTextId name; } langs[] = {
         {"en-US", UI_MENU_LANGNAME_EN}, {"ja", UI_MENU_LANGNAME_JA}, {"fr", UI_MENU_LANGNAME_FR},
         {"de", UI_MENU_LANGNAME_DE}, {"it", UI_MENU_LANGNAME_IT}, {"es", UI_MENU_LANGNAME_ES},
         {"nl", UI_MENU_LANGNAME_NL}, {"ru", UI_MENU_LANGNAME_RU},
         {"zh-CN", UI_MENU_LANGNAME_ZH_HANS}, {"zh-TW", UI_MENU_LANGNAME_ZH_HANT}, {"ko", UI_MENU_LANGNAME_KO},
+        {"pt-BR", UI_MENU_LANGNAME_PT_BR},
     };
+    static int pt_pack = -1;
+    if (pt_pack < 0) {
+        char dir[2100];
+        pt_pack = ov_language_pack("pt-BR", dir, sizeof dir) != NULL;
+    }
+    int n = (int)(sizeof langs / sizeof *langs) + 1 - (pt_pack ? 0 : 1);
     enum { N = sizeof langs / sizeof *langs + 1 };
     const char *vals[N], *names[N];
     vals[0] = "";
     names[0] = menu_text(UI_MENU_GAME_LANG_AUTO);
     const char *now = cfg_value("XC3_LANG");
     int cur = *now ? -1 : 0;
-    for (int i = 1; i < N; i++) {
+    for (int i = 1; i < n; i++) {
         vals[i] = langs[i - 1].code;
         names[i] = menu_text(langs[i - 1].name);
         if (*now && !strcmp(ui_text_lang(now), ui_text_lang(vals[i]))) cur = i;   // en-GB is English too
     }
-    opt_choice_list("XC3_LANG", UI_MENU_GAME_LANG, vals, names, N, UI_MENU_GAME_LANG_DESC, cur);
+    opt_choice_list("XC3_LANG", UI_MENU_GAME_LANG, vals, names, n, UI_MENU_GAME_LANG_DESC, cur);
 }
 
 // The frame limit (frame_rate.c): unset, the older fps60 = 0 still means 30. The monitor choice shows the rate it gives.
@@ -615,6 +623,7 @@ static void tab_game(float scale) {
     row_game_lang();
     static const UiTextId mode[] = {UI_MENU_MODE_DOCKED, UI_MENU_MODE_HANDHELD};
     opt_choice("XC3_OPERATION_MODE", UI_MENU_OPERATION_MODE, mode, 2, UI_MENU_OPERATION_MODE_DESC);
+    opt_toggle("XC3_MOD_ARCHIVE", UI_MENU_MOD_ARCHIVE, UI_MENU_MOD_ARCHIVE_DESC);
     opt_end();
 }
 
@@ -653,8 +662,9 @@ static void tab_controls(float scale) {
 
 static void tab_menu(float scale) {
     opt_begin("##menu", scale);
-    static const UiTextId langs[] = {UI_MENU_MENU_LANG_AUTO, UI_MENU_LANGNAME_EN, UI_MENU_LANGNAME_RU};
-    opt_choice("XC3_MENU_LANG", UI_MENU_MENU_LANG, langs, 3, UI_MENU_MENU_LANG_DESC);
+    static const UiTextId langs[] = {UI_MENU_MENU_LANG_AUTO, UI_MENU_LANGNAME_EN, UI_MENU_LANGNAME_RU,
+                                     UI_MENU_LANGNAME_PT_BR};
+    opt_choice("XC3_MENU_LANG", UI_MENU_MENU_LANG, langs, 4, UI_MENU_MENU_LANG_DESC);
     opt_end();
 }
 

@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "cfg.h"
@@ -75,7 +76,8 @@ static const char *switch_language(const char *tag) {
     if (!strcmp(lang, "ja") || !strcmp(lang, "de") || !strcmp(lang, "it") || !strcmp(lang, "nl") ||
         !strcmp(lang, "ru") || !strcmp(lang, "ko") || !strcmp(lang, "pt"))
         return !strcmp(lang, "ja") ? "ja" : !strcmp(lang, "de") ? "de" : !strcmp(lang, "it") ? "it"
-             : !strcmp(lang, "nl") ? "nl" : !strcmp(lang, "ru") ? "ru" : !strcmp(lang, "ko") ? "ko" : "pt";
+             : !strcmp(lang, "nl") ? "nl" : !strcmp(lang, "ru") ? "ru" : !strcmp(lang, "ko") ? "ko"
+             : !strcmp(region, "BR") ? "pt-BR" : "pt";
     if (!strcmp(lang, "fr")) return !strcmp(region, "CA") ? "fr-CA" : "fr";
     if (!strcmp(lang, "es")) return *region && strcmp(region, "ES") ? "es-419" : "es";
     if (!strcmp(lang, "zh"))
@@ -106,10 +108,76 @@ const char *ov_language(void) {
     return switch_language(tag);
 }
 
+// ---- language packs
+const char *ov_language_pack(const char *code, char *out, size_t cap) {
+    if (!code || !*code || strchr(code, '/') || strchr(code, '\\') || strstr(code, "..")) return NULL;
+    char exe[2048];
+    if (!plat_exe_path(exe, sizeof exe)) return NULL;
+    char *sep = plat_last_sep(exe);
+    if (sep) sep[1] = 0;
+    else exe[0] = 0;
+    if (snprintf(out, cap, "%slanguages/%s", exe, code) >= (int)cap) return NULL;
+    return plat_dir_exists(out) ? out : NULL;
+}
+
+// The bdat language folders of the shipped languages and their Switch codes.
+static const struct { const char *folder, *code; } bdat_langs[] = {
+    {"gb", "en-GB"}, {"jp", "ja"}, {"fr", "fr"}, {"ge", "de"}, {"it", "it"}, {"sp", "es"}, {"kr", "ko"},
+    {"cn", "zh-Hans"}, {"tw", "zh-Hant"},
+};
+
+typedef struct { char found[16]; int depth; } PackScan;
+
+static int pack_entry(const char *name, int kind, uint64_t size, void *ctx);
+
+// Looks for <dir>/.../romfs/bdat/<folder>: the shipped language whose text the pack replaces.
+static void pack_scan(const char *dir, PackScan *s) {
+    plat_fs_list(dir, pack_entry, &(struct { const char *dir; PackScan *s; }){dir, s});
+}
+
+static int pack_entry(const char *name, int kind, uint64_t size, void *ctx) {
+    (void)size;
+    struct { const char *dir; PackScan *s; } *c = ctx;
+    if (kind != PLAT_FS_DIR || *c->s->found) return 1;
+    char path[2400];
+    if (snprintf(path, sizeof path, "%s/%s", c->dir, name) >= (int)sizeof path) return 1;
+    if (!strcasecmp(name, "romfs")) {
+        for (size_t i = 0; i < sizeof bdat_langs / sizeof *bdat_langs && !*c->s->found; i++) {
+            char b[2500];
+            snprintf(b, sizeof b, "%s/bdat/%s", path, bdat_langs[i].folder);
+            if (plat_dir_exists(b)) snprintf(c->s->found, sizeof c->s->found, "%s", bdat_langs[i].code);
+        }
+    } else if (c->s->depth < 4 && strcasecmp(name, "exefs") && strcasecmp(name, "skyline")) {
+        c->s->depth++;
+        pack_scan(path, c->s);
+        c->s->depth--;
+    }
+    return 1;
+}
+
+// The shipped language a pack for code stands in for, or NULL without a pack. Read once: the language takes a restart.
+static const char *pack_base(const char *code) {
+    static char code_seen[16], base[16];
+    static int done;
+    if (done && !strcmp(code_seen, code)) return *base ? base : NULL;
+    char dir[2100];
+    snprintf(code_seen, sizeof code_seen, "%s", code);
+    base[0] = 0;
+    done = 1;
+    if (!ov_language_pack(code, dir, sizeof dir)) return NULL;
+    PackScan s = {"", 0};
+    pack_scan(dir, &s);
+    snprintf(base, sizeof base, "%s", *s.found ? s.found : "en-GB");
+    rt_log("oe: language pack %s (%s): the game runs in %s, whose text the pack replaces", code, dir, base);
+    return base;
+}
+
 // The console's pick among the languages the game declares in its NACP: XC3 ships en-GB, ja, fr, de, es, it, ko, zh-Hant
 // and zh-Hans (SupportedLanguageFlag 0x70de). Its file names carry the result (menu/font/bf3_gb.wisty), so a language
 // without data ends in a null font at the first text.
 static const char *game_language(const char *code) {
+    const char *pack = pack_base(code);
+    if (pack) return pack;
     static const char *const shipped[] = {"ja", "fr", "de", "it", "es", "ko", "en-GB", "zh-Hans", "zh-Hant"};
     static const struct { const char *from, *to; } near[] = {{"fr-CA", "fr"}, {"es-419", "es"}, {"zh-CN", "zh-Hans"},
                                                              {"zh-TW", "zh-Hant"}, {"pt-BR", "es"}, {"pt", "es"}};
