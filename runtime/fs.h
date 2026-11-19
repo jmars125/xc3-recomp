@@ -39,7 +39,18 @@ const char *romfs_entry(uint64_t i, uint64_t *offset, uint64_t *size);   // path
 const char *romfs_image_path(void);                        // the romfs.bin path fs_init opened
 size_t romfs_overlay_count(void);
 const char *romfs_overlay(size_t k, const char **file, uint64_t *size, int *is_added);   // RomFS path of overlay k
+size_t romfs_added_count(void);                            // files overlays and mods add to the RomFS
+const char *romfs_added(size_t k, const char **file, uint64_t *size);   // RomFS path of added file k (path order),
+                                                           // the file that serves it and its size
+int romfs_added_has(const char *p);                        // p (RomFS-relative) is an added file
+uint8_t *romfs_read_original(const char *p, uint64_t *size);   // a RomFS file's original bytes (free() them), NULL
+                                                           // if the RomFS lacks it or the read fails
 void fs_trace(const char *what, const char *path);         // XC3_TRACE=fs: one line per open
+
+// ---- mod_archive.c
+void mod_archive_init(void);                               // romfs.c, after the overlays: the archive entries the
+                                                           // added files replace; switches the patch set off when
+                                                           // no file is added
 
 // ---- fs_host.c
 int fs_aoc_list(int32_t *out, int offset, int count);       // add-on content indices present (fs_host.c)

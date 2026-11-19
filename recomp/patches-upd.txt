@@ -112,3 +112,14 @@ set orbs XC3_ETHER_ORBS 1
 site orbs main 493d00 f940ca68 f940ca68 @call:f10
 site orbs main 493d0c 910042b4 910042b4 aa1403e0 97fa6903
 site orbs main 493d50 91000508 cb480d08 91000508
+
+# modfiles (XC3_MOD_ARCHIVE, mod_archive.c): loose mod files in place of archive entries, as the emulator plugin
+# xc3-file-loader does (roccodev/xcnx-file-loader, read for behaviour only: it is GPL-3.0). The game looks a path up in
+# its archives first (ml::DevFileArchiver::getFileInfo at main+0x1257798: x0 the archiver, w1 the media, x2 the path,
+# "/bdat/...", x3 the result; it walks each arh1 trie of the media and returns 0 when none has the path), and only on a
+# miss opens the loose file in aoc4: to aoc1: and then rom:. The site comes after the prologue saved x30 and before
+# x2 is copied: it keeps the original lsl (x9, the archive list's length in bytes) and calls mod_archive.c
+# mod_archive_hook, which sets x9 to 0 when a mod adds the path to the RomFS. The cbz that follows then returns 0, as
+# for a media with no archive, and the game reads the mod's file from rom: with its own size.
+set modfiles XC3_MOD_ARCHIVE 1
+site modfiles main 12577b8 d37df129 d37df129 @call:f20

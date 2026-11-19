@@ -877,9 +877,39 @@ static void pin_subgroup32(VkPipelineShaderStageCreateInfo *st, VkPipelineShader
     st->pNext = rq;
 }
 
+// GLSL.std.450 FMax and FMin to NMax and NMin, in place (w is a copy of ours): with a NaN operand FMax and FMin are
+// undefined, and RADV (RX 9070 XT) returns the NaN, where Maxwell's FMNMX returns the other operand. XC3's fur and hair
+// take max(0, sqrt(x)) of a negative x, and the Nopon's fur drew wrong on Vulkan only (found in Ryujinx, which this
+// translator comes from). XC3_NMINMAX=0 keeps FMax and FMin. Returns how many were changed.
+static int spirv_nminmax(uint32_t *w, uint64_t n) {
+    enum { OP_EXT_INST_IMPORT = 11, OP_EXT_INST = 12, F_MIN = 37, F_MAX = 40, N_MIN = 79, N_MAX = 80 };
+    static int off = -1;
+    if (off < 0) {
+        const char *e = getenv("XC3_NMINMAX");
+        off = e && !strcmp(e, "0");
+        if (off) rt_log("vk_pipeline: XC3_NMINMAX=0: GLSL.std.450 FMax and FMin are kept");
+    }
+    if (off) return 0;
+    uint32_t glsl = 0;
+    int changed = 0;
+    for (uint64_t i = 5; i < n;) {
+        uint32_t op = w[i] & 0xffff, l = w[i] >> 16;
+        if (!l || i + l > n) break;
+        if (op == OP_EXT_INST_IMPORT && l >= 3 && !strncmp((const char *)(w + i + 2), "GLSL.std.450", (l - 2) * 4)) glsl = w[i + 1];
+        else if (op == OP_EXT_INST && l >= 5 && glsl && w[i + 3] == glsl && (w[i + 4] == F_MAX || w[i + 4] == F_MIN)) {
+            w[i + 4] = w[i + 4] == F_MAX ? N_MAX : N_MIN;
+            changed++;
+        }
+        i += l;
+    }
+    return changed;
+}
+
 static VkShaderModule make_module(const uint32_t *w, uint64_t words) {
     uint64_t fixed_n = 0;
     uint32_t *fixed = spirv_fixup(w, words, &fixed_n);
+    if (!fixed && (fixed = malloc(words * 4))) memcpy(fixed, w, words * 4), fixed_n = words;
+    if (fixed) spirv_nminmax(fixed, fixed_n);
     if (fixed) w = fixed, words = fixed_n;
     VkShaderModuleCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = (size_t)words * 4, .pCode = w};
     VkShaderModule m = VK_NULL_HANDLE;

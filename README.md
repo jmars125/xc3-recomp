@@ -45,7 +45,8 @@ Report problems as issues, following [CONTRIBUTING.md](CONTRIBUTING.md).
   kept at its own brightness
 - Variable refresh rate (`vrr`): for G-SYNC and FreeSync monitors, each frame shows when it is ready and the frame
   rate stays a little under the refresh rate (116 at 120 Hz), inside the monitor's range
-- RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`
+- RomFS mods made for emulators: unpack a mod into a `mods` folder next to `xc3.exe`. Mods that need the Skyline
+  plugin xc3-file-loader (text, fonts, models) work without it ([docs/mods.md](docs/mods.md))
 
 Every setting is in the F1 menu and in `xc3.ini` ([xc3.ini.example](xc3.ini.example) lists every key). The setup puts
 the NVIDIA (Streamline, DLSS) and AMD (FidelityFX) libraries next to `xc3.exe`.
