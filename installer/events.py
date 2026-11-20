@@ -121,3 +121,47 @@ class Reporter:
         if self.log_file:
             self.log_file.close()
             self.log_file = None
+
+
+class LineReporter(Reporter):
+    """The same events as text lines for a launcher that runs the setup without a window (--progress-lines):
+    `progress <0 to 1> <text>`, one per step start, progress update and error, on stdout in place of the JSON events.
+    The log file keeps its full text. Every step counts the same, so the number is a rough position, not a time
+    estimate; a step that is skipped counts as finished."""
+
+    def __init__(self, out=None, log_path=None):
+        super().__init__(out=out, log_path=log_path)
+        self.order = []
+        self.finished = set()
+
+    def position(self, event):
+        steps = max(len(self.order), 1)
+        inside = 0.0
+        if event['type'] == 'progress' and event.get('total'):
+            inside = min(event.get('done', 0) / event['total'], 1.0)
+        return (len(self.finished) + inside) / steps
+
+    def line_text(self, event):
+        kind = event['type']
+        if kind == 'start':
+            self.order = list(event['steps'])
+            return None
+        if kind == 'step' and event['state'] != 'started':
+            self.finished.add(event['step'])
+            return None
+        if kind == 'step':
+            return render(self.catalog, 'step.' + event['step'])
+        if kind in ('progress', 'error'):
+            return self.describe(event)
+        return None
+
+    def emit(self, type, **fields):
+        event = {'type': type, 't': round(self.elapsed(), 2), **fields}
+        self.log(self.describe(event))
+        text = self.line_text(event)
+        if text is None:
+            return event
+        with self.lock:
+            self.out.write(f'progress {self.position(event):.3f} {text}\n')
+            self.out.flush()
+        return event
