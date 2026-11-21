@@ -68,6 +68,13 @@ struct ffxCreateBackendVKDesc {
 static const uint64_t ROLE_HASH[VK_TUP_ROLES] = {0, 0x8a739994fe8f27fdull, 0x3860d1fb663cc4c7ull,
                                                  0xc7ccb6fe83468b61ull, 0xf1c308ed7843326dull, 0x9a7f297f8b22180bull,
                                                  0xde3f095d826afe46ull};
+// The same draws translated with the gather coordinate bias (vk_caps.c vk_caps_init, gfx_shader_set_host): the first
+// four sample with textureGather, and the biased translation hashes differently; the last draw and the copy do not.
+// Measured on an RX 9070 XT with RADV (Mesa 26.2.6), which master biases; with the bias off the table above matches.
+// The bias bits are subTexelPrecisionBits (8 there), so other GPUs that get the bias should hash as here.
+static const uint64_t ROLE_HASH_BIASED[VK_TUP_ROLES] = {0, 0xd98b31593b0eedbbull, 0xe678f501d0ad2b98ull,
+                                                        0xa03582083a014747ull, 0xea16faa2707721feull, 0x9a7f297f8b22180bull,
+                                                        0xde3f095d826afe46ull};
 
 typedef struct {
     VkImage image;
@@ -135,9 +142,21 @@ static int knob(const char *key) {   // test keys, unset by default
 int vk_tup_role(const GfxShader *fs) {
     if (!fs) return VK_TUP_NONE;
     uint64_t h = gfx_shader_spirv_fnv(fs);
+    // The fragment shaders of the draws before each one, for when the last draw is found without the first (another
+    // translation hashes differently): the eight before it are logged, the first three times.
+    static uint64_t recent[8];
+    static unsigned n_recent, told_recent;
+    if (h == ROLE_HASH[VK_TUP_LAST] && told_recent < 3) {
+        told_recent++;
+        char b[8 * 20 + 1] = "";
+        for (unsigned i = 0; i < 8; i++)
+            snprintf(b + strlen(b), sizeof b - strlen(b), " %016llx", (unsigned long long)recent[(n_recent + i) % 8]);
+        rt_log("vk: temporal upscale: the fragment shaders of the eight draws before the last one (oldest first):%s", b);
+    }
+    if (recent[(n_recent + 7) % 8] != h) recent[n_recent++ % 8] = h;
     int role = VK_TUP_NONE;
     for (int r = 1; r < VK_TUP_ROLES; r++)
-        if (h == ROLE_HASH[r]) role = r;
+        if (h == ROLE_HASH[r] || h == ROLE_HASH_BIASED[r]) role = r;
     // The title screen's copy (and some cutscenes'): another shader doing the same job, the reconstruction's output
     // halved into the frame (on the scaled path, into a target of the scene size).
     if (h == 0xe98d22f95e30dbc6ull) role = VK_TUP_COPY;
