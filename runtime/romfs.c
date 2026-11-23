@@ -176,21 +176,47 @@ static size_t added_lower(const char *p) {
     return lo;
 }
 
-// The index of RomFS path p (an added file: file_count + k), or UINT64_MAX.
+// Lower-case copy of p into buf (cap bytes); 0 when p has no upper-case letter or does not fit.
+static int lower_copy(char *buf, size_t cap, const char *p) {
+    int upper = 0;
+    size_t n = 0;
+    for (; p[n]; n++) {
+        if (n + 1 >= cap) return 0;
+        char c = p[n];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a'), upper = 1;
+        buf[n] = c;
+    }
+    buf[n] = 0;
+    return upper;
+}
+
+// The index of RomFS path p (an added file: file_count + k), or UINT64_MAX. Added files are kept under their
+// lower-case paths (mod_files), but the game opens some loose files in their own case after the archive lookup
+// missed: ml::DevFileArchiver looks up "/param/devxml/battle.bin" and then opens "rom:/param/devxml/Battle.bin".
+// An added file therefore also answers its path in any case, as the emulators' case-insensitive file systems do.
 static uint64_t file_index(const char *p) {
     uint64_t i = lower(p);
     if (i < file_count && !strcmp(p, entry_name(entry(i)))) return i;
     size_t k = added_lower(p);
-    return k < nadded && !strcmp(added[k], p) ? file_count + k : UINT64_MAX;
+    if (k < nadded && !strcmp(added[k], p)) return file_count + k;
+    char low[4096];
+    if (!lower_copy(low, sizeof low, p)) return UINT64_MAX;
+    k = added_lower(low);
+    return k < nadded && !strcmp(added[k], low) ? file_count + k : UINT64_MAX;
 }
 
-// 1 when a RomFS file or an added one lies under folder (a path ending in '/').
+// 1 when a RomFS file or an added one lies under folder (a path ending in '/'); added files in any case, as
+// file_index.
 static int folder_exists(const char *folder) {
     size_t n = strlen(folder);
     uint64_t i = lower(folder);
     if (i < file_count && !strncmp(entry_name(entry(i)), folder, n)) return 1;
     size_t k = added_lower(folder);
-    return k < nadded && !strncmp(added[k], folder, n);
+    if (k < nadded && !strncmp(added[k], folder, n)) return 1;
+    char low[4096];
+    if (!lower_copy(low, sizeof low, folder)) return 0;
+    k = added_lower(low);
+    return k < nadded && !strncmp(added[k], low, n);
 }
 
 // The overlay slot + 1 that replaces RomFS file i, or 0.
@@ -415,8 +441,9 @@ static int served(uint64_t i, const char *name) {
     return 0;
 }
 
-// The game asks for lower-case paths (every RomFS and archive path is lower case): a mod file named in another case
-// is served under its lower-case path, as the emulators' case-insensitive file systems do.
+// The game looks paths up in lower case (every RomFS and archive path is lower case): a mod file named in another case
+// is served under its lower-case path, and file_index finds it in any case, as the emulators' case-insensitive file
+// systems do.
 static void lower_case(char *s) {
     for (; *s; s++)
         if (*s >= 'A' && *s <= 'Z') *s = (char)(*s - 'A' + 'a');
