@@ -171,7 +171,10 @@ typedef enum {
     UI_MENU_OV_FMT_SCENE,     // "%ux%u, %.0f%%": the scene and its share of the game image's width
     UI_MENU_OV_FMT_FSR,       // "AMD FSR 1, sharpness %d%%"
     UI_MENU_OV_SCALE_NONE, UI_MENU_OV_SCALE_BILINEAR,
-    UI_MENU_LAST_ID = UI_MENU_OV_SCALE_BILINEAR,
+    // the temporal upscaler line: the one running, the game's own reconstruction, and one the setting waits to start
+    UI_MENU_OV_TUP_GAME,
+    UI_MENU_OV_FMT_TUP_PENDING,   // "%s (%s after restart)": the one running, then the one chosen
+    UI_MENU_LAST_ID = UI_MENU_OV_FMT_TUP_PENDING,
     UI_TEXT_COUNT
 } UiTextId;
 
