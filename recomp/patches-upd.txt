@@ -123,3 +123,34 @@ site orbs main 493d50 91000508 cb480d08 91000508
 # for a media with no archive, and the game reads the mod's file from rom: with its own size.
 set modfiles XC3_MOD_ARCHIVE 1
 site modfiles main 12577b8 d37df129 d37df129 @call:f20
+
+# highether (XC3_HIGH_ETHER, high_ether.c): the orbs a High Ether sphere sends while it is harvested, at the frame rate
+# they had at 30 fps. The sphere (an object of 0x3f0 bytes, built at main+0x49d070) keeps its flying orbs in a list of
+# 8 inline slots at +0x1e0 (slots of 0x30 bytes: two effect handles at +0 and +8, an effect id at +0x10, the flight's
+# progress at +0x14), the count at +0x360. The list update (main+0x49a144) adds the frame's step to each orb's progress
+# and removes the orbs that reached 1.0, so an orb flies one second at any frame rate. The state machine that sends
+# them (main+0x499f98: timer +0x3d0, which gains the step each frame and each state change zeroes; state +0x3b8) is
+# not: state 3 sends a small orb (main+0x49b084, then state 5), state 5 starts its sound (main+0x49b7e0, then state 6)
+# and state 6 waits until the timer passes a parameter (main+0x10b04 +0x1274, or +0x1278 for the last orb) before the
+# next one. States 3 and 5 take a frame each, so an orb leaves every parameter plus two frames, rounded up to a frame:
+# 0.2 s at 30 fps where the parameter is 0.1 s, 0.125 s at 120 fps. More orbs then fly at once than at 30 fps, and
+# the 9th is pushed (main+0x49b4e8, no check) over the count and the handle at +0x380 after the list: state 5 then
+# releases that handle (main+0x50e07c), now the orb's x position and 3.0, the access violation reading
+# 0xffffffffffffffff of issues 100 and 103 (lr main+0x49b84c) while ether gathers into the sphere at 120 fps.
+# The first site rounds the parameter state 6 compares the timer to up to the 30 fps frame the game left on and the
+# second and third start the wait at 2 steps minus 2/30 s in place of 0: ether_high_wait and ether_high_start in
+# high_ether.c. So an orb leaves at the time it left at 30 fps, and nothing changes at 30 fps. x30 is dead at the
+# three sites (each function saved it and made a call before); s0 is free there (it is reloaded after the first, and
+# the function returns after the third). The other sites cap the push as the orbs set does: the fourth loads the count
+# and calls ether_high_push, which makes x8 the slot, min(count, 7); the fifth and sixth release both handles the slot
+# holds (main+0x32e118, which does nothing on an empty slot) before main+0x32e0fc moves the new ones in, and the
+# seventh moves the add x1 the sixth replaced; the eighth stores min(count, 7) + 1 as the count.
+set highether XC3_HIGH_ETHER 1
+site highether main 49a088 bc696800 bc696800 @call:f30
+site highether main 49b910 b903d27f bd43d260 @call:f40
+site highether main 49b914 fd4023e8 bd03d260 fd4023e8
+site highether main 49b4e8 f940c268 f940c268 @call:f50
+site highether main 49b4f0 9b094d14 9b094d14 aa1403e0 97fa4b0a
+site highether main 49b4f4 910103e1 91002280 97fa4b09
+site highether main 49b4f8 910103f6 910103e1 910103f6
+site highether main 49b550 91000508 cb480d08 91000508
