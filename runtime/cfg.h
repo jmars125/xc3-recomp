@@ -6,6 +6,12 @@
 // is kept). A name without the XC3_ prefix goes to getenv unchanged. Safe from any thread once cfg_init has returned.
 const char *cfg_get(const char *name);
 
+// The settings file to read and save instead of xc3.ini next to xc3.exe (main.c launcher_args: --config). Call before
+// cfg_init; a relative path is relative to the working directory.
+void cfg_set_path(const char *path);
+// 1 when key (without XC3_, upper case) is a setting the runtime reads.
+int cfg_known(const char *key);
+
 // Reads xc3.ini once, from mem_init after the address space is claimed and before any setting is read. Logs the file, its key count, unknown keys and environment overrides.
 void cfg_init(void);
 

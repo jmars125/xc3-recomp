@@ -1,6 +1,12 @@
 // xc3.exe entry: reserves the guest address space, parses the command line and runs one mode.
 //
-//   xc3.exe [--exefs DIR] [--romfs DIR] [--profile DIR] <mode>
+//   xc3.exe [--exefs DIR] [--romfs DIR] [--profile DIR] [--game DIR] [--config FILE] [--set KEY=VALUE]...
+//           [--fullscreen | --window WxH] <mode>
+//     --game DIR        DIR/exefs, DIR/romfs and DIR/profile at once (a later --exefs, --romfs or --profile wins)
+//     --config FILE     read and save this settings file instead of xc3.ini next to xc3.exe
+//     --set KEY=VALUE   one setting for this run, as the environment variable XC3_KEY would (the environment wins over
+//                       xc3.ini and is not saved into it); repeatable. KEY is an xc3.ini key, any case, XC3_ optional
+//     --fullscreen      --set fullscreen=1;  --window WxH: --set window_size=WxH --set fullscreen=0
 //     --selftest        layout, dispatch table and host-function registry; needs no game files
 //     --probe-loader    load and relocate the modules, check them against the measured 1.2.1 values
 //     --probe-kernel, --probe-ipc, --probe-services, --probe-fs    host probes
@@ -17,6 +23,7 @@
 // Also here: the runtime services the generated code calls besides rt_dispatch and rt_svc (rt_brk, rt_udf,
 // rt_ticks, the function profiler hook), logging, SHA-256, and the crash reporter (a vectored exception handler that
 // names the lifted function, the guest registers and the guest frame-pointer chain).
+#include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -553,7 +560,8 @@ static int selftest(void) {
 }
 
 static int usage(const char *argv0) {
-    fprintf(stderr, "usage: %s [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
+    fprintf(stderr, "usage: %s [--exefs DIR] [--romfs DIR] [--profile DIR] [--game DIR] [--config FILE] "
+                    "[--set KEY=VALUE]... [--fullscreen | --window WxH] [--selftest | --probe-loader | "
                     "--probe-cfg | --probe-kernel | --probe-ipc | --probe-services | --probe-fs | --probe-gfx-abi | "
                     "--probe-nvn | --probe-nvn-tex | --probe-window | --probe-shader | --probe-vkmem | "
                     "--probe-vkexec | --probe-astc | --probe-movie | --prepare-shaders | --warm-shaders | --boot |--seconds S [--shot PNG]]\n", argv0);
@@ -629,7 +637,68 @@ static void portable_paths(RtConfig *c) {
     }
 }
 
+// The launcher options, read before mem_init so that cfg_init sees them: --config names the settings file, --set,
+// --fullscreen and --window become XC3_* environment variables for this process (cfg.c raw_get: the environment wins
+// over the file, and cfg_save never writes them into it). main's own loop skips these options and their values.
+// Returns 0, or 2 after printing what was wrong. --help prints the usage and returns 1.
+static int set_launcher_var(const char *key, size_t len, const char *value) {
+    char var[96];
+    if (!strncasecmp(key, "XC3_", 4)) key += 4, len -= 4;
+    if (!len || len > 64) return 2;
+    memcpy(var, "XC3_", 4);
+    for (size_t i = 0; i < len; i++) var[4 + i] = (char)toupper((unsigned char)key[i]);
+    var[4 + len] = 0;
+    if (!cfg_known(var + 4)) fprintf(stderr, "xc3: --set %s: not a setting this build reads\n", var + 4);
+    return plat_setenv(var, value) ? 0 : 2;
+}
+
+static int launcher_arg_takes_value(const char *a) {
+    return !strcmp(a, "--set") || !strcmp(a, "--config") || !strcmp(a, "--window") || !strcmp(a, "--game");
+}
+
+static int launcher_args(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "--help") || !strcmp(a, "-h")) return usage(argv[0]), 1;
+        if (!strcmp(a, "--fullscreen")) {
+            if (set_launcher_var("FULLSCREEN", 10, "1")) return 2;
+            continue;
+        }
+        if (!launcher_arg_takes_value(a)) {
+            if (!strcmp(a, "--exefs") || !strcmp(a, "--romfs") || !strcmp(a, "--profile") || !strcmp(a, "--seconds") ||
+                !strcmp(a, "--shot"))
+                i++;   // their value is not an option
+            continue;
+        }
+        if (++i == argc) return usage(argv[0]);
+        const char *v = argv[i];
+        if (!strcmp(a, "--set")) {
+            const char *eq = strchr(v, '=');
+            if (!eq || set_launcher_var(v, (size_t)(eq - v), eq + 1)) {
+                fprintf(stderr, "xc3: --set wants KEY=VALUE, not '%s'\n", v);
+                return 2;
+            }
+        } else if (!strcmp(a, "--config")) {
+            cfg_set_path(v);
+        } else if (!strcmp(a, "--window")) {
+            unsigned w, h;
+            char end;
+            if (sscanf(v, "%ux%u%c", &w, &h, &end) != 2 || set_launcher_var("WINDOW_SIZE", 11, v) ||
+                set_launcher_var("FULLSCREEN", 10, "0")) {
+                fprintf(stderr, "xc3: --window wants WIDTHxHEIGHT, not '%s'\n", v);
+                return 2;
+            }
+        }
+    }
+    return 0;
+}
+
+// --game DIR: the three folders of an install, as portable_paths finds them next to xc3.exe.
+static char game_exefs[PLAT_PATH_MAX * 2], game_romfs[PLAT_PATH_MAX * 2], game_profile[PLAT_PATH_MAX * 2];
+
 int main(int argc, char **argv) {
+    int la = launcher_args(argc, argv);
+    if (la) return la == 1 ? 0 : la;
     mem_init();   // first: claim the guest address space before anything else can land there; reads xc3.ini
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -664,6 +733,16 @@ int main(int argc, char **argv) {
         if (path) {
             if (++i == argc) return usage(argv[0]);
             *path = argv[i];
+        } else if (!strcmp(argv[i], "--game")) {
+            const char *d = argv[++i];   // launcher_args checked that the value exists
+            snprintf(game_exefs, sizeof game_exefs, "%s/exefs", d);
+            snprintf(game_romfs, sizeof game_romfs, "%s/romfs", d);
+            snprintf(game_profile, sizeof game_profile, "%s/profile", d);
+            cfg.exefs = game_exefs, cfg.romfs = game_romfs, cfg.profile = game_profile;
+        } else if (launcher_arg_takes_value(argv[i])) {
+            i++;   // --set, --config, --window: launcher_args applied them before mem_init
+        } else if (!strcmp(argv[i], "--fullscreen")) {
+            // applied by launcher_args
         } else if (!strcmp(argv[i], "--seconds")) {
             char *end;
             if (++i == argc) return usage(argv[0]);

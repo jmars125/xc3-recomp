@@ -33,7 +33,8 @@ from installer.runner import Context  # noqa: E402
 from installer import steps as installer_steps  # noqa: E402
 from installer.steps import all_steps  # noqa: E402
 from installer.guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, Catalog, Form, Model, Process,  # noqa: E402
-                                amount, describe_event, parse_line, windows_ui_language)
+                                amount, describe_event, game_exe, load_last_dest, parse_line, play, prefill,
+                                remember_path, save_last_dest, windows_ui_language)
 
 INSTALLED = ROOT / 'build' / 'install-test'
 FIXTURE = ROOT / 'build' / 'inst-gui' / 'e2e-install'
@@ -302,6 +303,77 @@ class CancelTest(unittest.TestCase):
             self.assertNotEqual(code, 0)
         finally:
             p.kill()
+
+
+class LauncherTest(unittest.TestCase):
+    """What a launcher relies on: the form filled in from the command line, the remembered folder, Play."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def installed(self, exe=True):
+        dest = self.dir / 'XC3'
+        dest.mkdir()
+        statefile.save(dest, statefile.empty('r0'))
+        if exe:
+            game_exe(dest).write_bytes(b'')
+        return dest
+
+    def test_prefill_takes_the_cli_names(self):
+        args = SimpleNamespace(base=Path('b.xci'), update=Path('u.nsp'), keys=None, dest=Path('D'),
+                               dlc=[Path('a.nsp'), Path('c.nsp')])
+        self.assertEqual(prefill(args), {'base': 'b.xci', 'update': 'u.nsp', 'keys': '', 'dest': 'D',
+                                         'dlc': 'a.nsp;c.nsp'})
+
+    def test_remembered_folder_round_trip(self):
+        path = self.dir / 'sub' / 'xc3-setup.json'
+        self.assertEqual(load_last_dest(path), '')
+        self.assertTrue(save_last_dest(path, self.dir / 'XC3'))
+        self.assertEqual(load_last_dest(path), str(self.dir / 'XC3'))
+        path.write_text('{nope', encoding='utf-8')
+        self.assertEqual(load_last_dest(path), '')
+
+    def test_remembered_folder_sits_beside_the_setup(self):
+        release = SimpleNamespace(root=self.dir / 'XC3-Setup', dev=False)
+        dev = SimpleNamespace(root=self.dir / 'repo', dev=True)
+        self.assertEqual(remember_path(release, {}), self.dir / 'XC3-Setup' / 'xc3-setup.json')
+        self.assertEqual(remember_path(dev, {}), self.dir / 'repo' / 'build' / 'xc3-setup.json')
+        image = self.dir / 'XC3-Setup-1.0.0-linux.AppImage'
+        self.assertEqual(remember_path(release, {'APPIMAGE': str(image)}), image.resolve().parent / 'xc3-setup.json')
+
+    def test_play_needs_an_installed_game(self):
+        self.assertFalse(Form(dest=str(self.dir / 'none')).playable())
+        self.assertIsNone(play(self.dir / 'none'))
+        self.assertFalse(Form(dest=str(self.installed(exe=False))).playable())
+
+    def test_installed_folder_offers_play_and_update(self):
+        try:
+            import tkinter as tk
+            from installer import gui
+            root = tk.Tk()
+        except Exception as e:   # no tkinter or no display
+            self.skipTest(str(e))
+        try:
+            root.withdraw()
+            dest = self.installed()
+            remember = self.dir / 'xc3-setup.json'
+            save_last_dest(remember, dest)
+            app = gui.App(root, 'en', layouts.find(ROOT), run_args={'remember': remember})
+            self.assertEqual(app.vars['dest'].get(), str(dest))
+            self.assertTrue(app.form_play_shown)
+            self.assertEqual(app.start_button.cget('text'), app.cat('ui.start_update'))
+            app.vars['dest'].set(str(self.dir / 'new'))
+            self.assertFalse(app.form_play_shown)
+            self.assertEqual(app.start_button.cget('text'), app.cat('ui.start'))
+            app = gui.App(root, 'en', layouts.find(ROOT), run_args={'remember': remember},
+                          values={'dest': str(self.dir / 'given'), 'base': 'b.xci'})
+            self.assertEqual((app.vars['dest'].get(), app.vars['base'].get()), (str(self.dir / 'given'), 'b.xci'))
+        finally:
+            root.destroy()
 
 
 class SmokeTest(unittest.TestCase):

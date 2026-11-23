@@ -96,6 +96,8 @@
  "ui.type_keys": "Файлы ключей (*.keys)",
  "ui.type_all": "Все файлы",
  "ui.start": "Начать",
+ "ui.start_update": "Обновить",
+ "ui.play": "Играть",
  "ui.cancel": "Отмена",
  "ui.cancelling": "Отмена...",
  "ui.show_log": "Показать журнал",

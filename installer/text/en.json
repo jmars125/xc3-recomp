@@ -96,6 +96,8 @@
  "ui.type_keys": "Key files (*.keys)",
  "ui.type_all": "All files",
  "ui.start": "Start",
+ "ui.start_update": "Update",
+ "ui.play": "Play",
  "ui.cancel": "Cancel",
  "ui.cancelling": "Cancelling...",
  "ui.show_log": "Show log",
