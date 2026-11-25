@@ -387,6 +387,7 @@ void rt_boot(void) {
     frame_step_init();
     tour_init();
     ether_orbs_init();
+    high_ether_init();
     mod_archive_boot();
     res_init();
     cb_addr[0] = hostfn_register("<rtld loader_ready>", cb_loader_ready);
