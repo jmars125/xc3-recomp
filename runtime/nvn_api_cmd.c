@@ -809,6 +809,38 @@ static float ui_median(const float *v, int n) {
     return n & 1 ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 }
 
+// The title screen (#94) lays its logo right of the centre and its copyright and version on the right edge, so the
+// rules above send it to the right edge; pressing a button adds the menu's left pieces and it goes back to the centre.
+// The Area Map's zoom control and Current Location panel (#55) look the same to those rules, so the title layout is
+// recognised by name instead: a pane named UI_TITLE_PANE in the layout's file. The layout object (list entry - 0x20)
+// holds at +0x38 a pointer to a pointer into that file as loaded, an LAHD block (the same container as the menu/image
+// files), whose string table names the panes. Looked at once per node, when it would go to a side.
+#define UI_LAYOUT_FILE 0x18   // list entry - 0x20 + 0x38
+#define UI_TITLE_PANE "mc_TitleShortcut"
+#define UI_LAHD_BACK 0x20000  // how far before the pointer the file may start
+#define UI_LAHD_SPAN 0x20000  // how much of the file is searched
+static int ui_is_title(uint64_t node) {
+    uint64_t at = node + UI_LAYOUT_FILE, q, r, base = 0;
+    if (!plat_mem_readable(at, 8) || !(q = *(uint64_t *)(uintptr_t)at) || (q & 7) || !plat_mem_readable(q, 8)) return 0;
+    r = *(uint64_t *)(uintptr_t)q & ~3ull;
+    if (r < UI_LAHD_BACK || !plat_mem_readable(r, 4)) return 0;
+    for (uint64_t a = r; a > r - UI_LAHD_BACK; a -= 4) {   // pages below r are checked as the search reaches them
+        if ((a & 0xfff) == 0xffc && !plat_mem_readable(a & ~0xfffull, 0x1000)) break;
+        if (!memcmp((const void *)(uintptr_t)a, "LAHD", 4)) {
+            base = a;
+            break;
+        }
+    }
+    if (!base) return 0;
+    uint64_t end = base;
+    while (end < base + UI_LAHD_SPAN && plat_mem_readable(end & ~0xfffull, 0x1000)) end = (end & ~0xfffull) + 0x1000;
+    const char *b = (const char *)(uintptr_t)base, *name = UI_TITLE_PANE;
+    size_t n = end - base, len = strlen(name);
+    for (size_t i = 0; i + len <= n; i++)
+        if (b[i] == name[0] && !memcmp(b + i, name, len)) return 1;
+    return 0;
+}
+
 // lo and hi: the node's leftmost and rightmost element ends; moving: it may not move to a side now.
 static int ui_side_for(int side, float mid, float lo, float hi, int moving) {
     int want = side && mid * side > UI_EDGE_STAY ? side : mid < -UI_EDGE_SIDE ? -1 : mid > UI_EDGE_SIDE ? 1 : 0;
@@ -823,7 +855,7 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
         uint32_t frame, centred, moved;   // the frame drawn last, the first of its run at the centre, the last move
         float c[UI_NODE_CENTRES], lw, rw, lo, hi;   // lo, hi: the leftmost and rightmost element ends
         float plo, phi, pmid;                       // the frame before: its ends and median
-        int n, pn, have, side, hold, posok;
+        int n, pn, have, side, hold, posok, title;   // title: 0 not looked at, 1 another layout, 2 the title
     } seen[32];
     static _Thread_local unsigned next;
     if (!node) return 0;
@@ -870,6 +902,8 @@ static float ui_shift(uint64_t node, float lo, float hi, float k) {
     if (!seen[i].have)   // the node's first frame: what it has drawn so far
         seen[i].side = ui_spans(seen[i].lw, seen[i].rw) ? 0
                      : ui_side_for(seen[i].side, ui_median(seen[i].c, seen[i].n), seen[i].lo, seen[i].hi, 0);
+    if (seen[i].side && !seen[i].title) seen[i].title = ui_is_title(node) ? 2 : 1;
+    if (seen[i].title == 2) return 0;
     return seen[i].side < 0 ? k - 1 : seen[i].side > 0 ? 1 - k : 0;
 }
 
