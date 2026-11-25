@@ -1,6 +1,8 @@
-// Button prompts for Xbox and PlayStation pads (XC3_PROMPTS). The game draws its button glyphs from two atlases,
-// menu/image/icon_button.wilay (64x64 cells: white discs with the letter cut out) and icon_button_y.wilay (72x72
-// cells: cream discs with brown letters and an orange glow). Row 0, columns 4-7 hold X, Y, A and B. The game reads each
+// Button prompts for Xbox and PlayStation pads (XC3_PROMPTS). The game draws its button glyphs from three atlases,
+// menu/image/icon_button.wilay (64x64 cells: white discs with the letter cut out), icon_button_y.wilay (72x72 cells:
+// cream discs with brown letters and an orange glow) and font_icon.wilay (28x28 cells: cream discs with the letter cut
+// out, the icons set inside text such as tutorials and help lines). In each, row 0, columns 4-7 hold X, Y, A and B,
+// and a cell is an eighth of the texture's width. The game reads each
 // from bf3.ard as an xbc1 container: first the 48-byte header (magic, compression, decompressed size, compressed size,
 // hash, a 28-byte name), then the compressed bytes. romfs_read hands both reads to prompts_read: the header gets the
 // size of a recompressed patched file and the read after it gets that file. The add-on mounts' loose copies of these
@@ -267,8 +269,8 @@ static int in_shape(int g, double u, double v) {
 
 // Redraws cell r of m as PlayStation glyph g in the style of the letter there: the disc colour (its brightest opaque
 // pixels) fills the disc, then the shape takes the letter's colour (the pixel inside the disc farthest from the disc
-// colour; transparent in icon_button), 4x4 samples per pixel.
-static void draw_ps(Img *m, Rect r, int g) {
+// colour; transparent in icon_button), 4x4 samples per pixel, the coverage rounded to `shades` steps (16: all of them).
+static void draw_ps(Img *m, Rect r, int g, int shades) {
     int maxl = -1;
     for (int y = r.y; y < r.y + r.h; y++)
         for (int x = r.x; x < r.x + r.w; x++) {
@@ -317,6 +319,7 @@ static void draw_ps(Img *m, Rect r, int g) {
             for (int sy = 0; sy < 4; sy++)
                 for (int sx = 0; sx < 4; sx++)
                     hit += in_shape(g, (x + (sx + 0.5) / 4 - cx) / R, (y + (sy + 0.5) / 4 - cy) / R);
+            hit = (hit * shades + 8) / 16 * 16 / shades;
             uint8_t *p = at(m, x, y);
             for (int c = 0; c < 4; c++) p[c] = (uint8_t)(D[c] + (L[c] - D[c]) * hit / 16.0 + 0.5);
         }
@@ -334,9 +337,15 @@ static void shrink(Img *dst, Rect dr, Img *src, Rect sr) {
             }
 }
 
+// How a redrawn atlas is drawn, from best to smallest once compressed (build tries them in turn): the mip levels whose
+// cells are narrower than min_cell pixels keep their letters, and PlayStation shapes take `shades` steps of coverage.
+// The text icons of Future Redeemed (add-on 4's font_icon.wilay, 24-pixel cells) fit only from the second on.
+typedef struct { int min_cell, shades; } Style;
+static const Style styles[] = {{1, 16}, {8, 16}, {8, 4}};
+
 // Patches the Mibl texture at the end of a decompressed atlas: glyph[k] for the cells of X, Y, A, B. 0 when the file
 // is not laid out as expected.
-static int patch_atlas(uint8_t *file, size_t size, const int glyph[4]) {
+static int patch_atlas(uint8_t *file, size_t size, const int glyph[4], Style st) {
     if (size < 0x28 || memcmp(file + size - 4, "LBIM", 4)) return 0;
     uint32_t f[9];
     memcpy(f, file + size - 0x28, sizeof f);
@@ -372,14 +381,14 @@ static int patch_atlas(uint8_t *file, size_t size, const int glyph[4]) {
             cells[k] = (Rect){c0, 0, c1 - c0, r1};
         }
         for (int k = 0; k < 4 && ok; k++) {
-            if (glyph[k] == GLYPH_KEEP || cells[k].w < 1 || cells[k].h < 1) continue;
+            if (glyph[k] == GLYPH_KEEP || cells[k].w < st.min_cell || cells[k].h < 1) continue;
             if (lv && prev.px && prev_cells[k].w >= 2) {   // lower levels follow the redrawn level above
                 shrink(&m, cells[k], &prev, prev_cells[k]);
             } else if (glyph[k] <= GLYPH_B) {   // another letter of the atlas
                 Rect s = cells[glyph[k]];
                 for (int y = 0; y < cells[k].h; y++) memcpy(at(&m, cells[k].x, y), at(&orig, s.x, s.y + y), (size_t)s.w * 4);
             } else {
-                draw_ps(&m, cells[k], glyph[k]);
+                draw_ps(&m, cells[k], glyph[k], st.shades);
             }
         }
         if (ok)   // encode the blocks that changed
@@ -403,13 +412,13 @@ static int patch_atlas(uint8_t *file, size_t size, const int glyph[4]) {
 }
 
 // ---------------------------------------------------------------- the read hook
-// Files patched as the game reads them: the two glyph atlases (glyphs picked once, at the first read) and the button
+// Files patched as the game reads them: the three glyph atlases (glyphs picked once, at the first read) and the button
 // diamonds of palette.c (moved while pad_layout is xbox, looked at on every read of the file's header, so a change of
 // layout in the menu shows the next time the game loads that layout). Each patched file is built once per container
 // and kept; a read of the header under the other choice gets the original size, and the payload read after it is
 // left alone.
-static const char *const atlases[] = {"icon_button.wilay", "icon_button_y.wilay"};
-enum { ATLASES = 2, MAX_PATCHED = 8 };
+static const char *const atlases[] = {"icon_button.wilay", "icon_button_y.wilay", "font_icon.wilay"};
+enum { ATLASES = 3, MAX_PATCHED = 9 };
 typedef struct {
     char name[29];
     uint64_t file, at;   // file: RomFS id; at: header offset
@@ -417,7 +426,7 @@ typedef struct {
     size_t zn;
     int failed, live;    // live: the last header read got the patched size
 } Patched;
-static Patched patched[MAX_PATCHED];   // [0], [1]: the atlases
+static Patched patched[MAX_PATCHED];   // [0] to [2]: the atlases
 static PlatMutex lock = PLAT_MUTEX_INIT;
 static int glyphs[4] = {GLYPH_KEEP, GLYPH_KEEP, GLYPH_KEEP, GLYPH_KEEP}, picked;
 
@@ -453,33 +462,45 @@ static int build(Patched *p, int atlas, const uint8_t hdr[48], uint64_t handle, 
                  uint32_t (*raw)(uint64_t *, uint64_t, int64_t, void *, uint64_t)) {
     uint32_t comp, dsize, csize;
     memcpy(&comp, hdr + 4, 4), memcpy(&dsize, hdr + 8, 4), memcpy(&csize, hdr + 12, 4);
-    if (comp != 3 || dsize > (64u << 20) || csize > (64u << 20)) return 0;
-    uint8_t *z = malloc(csize), *d = malloc(dsize);
-    if (!z || !d) rt_fatal("prompts: out of memory");
+    const char *why = NULL;   // why the file stays as it is, for the log
+    if (comp != 3 || dsize > (64u << 20) || csize > (64u << 20)) {
+        rt_log("%s: %s left as it is (compression %u, %u -> %u bytes)", atlas ? "prompts" : "palette", p->name, comp, csize,
+               dsize);
+        return 0;
+    }
+    uint8_t *z = malloc(csize), *orig = malloc(dsize), *d = malloc(dsize), *out = malloc(ZSTD_compressBound(dsize));
+    if (!z || !orig || !d || !out) rt_fatal("prompts: out of memory");
     uint64_t got = 0;
-    int moved = 0,
-        ok = !raw(&got, handle, offset + 48, z, csize) && got == csize && ZSTD_decompress(d, dsize, z, csize) == dsize &&
-             (atlas ? patch_atlas(d, dsize, glyphs) : (moved = palette_patch(d, dsize, p->name)) > 0);
-    free(z);
-    if (ok) {
-        size_t cap = ZSTD_compressBound(dsize);
-        uint8_t *out = malloc(cap);
-        if (!out) rt_fatal("prompts: out of memory");
+    int moved = 0, ok = 0, style = 0, styles_n = atlas ? (int)(sizeof styles / sizeof *styles) : 1;
+    size_t zn = 0;
+    if (raw(&got, handle, offset + 48, z, csize) || got != csize) why = "short read";
+    else if (ZSTD_decompress(orig, dsize, z, csize) != dsize) why = "does not decompress";
+    for (; !why && !ok && style < styles_n; style++) {
+        memcpy(d, orig, dsize);
+        if (!(atlas ? patch_atlas(d, dsize, glyphs, styles[style]) : (moved = palette_patch(d, dsize, p->name)) > 0)) {
+            why = "unexpected layout";
+            break;
+        }
         // A patched file must not grow: the game reads it with the archive index's compressed size and cuts a longer
         // stream short, then crashes as the HUD loads (the glyph atlases under pad_layout = nintendo grew by 3%, the
-        // shortcut menu's layout by 4%). Stronger levels until it fits.
+        // shortcut menu's layout by 4%). Stronger levels until it fits, then the next style.
         static const int levels[] = {9, 19, 22};
-        size_t zn = 0;
         for (int l = 0; l < 3; l++) {
-            zn = ZSTD_compress(out, cap, d, dsize, levels[l]);
+            zn = ZSTD_compress(out, ZSTD_compressBound(dsize), d, dsize, levels[l]);
             if (ZSTD_isError(zn) || zn <= csize) break;
         }
-        if (ZSTD_isError(zn) || zn > csize) ok = 0, free(out);
-        else p->file = file, p->at = (uint64_t)offset, p->z = out, p->zn = zn;
+        ok = !ZSTD_isError(zn) && zn <= csize;
     }
+    if (!why && !ok) why = "would not fit";
+    free(z);
+    free(orig);
+    if (ok) p->file = file, p->at = (uint64_t)offset, p->z = out, p->zn = zn;
+    else free(out);
     free(d);
-    if (!ok) rt_log("%s: %s left as it is (unexpected layout, or it would not fit)", atlas ? "prompts" : "palette", p->name);
-    else if (atlas) rt_log("prompts: %s patched (%u -> %zu compressed bytes)", p->name, csize, p->zn);
+    if (!ok) rt_log("%s: %s left as it is (%s; %u -> %u bytes)", atlas ? "prompts" : "palette", p->name, why, csize, dsize);
+    else if (atlas)
+        rt_log("prompts: %s patched (%u -> %zu compressed bytes%s)", p->name, csize, p->zn,
+               style > 1 ? "; the smallest mip levels keep their letters" : "");
     else rt_log("palette: %s moved to the xbox layout (%d keys; %u -> %zu compressed bytes)", p->name, moved, csize, p->zn);
     return ok;
 }
