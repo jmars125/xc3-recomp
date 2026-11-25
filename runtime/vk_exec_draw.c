@@ -2370,7 +2370,10 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
         if (ex->in_pass && (w > ex->pass_w || h > ex->pass_h)) vk_exec_pass_end(ex);
         if (!ex->in_pass) ex->rt_resolved = 0;
     }
-    if (!ex->in_pass || TU.fix.image) tup_fixup(ex);
+    if (TU.fix.image) {
+        if (!ex->in_pass) vk_exec_resolve_rt(ex);
+        tup_fixup(ex);
+    }
     if (!ex->in_pass) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     vk_exec_pass_begin(ex);
     scene_widen(ex);

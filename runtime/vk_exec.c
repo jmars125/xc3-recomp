@@ -498,7 +498,7 @@ void vk_exec_noatt_dims(const VkExec *ex, uint32_t *w, uint32_t *h) {
 }
 
 // Resolves ex->rt to this command buffer's images and derives the pass parameters and the pipeline's target formats.
-static void resolve_rt(VkExec *ex) {
+void vk_exec_resolve_rt(VkExec *ex) {
     if (ex->rt_resolved) return;
     ex->rt_resolved = 1;
     const p_set_rt *r = &ex->rt;
@@ -610,7 +610,7 @@ static int tfr_recent(const VkExecTarget *t, uint64_t stamp) {
 }
 
 int vk_exec_targets_recent(VkExec *ex, int any) {
-    resolve_rt(ex);
+    vk_exec_resolve_rt(ex);
     uint64_t stamp = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED) + 1;
     int n = 0, recent = 0;
     for (int i = 0; i < 9; i++) {
@@ -626,7 +626,7 @@ int vk_exec_targets_recent(VkExec *ex, int any) {
 // One line naming each target of the current pass: format, extent, layer and the two frames it was last rendered in
 // (prepare_draw's pipeline wait log).
 void vk_exec_targets_describe(VkExec *ex, char *buf, size_t cap) {
-    resolve_rt(ex);
+    vk_exec_resolve_rt(ex);
     size_t n = 0;
     buf[0] = 0;
     for (int i = 0; i < 9 && n < cap; i++) {
@@ -693,7 +693,7 @@ void vk_exec_barrier(VkExec *ex) { barrier_to(ex, NULL, NULL, 0); }
 
 void vk_exec_pass_begin(VkExec *ex) {
     if (ex->in_pass) return;
-    resolve_rt(ex);
+    vk_exec_resolve_rt(ex);
     // Learned targets (VkTexImage.fb_learned) are attached in the feedback layout
     VkImage want[9];
     VkImageAspectFlags wasp[9];
@@ -828,7 +828,7 @@ static void clear_attachment(VkExec *ex, const VkClearAttachment *a) {
 static void clear_color(VkExec *ex, const p_clear_color *c) {
     vk_exec_frame.clears++;
     if (ex->render_disabled) return;
-    resolve_rt(ex);
+    vk_exec_resolve_rt(ex);
     int i = c->index;
     if (i < 0 || i >= (int)ex->pass_ncolor || !ex->color[i].image) {
         warn_once(W_CLEAR_TARGET, "colour clear of target %d, which is not bound or not renderable: skipped", i);
@@ -858,7 +858,7 @@ static void clear_color(VkExec *ex, const p_clear_color *c) {
 
 static void clear_ds(VkExec *ex, const p_clear_ds *c) {
     if (ex->render_disabled) return;
-    resolve_rt(ex);
+    vk_exec_resolve_rt(ex);
     const VkExecTarget *t = &ex->depth;
     if (!t->image) return;
     VkImageAspectFlags asp = 0;
