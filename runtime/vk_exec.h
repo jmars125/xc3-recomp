@@ -113,6 +113,8 @@ typedef struct VkExec {
     uint32_t tex_serial, pass_serial;    // bumped by every texture or image bind and pass begin
 } VkExec;
 
+// Resolves ex->rt into ex->color / ex->depth if a set_rt invalidated them (no-op once resolved).
+void vk_exec_resolve_rt(VkExec *ex);
 // Begins dynamic rendering with the current targets unless a pass is open (a full memory barrier precedes it). Call
 // before a draw or an attachment clear.
 void vk_exec_pass_begin(VkExec *ex);
