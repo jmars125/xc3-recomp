@@ -1476,10 +1476,22 @@ static void thread_finish(RtThread *t) {
     unlock();
 }
 
-// ExitThread: back to the thread start with a non-unwinding longjmp; no SEH unwinding through lifted frames.
-// (__builtin_setjmp is not usable: on Win64 LLVM saves the frame address, which is not rbp when the frame register
-// is offset, and the landing code then reads its locals through the wrong base.)
-static __attribute__((noreturn)) void exit_now(RtThread *t) { longjmp(t->exit_jmp, 1); }
+// ExitThread. On Windows the host thread finishes here and ends (plat_thread_exit): a longjmp back to the thread start
+// is checked by ucrtbase's longjmp when the system enforces hardware stack protection (CET shadow stacks), and the
+// non-unwinding jump below (its frame is NULL) fails that check: a fast fail, 0xc0000409 in ucrtbase.dll, each time a
+// guest thread ended, such as the movie player's at the end of every pre-rendered video (issue 107). Elsewhere: back to
+// the thread start with a non-unwinding longjmp; no unwinding through lifted frames. (__builtin_setjmp is not usable:
+// on Win64 LLVM saves the frame address, which is not rbp when the frame register is offset, and the landing code
+// then reads its locals through the wrong base.)
+static void thread_finish(RtThread *t);
+static __attribute__((noreturn)) void exit_now(RtThread *t) {
+#ifdef _WIN32
+    thread_finish(t);
+    plat_thread_exit();
+#else
+    longjmp(t->exit_jmp, 1);
+#endif
+}
 
 // The calling host thread, for ap_try (XC3_ASYNC_PREEMPT) and dg_sample (XC3_CORE_DIAG).
 static PlatIntr *ap_open_self(void) {

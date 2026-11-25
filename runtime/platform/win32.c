@@ -53,6 +53,8 @@ PlatThread *plat_thread_new_ex(PlatThreadFn fn, void *arg, const char *name, siz
     return t;
 }
 
+void plat_thread_exit(void) { ExitThread(0); }   // thread_main above does nothing after fn
+
 void plat_thread_join(PlatThread *t) {
     WaitForSingleObject(t->h, INFINITE);
     CloseHandle(t->h);

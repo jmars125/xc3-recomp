@@ -25,6 +25,8 @@ PlatThread *plat_thread_new_ex(PlatThreadFn fn, void *arg, const char *name, siz
 // Starts a thread nobody joins (plat_thread_new_ex + plat_thread_detach). 1 on success.
 int plat_thread_spawn(PlatThreadFn fn, void *arg, const char *name, size_t stack);
 void plat_thread_join(PlatThread *t);     // waits for fn to return, then frees t
+// Ends the calling thread here, as if its fn had returned, without unwinding or longjmp (Windows only).
+__attribute__((noreturn)) void plat_thread_exit(void);
 // Waits at most ns for fn to return: 1 when it did (t is freed), 0 when it still runs (t stays valid).
 int plat_thread_join_ns(PlatThread *t, uint64_t ns);
 void plat_thread_detach(PlatThread *t);   // frees t; the thread runs on
