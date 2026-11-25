@@ -17,6 +17,10 @@
 # realtime = 1
 # Cutscenes and the title menus at 30 fps, as on the console (their animation counts frames). 0 keeps fps_limit.
 # cutscene_30 = 1
+# In-engine events (talks, staged moves between cutscenes) end at any frame rate: their end checks take the frame
+# step as their margin when it is shorter than 1/30 s. With it on, only cutscenes hold 30 fps under cutscene_30, and
+# events keep fps_limit. Needs realtime = 1. 0 restores the 1/30 s margin and holds events at 30 fps too.
+# cutscene_end = 1
 # Menus and the HUD animate at the console's speed at any frame rate (0: one 30 fps step per frame, faster above 30).
 # Read at start.
 # menu_time = 1

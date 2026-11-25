@@ -37,6 +37,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "dispatch.h"
 #include "gfx.h"
 #include "host.h"
 #include "layout.h"
@@ -54,6 +55,64 @@ static float *menu_ratio;   // patch page +0 for the set menus when step_store d
 static uint64_t last_ns;
 static double samples[STEP_SAMPLES];
 static unsigned sample_count, sample_next;
+
+// Opt-in candidates for both final-frame gates in XC3 2.2.1. The outer check (main+0x338d00) and the blocking track
+// loop (main+0x338968) both compare context time + 0.001 s against authored end + 1/30 s. Changing only the outer
+// check leaves the loop on its old threshold. Use at most one running event step for both margins, including
+// sub-1/60 s steps. Do not change the authored 30 Hz frame-to-seconds conversions elsewhere in that loop.
+// Timeline advancement, pause/abort handling and the completion/audio checks following these gates stay original.
+// These changes are experimental, not a general repair for movie clock drift or every possible transition wait.
+#define CUTSCENE_END_HOOK 0xf60
+#define CUTSCENE_END_LOOP_HOOK 0xf70
+
+static void cutscene_end_margin_for(Cpu *c, unsigned gate) {
+    float original = arg_s(c, 1), seconds = 0;
+    // Each patch explicitly copies player/context into dead caller-saved x8/x9 before dispatch. Do not read the
+    // callee-saved x19/x20 here: generated C may keep their current values in locals rather than in Cpu.
+    uint64_t player = c->x[8];
+    if (!player || !plat_mem_read(player + 0x58, &seconds, sizeof seconds)) return;
+    // Never turn a zero step into permission to finish a paused event. Only s1 changes; the authored end in s0,
+    // other registers and condition flags stay intact. A slow frame keeps the original margin.
+    if (!isfinite(original) || original <= 0.0f || !isfinite(seconds) || seconds <= 0.0f) return;
+    float margin = seconds < original ? seconds : original;
+    uint32_t bits;
+    memcpy(&bits, &margin, sizeof bits);
+    c->v[1] = bits;
+
+    // At most one line per gate per second near the end, so a remaining wait can be distinguished from movie
+    // clock drift without logging every event frame. The diagnostic does not advance time or force completion.
+    float time = 0, end = arg_s(c, 0);
+    uint64_t context = c->x[9];
+    if (!context || !plat_mem_read(context + 0x10, &time, sizeof time) ||
+        !isfinite(time) || !isfinite(end) || time + 0.05f < end) return;
+    static _Atomic uint64_t logged_ns[2];
+    uint64_t now = kern_now_ns(), before = atomic_load_explicit(&logged_ns[gate], memory_order_relaxed);
+    if (now - before < 1000000000ull ||
+        !atomic_compare_exchange_strong_explicit(&logged_ns[gate], &before, now,
+                                                memory_order_relaxed, memory_order_relaxed)) return;
+    rt_log("cutscene end: %s player 0x%llx time %.6f end %.6f step %.6f margin %.6f",
+           gate ? "track loop" : "final check", (unsigned long long)player,
+           (double)time, (double)end, (double)seconds, (double)margin);
+}
+
+static void cutscene_end_margin(Cpu *c) { cutscene_end_margin_for(c, 0); }
+static void cutscene_end_loop_margin(Cpu *c) { cutscene_end_margin_for(c, 1); }
+
+static int end_margins;   // cutscene_end runs: events end at any step, so only cutscenes hold 30 fps (cutscene)
+
+static void cutscene_end_init(void) {
+    int set = rt_patch_set("cutscene_end");
+    if (!rt_patch_enabled(set)) return;
+    if (!step_word) {
+        rt_patch_disable(set);
+        rt_log("cutscene end: disabled; the real-time frame step is required");
+        return;
+    }
+    rt_register_host((uint64_t)(uintptr_t)rt_patch_page() + CUTSCENE_END_HOOK, cutscene_end_margin);
+    rt_register_host((uint64_t)(uintptr_t)rt_patch_page() + CUTSCENE_END_LOOP_HOOK, cutscene_end_loop_margin);
+    end_margins = 1;
+    rt_log("cutscene end: the final and track-loop end checks take the event step as their margin when it is shorter");
+}
 
 static void step_store(float seconds) {
     step_now = seconds;
@@ -88,6 +147,7 @@ static int vsyncs_find(void) {
 void frame_step_init(void) {
     int realtime = rt_patch_set("realtime");
     if (!vsyncs_find()) {
+        rt_patch_disable(rt_patch_set("cutscene_end"));
         rt_log("frame rate: the vsync count is not at main+0x1b42db0; shipping 30 fps whole-vsync steps");
         return;
     }
@@ -102,6 +162,7 @@ void frame_step_init(void) {
         *menu_ratio = 1.0f;
     }
     frame_limit_live();
+    cutscene_end_init();
     rt_log("frame rate: %s", step_word ? "real-time step (5-frame average of display intervals, at most 1/15 s)"
                                        : "whole-vsync steps, vsync count 1 at a limit of 60 or more");
 }
@@ -285,6 +346,12 @@ static int cutscene(void) {
     uint32_t flags = 0;
     memcpy(&obj, (uint8_t *)rt_patch_page() + 0x70, 8);
     if (obj && plat_mem_read(obj + 0x1fc, &flags, 4) && (flags & 4)) return 1;
+    // With the cutscene_end set the events below end at any step, so they keep the limit: the text boxes and other
+    // interface of talk events animated at 30 fps under the hold (issue 101). The player the loop stores is dropped.
+    if (end_margins) {
+        __atomic_store_n((uint64_t *)((uint8_t *)rt_patch_page() + 0x78), 0, __ATOMIC_RELEASE);
+        return 0;
+    }
     // An in-engine event playing: the event player's loop stores the player to the page's +0x78 once a frame
     // (patches-upd.txt realtime, main+0x334a34), and taking it back here counts the presents since. Some events set
     // neither the flag above nor the play report's id below, and the camera on the three soldiers before the first

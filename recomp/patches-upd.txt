@@ -40,6 +40,25 @@ site realtime main f400 9449c331 @page:x8 bd400500
 site realtime main 124fa70 2a090108 32000108
 site realtime main 334a34 f9403668 @page:x8 f9003d13 f9403668
 
+# cutscene_end (XC3_CUTSCENE_END, frame_rate.c cutscene_end_margin_for): the end checks of in-engine events at any
+# frame step. Found and written by imforever89-create (issue 61, cutscene-end-exp3.patch).
+# The seconds path in main+0x33506c clamps the event context's +0x10 to the authored end from main+0x3baee0. The
+# advancement in main+0x3385e8 adds the event player's +0x58 step. main+0x338d00 compares that time plus its 0.001 s
+# tolerance to the authored end plus 1/30 s. A step below that final margin can fall short after each clamp.
+# The blocking track loop main+0x338968 has the same comparison at main+0x338b68, before it yields and advances
+# context time. Apply the same margin to both gates: fixing only the outer check leaves this wait unchanged.
+# At both sites s0 holds the end time and s1 the console margin. Player/context are x19/x20 in the final check,
+# x20/x19 in the track loop. Copy them into dead caller-saved x8/x9 so the dispatcher receives their current values
+# even when the lifter keeps x19/x20 in C locals. The hooks substitute min(1/30, positive running step), keeping
+# paused/invalid steps unchanged. x8/x9 are not read again before subsequent calls or loads overwrite them, and x30
+# is saved and dead at both sites; the next bl sets it. Other registers and flags are preserved.
+# In particular, do not change the track loop's w21: its 1/30 is also the authored frame-to-seconds conversion at
+# main+0x338c50. Timeline, animation, movie pacing and the remaining completion checks are unchanged.
+# These are candidates for two wait gates, not a verified solution to movie clock drift or all transition waits.
+set cutscene_end XC3_CUTSCENE_END 1
+site cutscene_end main 338d34 1e270101 1e270101 aa1303e8 aa1403e9 @call:f60
+site cutscene_end main 338b68 1e2702a1 1e2702a1 aa1403e8 aa1303e9 @call:f70
+
 # menus (XC3_MENU_TIME, frame_rate.c): the interface's animation follows the time each frame is shown. Every layout
 # (menus, the HUD, their fades) advances each frame by its own speed (+0x290) times the layout manager's rate (+0x80 of
 # the object at *main+0x1b64fc0, the 1/30 s step at +0x7c times a rate at +0x94, set in main+0x10107b4) and stores the
