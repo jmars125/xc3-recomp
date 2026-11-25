@@ -2353,7 +2353,7 @@ static void scene_widen(VkExec *ex) {
     const float *v = ex->vp[0];
     double w = v[2], h = v[3];
     if (v[0] != 0 || v[1] != 0 || w >= out[0] || h >= out[1] || w < out[0] / 4.0 || h < out[1] / 4.0) return;
-    if (fabs(w * out[1] - h * out[0]) > out[0] + out[1]) return;   // not the frame's aspect, to a pixel or so
+    if (fabs(w * out[1] - h * out[0]) > 2.0 * (out[0] + out[1])) return;   // not the frame's aspect, to ~2 px (multiple-of-4 rounding)
     widen_now = widen_prev = 1;
     ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     static int said;
