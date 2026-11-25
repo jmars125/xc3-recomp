@@ -56,8 +56,8 @@ static void decide(void) {
     const char *o = cfg_value("XC3_OUTPUT_RES");
     unsigned w, h;
     if (parse(o, &w, &h)) {
-        R.ow = w & ~1u;
-        R.oh = h & ~1u;
+        R.ow = w & ~3u;
+        R.oh = h & ~3u;
     } else {
         rt_log("resolution: XC3_OUTPUT_RES=%s is not <width>x<height> in 640x360..7680x4320; 1920x1080", o);
     }
@@ -68,6 +68,22 @@ static void decide(void) {
     } else if (s && strcmp(s, "game")) {
         rt_log("resolution: XC3_RENDER_SCALE=%s is not game or a percentage from 25; the game's own", s);
     }
+}
+
+// The scene's size at the fixed scale, rounded to multiples of 4. Raw TSSAO (sh_fe9492b01dfcde0f) gathers from the
+// half-size linear depth (W/2 x H/2) at quarter size (W/4 x H/4) with hardcoded 2x bilinear weights; when W or H is
+// not a multiple of 4 (e.g. 1440x810 at 75% of 1080p -> 720x405 vs 360x202), gather coordinates drift past mid-screen
+// and shift neighbor depth samples by a full texel, painting black AO splotches across flat ground.
+static void scene_dims(unsigned ow, unsigned oh, int scale, unsigned *sw, unsigned *sh) {
+    if (!scale || scale >= 100) { *sw = ow, *sh = oh; return; }
+    double f = scale / 100.0;
+    unsigned w = ((unsigned)(ow * f) + 2u) & ~3u;
+    unsigned h = ((unsigned)(oh * f) + 2u) & ~3u;
+    if (w < 4) w = 4;
+    if (h < 4) h = 4;
+    if (w > ow) w = ow & ~3u;
+    if (h > oh) h = oh & ~3u;
+    *sw = w, *sh = h;
 }
 
 // Switches the scaled scene on for an XC3_RENDER_SCALE below 100; otherwise the game draws it whole.
@@ -88,10 +104,14 @@ static void scene_scale(void) {
     } else if (R.scale >= 100) {
         R.scale = 0;
     }
-    float f[2] = {R.scale / 100.0f, R.scale / 100.0f};
+    unsigned sw, sh;
+    scene_dims(R.ow, R.oh, R.scale, &sw, &sh);
+    // +0.5 before dividing so the game's truncating (int)(frame * factor) at main+0xed5b54 lands on exact sw, sh.
+    float f[2] = {sw == R.ow ? 1.0f : (sw + 0.5f) / (float)R.ow,
+                  sh == R.oh ? 1.0f : (sh + 0.5f) / (float)R.oh};
     memcpy(page + 0x58, f, sizeof f);
     rt_patch_switch(set, R.scale > 0);
-    if (R.scale) rt_log("resolution: 3D render scale %d %%", R.scale);
+    if (R.scale) rt_log("resolution: 3D render scale %d %% (%ux%u)", R.scale, sw, sh);
 }
 
 int res_scene_on(void) { return R.scale > 0; }
@@ -177,13 +197,11 @@ void res_init(void) {
     ui_fit_init();
 }
 
-// The scene's size at the fixed scale, as the game's view loop (main+0xed5b60) cuts it: the frame size times the factor,
-// truncated.
+// The scene's size at the fixed scale, rounded to multiples of 4 (scene_dims).
 void res_sizes(unsigned out[2], unsigned scene[2]) {
     decide();
     out[0] = R.on ? R.ow : BASE_W, out[1] = R.on ? R.oh : BASE_H;
-    float f = R.scale ? R.scale / 100.0f : 1.0f;
-    scene[0] = (unsigned)(out[0] * f), scene[1] = (unsigned)(out[1] * f);
+    scene_dims(out[0], out[1], R.scale, &scene[0], &scene[1]);
 }
 
 // The interface's horizontal scale on a frame wider than the game's 16:9 canvas (nvn_api_cmd.c ui_fit), 1 otherwise:
