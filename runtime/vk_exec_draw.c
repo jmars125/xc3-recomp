@@ -1139,11 +1139,39 @@ static uint32_t feedback_scan(VkExec *ex, const GfxShader *fs) {
     return m;
 }
 
+// Attachment slots of the open pass that a storage image of fs covers. The sand footprint decal loads the G-buffer
+// normal target it draws into through an R32UI storage image (SULD; vk_exec_draw.c storage_view_format) after the
+// pass's earlier draws wrote it. The feedback layout does not cover storage access, so such a draw gets the full
+// barrier of a pass restart instead: without it the load read what the colour cache had not written back yet on RADV,
+// and the decal wrote that over its quad, a square under every footprint in sand (issue 108; NVIDIA reads through L2).
+static uint32_t storage_attached(VkExec *ex, const GfxShader *fs) {
+    const GfxShaderRes *res;
+    int n = gfx_shader_resources(fs, GFX_RES_IMG, &res);
+    uint32_t m = 0;
+    int locked = 0;
+    for (int r = 0; r < n; r++)
+        for (int k = 0; k < (res[r].count ? res[r].count : 1); k++) {
+            int slot = res[r].slot + k;
+            uint64_t h = slot >= 0 && slot < 32 ? ex->img[NVN_STAGE_FS][slot] : 0;
+            if (!h) continue;
+            if (!locked) vk_texture_lock(), locked = 1;
+            SubRange sr = sampled_sub(h);
+            m |= attached_as(ex, &sr);
+        }
+    if (locked) vk_texture_unlock();
+    return m;
+}
+
 // Before the pipeline lookup of a draw with fragment shader fs: learns and restarts as the mode says. Returns the
 // sampled attachments in the feedback layout (the pipeline's feedback flag and feedback_barrier).
 static uint32_t feedback_prepare(VkExec *ex, const GfxShader *fs) {
     int mode = vk_ctx()->feedback;
     if (mode == VK_FEEDBACK_OFF || !fs || !ex->in_pass) return 0;
+    if (ex->fb_dirty && (storage_attached(ex, fs) & ex->fb_dirty)) {
+        vk_exec_pass_end(ex);
+        vk_exec_pass_begin(ex);   // the full barrier makes the pass's writes visible to the storage load
+        vk_exec_frame.fb_restarts++;
+    }
     uint32_t m = feedback_scan(ex, fs);
     uint32_t d = m & ex->fb_dirty;
     if (d) vk_exec_frame.fb_draws++;
