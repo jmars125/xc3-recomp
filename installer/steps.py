@@ -229,7 +229,7 @@ class Check(Step):
         own = (ctx.temp, *ctx.temp.parents)   # a temp folder inside the install folder (installer/cli.py) is ours
         if ctx.mode == 'install' and dest.is_dir() and any(p not in own for p in dest.iterdir()):
             raise InstallError('check.dest_not_empty', path=str(dest))
-        lang = ctx.options.lang or ctx.state.get('lang')
+        lang = ctx.options.lang or ctx.state.get('lang') or getattr(ctx.options, 'default_lang', None)
         if not lang:
             raise InstallError('check.lang_missing')
         if lang not in ini.LANGUAGES:

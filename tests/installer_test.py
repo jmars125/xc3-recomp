@@ -15,7 +15,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from installer import ini, runner, state  # noqa: E402
-from installer.events import Reporter  # noqa: E402
+from installer.events import LineReporter, Reporter  # noqa: E402
 from installer.layout import Layout  # noqa: E402
 
 
@@ -249,6 +249,21 @@ class EventsTest(unittest.TestCase):
             log = (Path(d) / 'x.log').read_text(encoding='utf-8')
             self.assertIn('40 GB needed, 3 GB free', log)
             self.assertIn('[check.disk_space]', log)
+
+    def test_line_reporter_prints_progress_lines_for_a_launcher(self):
+        out = io.StringIO()
+        rep = LineReporter(out=out)
+        rep.emit('start', release='1', mode='install', dev=False, dest='x', log='y', steps=['check', 'extract'])
+        rep.step('check', 'started')
+        rep.step('check', 'done', seconds=1.0)
+        rep.step('extract', 'started')
+        rep.progress('extract', 'copy', 5, 10, 'bytes')
+        rep.error('check.disk_space', {'path': 'D:\\x', 'need_gb': 40, 'free_gb': 3}, step='check')
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0], 'progress 0.000 Checking the computer and the game files')
+        self.assertEqual(lines[1], 'progress 0.500 Extracting the game')
+        self.assertEqual(lines[2], 'progress 0.750 Copying the game data 5/10 bytes')
+        self.assertTrue(lines[3].startswith('progress 0.500 ') and '40 GB needed' in lines[3])
 
     def test_catalog_has_every_id_the_code_uses(self):
         catalog = json.loads((ROOT / 'installer' / 'text' / 'en.json').read_text(encoding='utf-8'))

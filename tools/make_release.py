@@ -14,7 +14,7 @@ cached in toolchain/release-dl/ and checked against the sha256 in PINS; a mismat
     runtime/   libxc3rt.a (build_game.py --make-runtime-lib with llvm/), the runtime headers, romfs.c, patches.c and
                ov_zstd.c (compiled per install), deps/ (headers and import libraries of SDL3, Opus, libvpx, Vulkan and VMA)
     bin/       xc3_xlate.exe (+ .id), hactool.exe, SDL3.dll (upstream), libopus-0.dll, ninja.exe
-    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example
+    recomp/, tools/, data/, installer/, licenses/, THIRD_PARTY_NOTICES.md, xc3.ini.example, recomplauncher.json
     VERSION    the repository's VERSION plus the commit, 0.1.0+973c626 (VERSION alone outside a git checkout); the
                installer's release string
     XC3-Setup.exe  installer/launcher/launcher.c built with llvm/ (-mwindows): starts python/pythonw.exe -m installer.gui
@@ -432,6 +432,7 @@ def build_sources(out):
         copy_tree(ROOT / 'tools' / d, out / 'tools' / d, lambda r: '__pycache__' in r or r.endswith('.md'))
     copy_tree(ROOT / 'installer', out / 'installer', lambda r: '__pycache__' in r or r.startswith('launcher/'))
     shutil.copy2(ROOT / 'xc3.ini.example', out / 'xc3.ini.example')
+    shutil.copy2(ROOT / 'recomplauncher.json', out / 'recomplauncher.json')   # RecompLauncher reads it from the top
     shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', out / 'THIRD_PARTY_NOTICES.md')
     (out / 'VERSION').write_text(version() + '\n', encoding='utf-8')
 

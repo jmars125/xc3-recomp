@@ -553,7 +553,7 @@ static int selftest(void) {
 }
 
 static int usage(const char *argv0) {
-    fprintf(stderr, "usage: %s [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
+    fprintf(stderr, "usage: %s [--game DIR] [--exefs DIR] [--romfs DIR] [--profile DIR] [--selftest | --probe-loader | "
                     "--probe-cfg | --probe-kernel | --probe-ipc | --probe-services | --probe-fs | --probe-gfx-abi | "
                     "--probe-nvn | --probe-nvn-tex | --probe-window | --probe-shader | --probe-vkmem | "
                     "--probe-vkexec | --probe-astc | --probe-movie | --prepare-shaders | --warm-shaders | --boot |--seconds S [--shot PNG]]\n", argv0);
@@ -606,6 +606,20 @@ static int profile_has_saves(const char *profile) {
     const void *ctx[2] = {save, &found};
     if (plat_dir_exists(save)) plat_file_list(save, "", user_has_sav, (void *)ctx);
     return found;
+}
+
+// --game DIR: the three folders of an install (exefs, romfs, profile) under DIR, for a launcher or a shortcut that starts
+// the game by its install folder. It is the three options below given together; a later --exefs, --romfs or --profile
+// still wins. xc3.ini, logs and the upscaler DLLs are still read next to xc3.exe.
+static char game_exefs[PLAT_PATH_MAX * 2], game_romfs[PLAT_PATH_MAX * 2], game_profile[PLAT_PATH_MAX * 2];
+
+static void use_game_folder(RtConfig *c, const char *dir) {
+    snprintf(game_exefs, sizeof game_exefs, "%s/exefs", dir);
+    snprintf(game_romfs, sizeof game_romfs, "%s/romfs", dir);
+    snprintf(game_profile, sizeof game_profile, "%s/profile", dir);
+    c->exefs = game_exefs;
+    c->romfs = game_romfs;
+    c->profile = game_profile;
 }
 
 static void portable_paths(RtConfig *c) {
@@ -664,6 +678,9 @@ int main(int argc, char **argv) {
         if (path) {
             if (++i == argc) return usage(argv[0]);
             *path = argv[i];
+        } else if (!strcmp(argv[i], "--game")) {
+            if (++i == argc) return usage(argv[0]);
+            use_game_folder(&cfg, argv[i]);
         } else if (!strcmp(argv[i], "--seconds")) {
             char *end;
             if (++i == argc) return usage(argv[0]);
