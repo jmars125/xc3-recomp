@@ -142,15 +142,13 @@ site modfiles main 12577b8 d37df129 d37df129 @call:f20
 # high_ether.c. So an orb leaves at the time it left at 30 fps, and nothing changes at 30 fps. x30 is dead at the
 # three sites (each function saved it and made a call before); s0 is free there (it is reloaded after the first, and
 # the function returns after the third). The other sites cap the push as the orbs set does: the fourth loads the count
-# and calls ether_high_push, which makes x8 the slot, min(count, 7); the fifth and sixth release both handles the slot
-# holds (main+0x32e118, which does nothing on an empty slot) before main+0x32e0fc moves the new ones in, and the
-# seventh moves the add x1 the sixth replaced; the eighth stores min(count, 7) + 1 as the count.
+# and calls ether_high_push, which makes x8 the slot, min(count, 7), and releases what the slot holds when the list is
+# full (its two handles, main+0x32e118, and its effect id, main+0x4b92d0, as the list update does for an ended orb):
+# only then, because the slots past the count are not cleared (a stale handle there crashed the sphere's first push).
+# x0-x18 are dead at that site: each is set before its next use. The fifth stores min(count, 7) + 1 as the count.
 set highether XC3_HIGH_ETHER 1
 site highether main 49a088 bc696800 bc696800 @call:f30
 site highether main 49b910 b903d27f bd43d260 @call:f40
 site highether main 49b914 fd4023e8 bd03d260 fd4023e8
 site highether main 49b4e8 f940c268 f940c268 @call:f50
-site highether main 49b4f0 9b094d14 9b094d14 aa1403e0 97fa4b0a
-site highether main 49b4f4 910103e1 91002280 97fa4b09
-site highether main 49b4f8 910103f6 910103e1 910103f6
 site highether main 49b550 91000508 cb480d08 91000508

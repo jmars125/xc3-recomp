@@ -4,8 +4,10 @@
 #include <math.h>
 #include <stdint.h>
 
+#include "cpu.h"
 #include "dispatch.h"
 #include "host.h"
+#include "layout.h"
 
 #define WAIT_HOOK 0xf30    // patch page offsets (patches-upd.txt, @call:f30, f40 and f50)
 #define START_HOOK 0xf40
@@ -29,7 +31,12 @@ static void ether_high_start(Cpu *c) {
     ret_s(c, dt > 0.0f && t < 0.0f ? t : 0.0f);
 }
 
-// x8 holds the count the push read from the list (+0x180 of x19); it becomes the slot, min(count, 7).
+#define RELEASE_HANDLE 0x32e118   // main: releases the effect handle at x0 (the list update's release of an ended orb)
+#define RELEASE_ID 0x4b92d0       // main: releases the effect id w0 (the same; the update then stores -1)
+
+// x8 holds the count the push read from the list (+0x180 of x19); it becomes the slot, min(count, 7). Only a full
+// list's newest slot is released first, as the list update releases an orb that ended: the slots past the count are
+// not cleared (a sphere's first push found a stale handle there and crashed in main+0x32e118 above 120 fps).
 static void ether_high_push(Cpu *c) {
     uint64_t n = c->x[8];
     uint64_t prev = __atomic_load_n(&most, __ATOMIC_RELAXED);
@@ -41,6 +48,14 @@ static void ether_high_push(Cpu *c) {
             rt_log("high ether: the list at %#llx held %llu, its newest orb gave way to a new one (%llu times)",
                    (unsigned long long)c->x[19], (unsigned long long)n, (unsigned long long)k);
         n = SLOTS - 1;
+        uint64_t slot = c->x[19] + n * 0x30;
+        rt_call(c, MOD_MAIN_BASE + RELEASE_HANDLE, 1, (uint64_t)slot);
+        rt_call(c, MOD_MAIN_BASE + RELEASE_HANDLE, 1, (uint64_t)(slot + 8));
+        uint32_t id = LD32(slot + 0x10);
+        if (id != 0xffffffffu) {
+            rt_call(c, MOD_MAIN_BASE + RELEASE_ID, 1, (uint64_t)id);
+            ST32(slot + 0x10, 0xffffffffu);
+        }
     }
     c->x[8] = n;
 }
