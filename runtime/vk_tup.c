@@ -68,10 +68,11 @@ struct ffxCreateBackendVKDesc {
 static const uint64_t ROLE_HASH[VK_TUP_ROLES] = {0, 0x8a739994fe8f27fdull, 0x3860d1fb663cc4c7ull,
                                                  0xc7ccb6fe83468b61ull, 0xf1c308ed7843326dull, 0x9a7f297f8b22180bull,
                                                  0xde3f095d826afe46ull};
-// Intel Iris Xe / Mesa ANV (softfloat64=true, gather_bias=8) SPIR-V FNV-1a hashes of the same 5 reconstruction draws:
+// Intel Iris Xe / Mesa ANV (softfloat64=true, gather_bias=8) SPIR-V FNV-1a hashes of the same 5 reconstruction draws
+// and the play-mode copy draw:
 static const uint64_t ROLE_HASH_INTEL[VK_TUP_ROLES] = {0, 0x0bc2be246e4f3612ull, 0x5fb7f01c0ecd7bd5ull,
                                                        0x7e96ae8e4198260eull, 0xf31f2f13732e0df3ull, 0x64db55ab66819f7eull,
-                                                       0xde3f095d826afe46ull};
+                                                       0x66e6333e84f22b17ull};
 
 typedef struct {
     VkImage image;
@@ -148,7 +149,7 @@ int vk_tup_role(const GfxShader *fs) {
     static unsigned logged;
     if (role && !(logged & 1u << role)) {
         logged |= 1u << role;
-        if (role == VK_TUP_COPY && h == ROLE_HASH[VK_TUP_COPY])
+        if (role == VK_TUP_COPY && (h == ROLE_HASH[VK_TUP_COPY] || h == ROLE_HASH_INTEL[VK_TUP_COPY]))
             rt_log("vk: temporal upscale: the game's copy of its reconstruction found (fragment shader %016llx)",
                    (unsigned long long)h);
         else
