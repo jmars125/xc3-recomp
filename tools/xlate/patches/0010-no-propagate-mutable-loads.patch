@@ -1,0 +1,67 @@
+--- a/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
++++ b/src/Ryujinx.Graphics.Shader/StructuredIr/AstOptimizer.cs
+@@ -27,7 +27,8 @@
+                         // use, and removing the assignment removed the operation itself (the reduction kernel c7830fac
+                         // lost its atomicMin on 2026-10-13; every translation ran in DebugMode since, to avoid this).
+                         bool sideEffects = HasSideEffects(assignment.Source);
+-                        bool isWorthPropagating = !sideEffects && (propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source));
++                        bool isWorthPropagating = !sideEffects && !ReadsMutableMemory(assignment.Source) &&
++                                                  (propVar.Uses.Count == 1 || IsWorthPropagating(assignment.Source));
+ 
+                         // XCX: SPIR-V passes call arguments by pointer to a variable (StructuredProgram copies them
+                         // into temporaries); folding an expression into a call argument breaks GenerateCall.
+@@ -51,6 +52,54 @@
+             RemoveEmptyBlocks(mainBlock);
+         }
+ 
++        // Do not propagate loads from mutable memory (storage buffers, shared/local/global memory, outputs, storage
++        // images) into their use site: an intervening store, atomic or barrier can overwrite the location before the
++        // use, as in XC3's facial morph-target vertex shaders (saving previous vertex positions before resetting them).
++        private static bool ReadsMutableMemory(IAstNode node)
++        {
++            if (node is not AstOperation op)
++            {
++                return false;
++            }
++
++            Instruction inst = op.Inst & Instruction.Mask;
++
++            if (inst == Instruction.ImageLoad)
++            {
++                return true;
++            }
++
++            if (inst == Instruction.Load)
++            {
++                switch (op.StorageKind)
++                {
++                    case StorageKind.StorageBuffer:
++                    case StorageKind.LocalMemory:
++                    case StorageKind.SharedMemory:
++                    case StorageKind.SharedMemory8:
++                    case StorageKind.SharedMemory16:
++                    case StorageKind.GlobalMemory:
++                    case StorageKind.GlobalMemoryS8:
++                    case StorageKind.GlobalMemoryS16:
++                    case StorageKind.GlobalMemoryU8:
++                    case StorageKind.GlobalMemoryU16:
++                    case StorageKind.Output:
++                    case StorageKind.OutputPerPatch:
++                        return true;
++                }
++            }
++
++            for (int i = 0; i < op.SourcesCount; i++)
++            {
++                if (ReadsMutableMemory(op.GetSource(i)))
++                {
++                    return true;
++                }
++            }
++
++            return false;
++        }
++
+         private static bool HasSideEffects(IAstNode source)
+         {
+             if (source is AstOperation op)
