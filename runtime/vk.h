@@ -147,6 +147,7 @@ int vk_hdr_overlay_target(uint32_t w, uint32_t h, VkImage *img, VkImageView *vie
 void vk_hdr_overlay(VkCommandBuffer cb);       // the overlay (COLOR_ATTACHMENT) blended onto the full picture (GENERAL)
 void vk_hdr_release(void);
 void vk_tup_copy(VkCommandBuffer cb, const VkTupImage *src, const VkTupImage *dst);   // outside a pass, GENERAL; scales
+void vk_tup_reset(void);                         // next vk_tup_record discards temporal history & auto-exposure
 void vk_tup_release(void);                       // before the device goes away
 void vk_present_flip(void);
 // The present thread names the frame id (vk_fg_frame_close) of the vk_present_blit call that follows.
