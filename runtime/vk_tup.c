@@ -324,7 +324,9 @@ static int ensure_ffx(VkCtx *c) {
     // projection puts at infinity.
     struct ffxCreateContextDescUpscale cd = {.header = {.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
                                                         .pNext = &be.header},
-                                             .flags = FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE | FFX_UPSCALE_ENABLE_DEPTH_INFINITE,
+                                             .flags = FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE |
+                                                      FFX_UPSCALE_ENABLE_DEPTH_INFINITE |
+                                                      FFX_UPSCALE_ENABLE_AUTO_EXPOSURE,
                                              .maxRenderSize = {T.rw, T.rh}, .maxUpscaleSize = {T.ow, T.oh},
                                              .fpMessage = ffx_message};
     if (knob("XC3_TUP_DEBUG")) cd.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;

@@ -2106,6 +2106,7 @@ static struct {
     VkTupImage done;   // scaled scene: our upscaler's result at the frame size, for after the game's copy
     VkTupImage fix;    // scaled scene: the image still to be brought into the frame (tup_fixup)
     VkImage copy_dst;  // scaled scene: the target of the game's copy, never the frame
+    int copied;        // 1 once the upscaler's result has already been delivered or armed for tup_fixup this frame
 } TU;
 
 static int tup_image(const VkExec *ex, int slot, VkTupImage *o) {
@@ -2135,9 +2136,32 @@ static int ubo_peek(const VkExec *ex, int st, int slot, uint64_t off, void *out,
 // depth (3) and, from its block c4, the jitter phase ([2].z); the last records the upscaler into its target instead.
 static int tup_draw(VkExec *ex, const GfxShader *fs) {
     int role = vk_tup_role(fs);
+    // In real-time event scenes and the prologue battle (issue #69), XC3 does not run the play-mode VK_TUP_COPY into a
+    // scene-size target; instead it composites the 2x reconstruction target directly into the frame-size target through
+    // a scene-size viewport (widen_now == 1). Replace that resampled draw with a direct 1:1 copy of TU.done (FSR/DLSS
+    // output) so the upscaler's frame-size result reaches the frame directly without a 2x round-trip.
+    if (!role && TU.done.image && res_scene_on() && widen_now) {
+        const VkExecTarget *t = &ex->color[0];
+        if (t->image && t->img && t->img->width == TU.done.w && t->img->height == TU.done.h &&
+            t->img->format == TU.done.format) {
+            VkTupImage dst = {t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width, t->img->height};
+            if (ex->in_pass) vk_exec_pass_end(ex);
+            vk_tup_copy(ex->cb, &TU.done, &dst);
+            TU.done.image = VK_NULL_HANDLE;
+            TU.copied = 1;
+            widen_now = widen_prev = 0;
+            ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
+            static int direct_logged;
+            if (!direct_logged++)
+                rt_log("vk: temporal upscale: direct 1:1 copy into %ux%u frame (replaced scene_widen composite %016llx)",
+                       dst.w, dst.h, (unsigned long long)gfx_shader_spirv_fnv(fs));
+            return 1;
+        }
+    }
     if (!role) return 0;
     if (role == VK_TUP_COPY) {   // the scene-size copy on the scaled path, or our result, goes into the frame next
         const VkExecTarget *t = &ex->color[0];
+        if (TU.copied) return 0;
         static int n;
         if (t->img && cfg_get("XC3_TUP_DEBUG") && n++ < 20)
             rt_log("vk: game copy into %ux%u fmt %d (done %d)", t->img->width, t->img->height, (int)t->img->format,
@@ -2147,12 +2171,14 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
             TU.fix = TU.done.image ? TU.done
                                    : (VkTupImage){t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width,
                                                   t->img->height};
+            TU.copied = 1;
         }
         TU.done.image = VK_NULL_HANDLE;
         return 0;
     }
     if (role == VK_TUP_FIRST) {
         TU.captured = 0;
+        TU.copied = 0;
         if (TU.fix.image) {   // the last frame's result found no target of the frame's size and format (tup_fixup)
             static unsigned missed;
             if (!missed++ || missed % 600 == 0)
