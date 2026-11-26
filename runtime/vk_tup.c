@@ -68,6 +68,10 @@ struct ffxCreateBackendVKDesc {
 static const uint64_t ROLE_HASH[VK_TUP_ROLES] = {0, 0x8a739994fe8f27fdull, 0x3860d1fb663cc4c7ull,
                                                  0xc7ccb6fe83468b61ull, 0xf1c308ed7843326dull, 0x9a7f297f8b22180bull,
                                                  0xde3f095d826afe46ull};
+// Intel Iris Xe / Mesa ANV (softfloat64=true, gather_bias=8) SPIR-V FNV-1a hashes of the same 5 reconstruction draws:
+static const uint64_t ROLE_HASH_INTEL[VK_TUP_ROLES] = {0, 0x0bc2be246e4f3612ull, 0x5fb7f01c0ecd7bd5ull,
+                                                       0x7e96ae8e4198260eull, 0xf31f2f13732e0df3ull, 0x64db55ab66819f7eull,
+                                                       0xde3f095d826afe46ull};
 
 typedef struct {
     VkImage image;
@@ -137,10 +141,10 @@ int vk_tup_role(const GfxShader *fs) {
     uint64_t h = gfx_shader_spirv_fnv(fs);
     int role = VK_TUP_NONE;
     for (int r = 1; r < VK_TUP_ROLES; r++)
-        if (h == ROLE_HASH[r]) role = r;
+        if (h == ROLE_HASH[r] || h == ROLE_HASH_INTEL[r]) role = r;
     // The title screen's copy (and some cutscenes'): another shader doing the same job, the reconstruction's output
     // halved into the frame (on the scaled path, into a target of the scene size).
-    if (h == 0xe98d22f95e30dbc6ull) role = VK_TUP_COPY;
+    if (h == 0xe98d22f95e30dbc6ull || h == 0x650fc359e3e3907bull) role = VK_TUP_COPY;
     static unsigned logged;
     if (role && !(logged & 1u << role)) {
         logged |= 1u << role;
@@ -172,8 +176,33 @@ static int load_ffx(void) {
     char *slash = strrchr(path, '\\');
     if (!slash) slash = strrchr(path, '/');
     if (!slash) return 0;
+#ifdef _WIN32
     strcpy(slash + 1, "amd_fidelityfx_vk.dll");
     T.lib = plat_lib_open(path);
+#else
+    char dir[1024];
+    size_t dlen = (size_t)(slash - path);
+    if (dlen >= sizeof dir) return 0;
+    memcpy(dir, path, dlen);
+    dir[dlen] = 0;
+    strcpy(slash + 1, "libffx_vk_linux.so");
+    T.lib = plat_lib_open(path);
+    if (T.lib) {
+        int (*ffx_load)(const char *) = (int (*)(const char *))plat_lib_sym(T.lib, "ffxvkLoad");
+        if (ffx_load && ffx_load(dir) != 0) {
+            const char *(*ffx_err)(void) = (const char *(*)(void))plat_lib_sym(T.lib, "ffxvkError");
+            rt_log("vk: FSR 3: libffx_vk_linux.so failed to load DLLs from %s (%s); trying libamd_fidelityfx_vk.so",
+                   dir, ffx_err ? ffx_err() : "unknown");
+            T.lib = NULL;
+        } else {
+            rt_log("vk: FSR 3: loaded AMD FidelityFX Vulkan upscaler via libffx_vk_linux.so");
+        }
+    }
+    if (!T.lib) {
+        strcpy(slash + 1, "libamd_fidelityfx_vk.so");
+        T.lib = plat_lib_open(path);
+    }
+#endif
     if (!T.lib) {
         rt_log("vk: FSR 3 off: %s is missing (tools/fetch_upscalers.py puts it there)", path);
         return 0;
@@ -329,6 +358,11 @@ static int ensure_ffx(VkCtx *c) {
                                              .fpMessage = ffx_message};
     if (knob("XC3_TUP_DEBUG")) cd.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
     ffxReturnCode_t rc = T.create(&T.ctx, &cd.header, NULL);
+    if (rc != FFX_API_RETURN_OK) {
+        // FidelityFX SDK 2.x (libffx_vk_linux.so + amd_fidelityfx_upscaler_vk.dll) uses 0x01000003u for BACKEND_VK.
+        be.header.type = 0x01000003u;
+        rc = T.create(&T.ctx, &cd.header, NULL);
+    }
     if (rc != FFX_API_RETURN_OK) {
         rt_log("vk: FSR 3: ffxCreateContext failed (%u)", rc);
         T.ctx = NULL;
