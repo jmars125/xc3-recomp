@@ -109,6 +109,13 @@ def release_dlls(root):
             *sorted((root / 'bin' / 'upscalers').glob('*.dll')))
 
 
+def release_libs_linux(root):
+    """The shared libraries xc3 loads on Linux: SDL3 and any bundled FSR 3 upscaler files in bin/upscalers."""
+    up = root / 'bin' / 'upscalers'
+    extra = (*sorted(up.glob('*.so')), *sorted(up.glob('*.dll'))) if up.is_dir() else ()
+    return (root / 'bin' / 'libSDL3.so.0', *extra)
+
+
 def release_layout(root):
     version = root / 'VERSION'
     return Layout(
@@ -119,7 +126,7 @@ def release_layout(root):
         llvm=root / 'llvm', deps=root / 'runtime' / 'deps', runtime=root / 'runtime',
         runtime_lib=root / 'runtime' / 'libxc3rt.a',
         ninja=root / 'bin' / ('ninja' + EXE), hactool=root / 'bin' / ('hactool' + EXE),
-        xlate=root / 'bin' / ('xc3_xlate' + EXE), dlls=release_dlls(root) if WIN else (root / 'bin' / 'libSDL3.so.0',),
+        xlate=root / 'bin' / ('xc3_xlate' + EXE), dlls=release_dlls(root) if WIN else release_libs_linux(root),
         ini_example=root / 'xc3.ini.example',
         # Linux: None, the install folder's .setup-temp (installer/cli.py): the AppImage is mounted read-only, and on
         # a Steam Deck /home is often too full for the generated C while the install folder is on the SD card
