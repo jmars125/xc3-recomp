@@ -2333,6 +2333,7 @@ static void tup_fixup_sampled(VkExec *ex, const GfxShader *fs) {
 // submission in queue order and before the present's blit (vk_backend.c present_image flushes the upload batch). Each
 // present also notes its image for tup_presented.
 void vk_exec_tup_present(VkImage img, VkFormat fmt, uint32_t w, uint32_t h) {
+    TU.copied = 0;
     if (img && (TP.img[0] != img || TP.w != w || TP.h != h || TP.fmt != fmt)) {
         if (TP.w != w || TP.h != h || TP.fmt != fmt) memset(&TP, 0, sizeof TP);
         int k = 0;
