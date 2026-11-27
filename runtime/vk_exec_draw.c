@@ -2113,6 +2113,9 @@ static struct {
     uint32_t last_recon_w, last_recon_h;
     VkImage last_color_img;
     uint64_t last_motion_tex, last_depth_tex;
+    VkFormat last_depth_fmt;
+    uint32_t last_depth_w, last_depth_h;
+    VkTupImage frame_depth;   // current frame's ping-ponged scene depth target (preferred over last_depth_tex on cut)
     uint32_t last_rw, last_rh;
 } TU;
 
@@ -2177,8 +2180,9 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
                            (unsigned long long)gfx_shader_spirv_fnv(fs), col.w, col.h,
                            t->img->width, t->img->height, cut_n);
                 if (TU.failed || vk_tup_mode() == VK_TUP_OFF) return 0;
-                VkTupImage mot = {0}, dep = {0};
-                if (!tup_image_handle(TU.last_motion_tex, &mot) || !tup_image_handle(TU.last_depth_tex, &dep) ||
+                VkTupImage mot = {0}, dep = TU.frame_depth;
+                int has_dep = dep.image != VK_NULL_HANDLE || tup_image_handle(TU.last_depth_tex, &dep);
+                if (!tup_image_handle(TU.last_motion_tex, &mot) || !has_dep ||
                     !(dep.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || mot.w < col.w || mot.h < col.h ||
                     dep.w < col.w || dep.h < col.h)
                     return 0;   // let the game's EXEC_MODE = 1 draw run; vk_tup_reset() is armed for the next frame
@@ -2277,6 +2281,9 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
         TU.last_color_img = f->color.image;
         TU.last_motion_tex = ex->tex[NVN_STAGE_FS][2];
         TU.last_depth_tex = ex->tex[NVN_STAGE_FS][3];
+        TU.last_depth_fmt = f->depth.format;
+        TU.last_depth_w = f->depth.w;
+        TU.last_depth_h = f->depth.h;
         TU.last_rw = f->rw;
         TU.last_rh = f->rh;
         TU.captured = 1;
@@ -2409,6 +2416,7 @@ static void tup_fixup_sampled(VkExec *ex, const GfxShader *fs) {
 void vk_exec_tup_present(VkImage img, VkFormat fmt, uint32_t w, uint32_t h) {
     TU.captured = 0;
     TU.done.image = VK_NULL_HANDLE;
+    TU.frame_depth.image = VK_NULL_HANDLE;
     if (img && (TP.img[0] != img || TP.w != w || TP.h != h || TP.fmt != fmt)) {
         if (TP.w != w || TP.h != h || TP.fmt != fmt) memset(&TP, 0, sizeof TP);
         int k = 0;
@@ -2475,6 +2483,10 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (!ex->in_pass || TU.fix.image) tup_fixup(ex);
     if (!ex->in_pass) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     vk_exec_pass_begin(ex);
+    if (TU.last_depth_w && ex->depth.image && ex->depth.img && ex->depth.img->format == TU.last_depth_fmt &&
+        ex->depth.img->width == TU.last_depth_w && ex->depth.img->height == TU.last_depth_h)
+        TU.frame_depth = (VkTupImage){ex->depth.image, ex->depth.img->format, ex->depth.img->aspect,
+                                      ex->depth.img->width, ex->depth.img->height};
     scene_widen(ex);
     VkRect2D sc = vk_exec_scissor(ex);
     if (!sc.extent.width || !sc.extent.height) return 0;
