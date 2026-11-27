@@ -655,7 +655,7 @@ NVN_API(nvnWindowSetCrop) {
 // 2nd or 3rd tick would only add latency and 50 ms frames.
 #define VSYNC_HZ 60ull
 static uint64_t present_period(const win_t *o) {
-    if (frame_step_realtime()) return frame_step_cap_ns();
+    if (frame_step_realtime() && !frame_step_cutscene()) return frame_step_cap_ns();
     return (o->interval > 0 ? (uint64_t)o->interval : 1ull) * 1000000000ull / VSYNC_HZ;
 }
 
