@@ -835,7 +835,7 @@ static int bind_range(VkExec *ex, uint64_t addr, uint64_t size, uint64_t align, 
     if (sp.offset % align == 0) {
         VK_MEM_USE(sp);
         *out = (VkDescriptorBufferInfo){sp.buffer, sp.offset, n};
-        if (written) vk_mem_gpu_wrote(&sp, n), vk_usnap_drop(addr, n);
+        if (written) vk_mem_gpu_wrote(&sp, n), vk_usnap_drop(addr, n), note_written(ex, addr, n);
         count_use(sp.cls, use, n);
         VK_MEM_BOUND(sp);
         return 1;
@@ -1027,7 +1027,6 @@ static VkDescriptorBufferInfo ssbo_info(VkExec *ex, int st, const GfxShaderRes *
         uint64_t lead = vk_caps.sbuf_align ? b->addr & (vk_caps.sbuf_align - 1) : 0;
         if (bind_range(ex, b->addr - lead, b->size ? b->size + lead : 0, align, max, ubo ? VK_MUSE_UBO : VK_MUSE_SSBO,
                        written, &bi)) {
-            if (written && bi.buffer != VK_NULL_HANDLE) note_written(ex, b->addr - lead, bi.range);
             return bi;
         }
         if (b->addr) warn_once(W_SSBO_ALIGN, "storage buffer %#llx is not backed or not aligned: a zero buffer is bound",
@@ -2489,7 +2488,13 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     }
     if (pending) return 0;   // a background worker is building it: the draw is skipped until it is ready
     if (!p || !info) return warn_once(W_PIPELINE, "a graphics pipeline could not be created: draws with it are skipped"), 0;
-    if (ex->xfb.active && B.pipe[0] != p) vk_exec_xfb_pause(ex);   // Vulkan binds no pipeline while feedback is active
+    if (ex->xfb.active && B.pipe[0] != p) {
+        // Vulkan forbids binding a pipeline while transform feedback is active, and requires a pipeline barrier outside
+        // the render pass between vkCmdEndTransformFeedbackEXT (counter write) and vkCmdBeginTransformFeedbackEXT
+        // (counter read on resume). Ending and reopening the pass pauses XFB and emits the barrier before xfb_start.
+        vk_exec_pass_end(ex);
+        vk_exec_pass_begin(ex);
+    }
     bind_pipeline(ex, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     if (!B.st_valid || memcmp(&B.st, &s, sizeof s)) {
         vk_pipeline_set_dynamic(ex->cb, &s);
@@ -2867,6 +2872,7 @@ void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload) {
     case OP_XFB_BEGIN: {
         const p_xfb *b = payload;
         if (!xfb_load()) { warn_once(W_FEEDBACK, "transform feedback is not available on this device"); break; }
+        if (ex->in_pass) vk_exec_pass_end(ex);   // ensure a barrier before transform feedback begins/resumes
         ex->xfb.on = 1, ex->xfb.active = 0, ex->xfb.ctl = b->addr;
         ex->xfb.started = ex->xfb.resume = b->prim;   // Resume: prim 1, the counters hold the capture so far
         break;

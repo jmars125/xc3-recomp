@@ -832,7 +832,7 @@ static int query_stamp(uint64_t lo, uint64_t hi, uint32_t g) {
 //   reports it at the fence (vk_gpu_written), which copies those bytes back into guest memory. Until then the CPU
 //   copies skip them: a page the CPU and the GPU both write keeps the GPU's bytes.
 // XC3_SHADOW=1/0 forces the mode on or off; the default is on for Linux.
-typedef struct { uint64_t lo, hi, fence; } SRange;   // fence: of the submission that writes it, 0 unknown
+typedef struct { uint64_t lo, hi, fence; uint8_t submitted; } SRange;   // fence: of the submission that writes it, 0 unknown; submitted: 1 once handed to the GPU
 static PlatMutex shadow_lock = PLAT_MUTEX_INIT;   // after pool_lock; before gen_lock
 static PoolRec **stouch;                          // shadow_lock: pools resolved since the last sync
 static int nstouch, cstouch;
@@ -890,11 +890,12 @@ static void shadow_forget(PoolRec *r) {
     plat_mutex_unlock(&shadow_lock);
 }
 
-// shadow_lock held: copies guest [a, b) into the shadow, leaving out the bytes of GPU writes not copied back yet
-// (spend from index i on).
+// shadow_lock held: copies guest [a, b) into the shadow, leaving out the bytes of already-submitted GPU writes not
+// copied back yet (spend from index i on with submitted != 0; writes recorded for the submission about to run have
+// submitted == 0 and must not block copying the CPU's writes into the shadow first).
 static void shadow_copy(PoolRec *r, uint64_t a, uint64_t b, int i) {
     for (; i < nspend; i++)
-        if (spend[i].lo < b && spend[i].hi > a) {
+        if (spend[i].submitted && spend[i].lo < b && spend[i].hi > a) {
             if (spend[i].lo > a) shadow_copy(r, a, spend[i].lo, i + 1);
             if (spend[i].hi < b) shadow_copy(r, spend[i].hi, b, i + 1);
             return;
@@ -954,6 +955,7 @@ void vk_mem_shadow_sync(void) {
         s_syncs += (uint64_t)nstouch;
         nstouch = 0;
     }
+    for (int i = 0; i < nspend; i++) spend[i].submitted = 1;
     s_ticks += qpc() - t0;
     plat_mutex_unlock(&shadow_lock);
 }
@@ -962,7 +964,7 @@ void vk_mem_gpu_pending(uint64_t addr, uint64_t size) {
     if (!shadow_on || !size) return;
     plat_mutex_lock(&shadow_lock);
     if (nspend == cspend) grow((void **)&spend, &cspend, sizeof *spend);
-    spend[nspend++] = (SRange){addr, addr + size, vk_exec_recording_fence()};
+    spend[nspend++] = (SRange){addr, addr + size, vk_exec_recording_fence(), 0};
     plat_mutex_unlock(&shadow_lock);
 }
 
@@ -972,20 +974,33 @@ void vk_mem_gpu_pending(uint64_t addr, uint64_t size) {
 // in all. The GPU is done with the whole submission at the fence, so the shadow bytes are final: each byte is copied
 // once per fence (wb_done holds what this fence already copied; the completion thread reaches fences in order).
 static uint64_t wb_fence;
-static SRange *wb_done;
-static int nwb_done, cwb_done;
+static SRange *wb_done, *wb_tmp;
+static int nwb_done, cwb_done, nwb_tmp, cwb_tmp;
 
-// Copies [lo, hi) of r's shadow to guest memory except what wb_done holds; returns the bytes copied. shadow_lock held.
-static uint64_t wb_copy(PoolRec *r, uint64_t lo, uint64_t hi, int from) {
+// Copies [lo, hi) of r's shadow to guest memory except what wb_done holds and bytes still pending in a strictly newer
+// submitted GPU submission (spend[]); records each actually-copied leaf in wb_tmp[] and returns the bytes copied.
+// shadow_lock held.
+static uint64_t wb_copy(PoolRec *r, uint64_t lo, uint64_t hi, int from, int sfrom, uint64_t fence) {
     for (int i = from; i < nwb_done; i++)
         if (wb_done[i].lo < hi && wb_done[i].hi > lo) {
             uint64_t n = 0;
-            if (wb_done[i].lo > lo) n += wb_copy(r, lo, wb_done[i].lo, i + 1);
-            if (wb_done[i].hi < hi) n += wb_copy(r, wb_done[i].hi, hi, i + 1);
+            if (wb_done[i].lo > lo) n += wb_copy(r, lo, wb_done[i].lo, i + 1, sfrom, fence);
+            if (wb_done[i].hi < hi) n += wb_copy(r, wb_done[i].hi, hi, i + 1, sfrom, fence);
+            return n;
+        }
+    for (int i = sfrom; i < nspend; i++)
+        if (spend[i].submitted && (!fence || spend[i].fence > fence) && spend[i].lo < hi && spend[i].hi > lo) {
+            uint64_t n = 0;
+            if (spend[i].lo > lo) n += wb_copy(r, lo, spend[i].lo, nwb_done, i + 1, fence);
+            if (spend[i].hi < hi) n += wb_copy(r, spend[i].hi, hi, nwb_done, i + 1, fence);
             return n;
         }
     mem_thaw(lo, hi - lo);
     memcpy((void *)(uintptr_t)lo, r->smap + (lo - r->import_lo), hi - lo);
+    if (fence) {
+        if (nwb_tmp == cwb_tmp) grow((void **)&wb_tmp, &cwb_tmp, sizeof *wb_tmp);
+        wb_tmp[nwb_tmp++] = (SRange){lo, hi, fence, 0};
+    }
     return hi - lo;
 }
 
@@ -1002,11 +1017,12 @@ void vk_gpu_written(uint64_t addr, uint64_t size) {
         if (k >= 0) spend[k] = spend[--nspend];
         if (!fence || fence != wb_fence) wb_fence = fence, nwb_done = 0;
         if (r && r->smap && addr >= r->import_lo && addr + size <= r->import_hi) {
-            uint64_t n = wb_copy(r, addr, addr + size, 0);
+            nwb_tmp = 0;
+            uint64_t n = wb_copy(r, addr, addr + size, 0, 0, fence);
             s_wb_bytes += n;
             s_wb_dup += size - n;
-            if (fence) {   // merged with the ranges it touches, so the list stays short
-                SRange m = {addr, addr + size, fence};
+            for (int t = 0; t < nwb_tmp; t++) {   // merge only the bytes actually copied into wb_done
+                SRange m = wb_tmp[t];
                 for (int i = 0; i < nwb_done;)
                     if (wb_done[i].lo <= m.hi && wb_done[i].hi >= m.lo) {
                         if (wb_done[i].lo < m.lo) m.lo = wb_done[i].lo;
