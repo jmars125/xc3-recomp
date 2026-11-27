@@ -2106,10 +2106,20 @@ static struct {
     VkTupImage done;   // scaled scene: our upscaler's result at the frame size, for after the game's copy
     VkTupImage fix;    // scaled scene: the image still to be brought into the frame (tup_fixup)
     VkImage copy_dst;  // scaled scene: the target of the game's copy, never the frame
+    // Persistent across frames so camera-cut reset draws (pass 5 with EXEC_MODE = 1, which skip
+    // VK_TUP_FIRST..MID3 and write straight into the same 2x reconstruction target) can reset and
+    // dispatch the upscaler on the cut frame.
+    VkImage last_recon_img;
+    uint32_t last_recon_w, last_recon_h;
+    VkImage last_color_img;
+    uint64_t last_motion_tex, last_depth_tex;
+    VkFormat last_depth_fmt;
+    uint32_t last_depth_w, last_depth_h;
+    VkTupImage frame_depth;   // current frame's ping-ponged scene depth target (preferred over last_depth_tex on cut)
+    uint32_t last_rw, last_rh;
 } TU;
 
-static int tup_image(const VkExec *ex, int slot, VkTupImage *o) {
-    uint64_t h = ex->tex[NVN_STAGE_FS][slot];
+static int tup_image_handle(uint64_t h, VkTupImage *o) {
     if (!h) return 0;
     view_t v;
     int hv;
@@ -2118,6 +2128,10 @@ static int tup_image(const VkExec *ex, int slot, VkTupImage *o) {
     if (img) *o = (VkTupImage){img->image, img->format, img->aspect, img->width, img->height};
     vk_texture_unlock();
     return img != NULL;
+}
+
+static int tup_image(const VkExec *ex, int slot, VkTupImage *o) {
+    return tup_image_handle(ex->tex[NVN_STAGE_FS][slot], o);
 }
 
 // n bytes at off of uniform block c<slot> of stage st, as this point of the replay sees them.
@@ -2135,6 +2149,86 @@ static int ubo_peek(const VkExec *ex, int st, int slot, uint64_t off, void *out,
 // depth (3) and, from its block c4, the jitter phase ([2].z); the last records the upscaler into its target instead.
 static int tup_draw(VkExec *ex, const GfxShader *fs) {
     int role = vk_tup_role(fs);
+    // Camera-cut / scene-reset frame: XC3's TUP dispatcher (0xf7ce3c) skips passes 1..4 (VK_TUP_FIRST..MID3) and
+    // runs only pass 5 (0xf7eba4) with EXEC_MODE = 1 into the same 2x reconstruction target (TU.last_recon_img).
+    // Because EXEC_MODE = 1 has a different SPIR-V hash than VK_TUP_LAST, the temporal upscaler was skipped for
+    // that frame and vk_tup_reset() was never called, leaving stale temporal history across the camera cut for 1-3
+    // frames. Detect that draw structurally, reset temporal history, and dispatch the upscaler with reset = 1.
+    if (!role && !TU.captured && !TU.done.image && TU.last_recon_img) {
+        const VkExecTarget *t = &ex->color[0];
+        if (t->image && t->img && t->image == TU.last_recon_img &&
+            t->img->width == TU.last_recon_w && t->img->height == TU.last_recon_h &&
+            t->img->format == VK_FORMAT_R8G8B8A8_UNORM) {
+            VkTupImage col = {0};
+            int got_col = 0;
+            for (int s = 0; s < 8; s++) {
+                VkTupImage im;
+                if (tup_image(ex, s, &im) && im.format == VK_FORMAT_R8G8B8A8_UNORM &&
+                    (im.image == TU.last_color_img ||
+                     (im.w * 2 == t->img->width && im.h * 2 == t->img->height))) {
+                    col = im;
+                    got_col = 1;
+                    if (im.image == TU.last_color_img) break;
+                }
+            }
+            if (got_col) {
+                vk_tup_reset();   // discard stale temporal history & auto-exposure across the cut
+                static unsigned cut_n;
+                if (!cut_n++ || cfg_get("XC3_TUP_DEBUG"))
+                    rt_log("vk: temporal upscale: camera-cut reset draw caught (fragment shader %016llx, "
+                           "colour %ux%u -> %ux%u, cuts so far %u)",
+                           (unsigned long long)gfx_shader_spirv_fnv(fs), col.w, col.h,
+                           t->img->width, t->img->height, cut_n);
+                if (TU.failed || vk_tup_mode() == VK_TUP_OFF) return 0;
+                VkTupImage mot = {0}, dep = TU.frame_depth;
+                int has_dep = dep.image != VK_NULL_HANDLE || tup_image_handle(TU.last_depth_tex, &dep);
+                if (!tup_image_handle(TU.last_motion_tex, &mot) || !has_dep ||
+                    !(dep.aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || mot.w < col.w || mot.h < col.h ||
+                    dep.w < col.w || dep.h < col.h)
+                    return 0;   // let the game's EXEC_MODE = 1 draw run; vk_tup_reset() is armed for the next frame
+                VkTupFrame *f = &TU.f;
+                memset(f, 0, sizeof *f);
+                f->color = col;
+                f->motion = mot;
+                f->depth = dep;
+                float c3[8];
+                const char *js = cfg_get("XC3_TUP_JITTER");
+                float jphase = 0.0f;
+                if (ubo_peek(ex, NVN_STAGE_FS, 3, 0, c3, sizeof c3)) {
+                    if (c3[0] == 0.0f || c3[0] == 1.0f) jphase = c3[0];
+                    if (c3[4] >= 64 && c3[5] >= 64 && c3[4] <= (float)col.w && c3[5] <= (float)col.h)
+                        f->rw = (uint32_t)c3[4], f->rh = (uint32_t)c3[5];
+                }
+                if (!f->rw || !f->rh) {
+                    if (TU.last_rw >= 64 && TU.last_rh >= 64 && TU.last_rw <= col.w && TU.last_rh <= col.h)
+                        f->rw = TU.last_rw, f->rh = TU.last_rh;
+                }
+                float sign = (jphase != 0.0f ? -1.0f : 1.0f) * (js && !strcmp(js, "-1") ? -1.0f : 1.0f);
+                f->jitter[0] = f->jitter[1] = 0.25f * sign;
+                f->near_z = 0.1f;
+                f->fov_y = 1.222f;
+                f->out = (VkTupImage){t->image, t->img->format, VK_IMAGE_ASPECT_COLOR_BIT, t->img->width, t->img->height};
+                f->own_out = res_scene_on();
+                f->game_out = f->own_out ? f->out : (VkTupImage){0};
+                if (f->own_out) {
+                    unsigned out[2], scene[2];
+                    res_sizes(out, scene);
+                    f->out.w = out[0], f->out.h = out[1];
+                }
+                vk_exec_pass_end(ex);
+                if (!vk_tup_record(ex->cb, f)) {
+                    TU.failed = 1;
+                    rt_log("vk: temporal upscale off: the upscaler did not record on cut; the game's reconstruction from now on");
+                    return 0;
+                }
+                if (f->own_out && !vk_tup_result(&TU.done)) TU.done.image = VK_NULL_HANDLE;
+                ex->recorded++;
+                ex->dirty = VK_EXEC_DIRTY_ALL;
+                vk_exec_draw_new_cb();
+                return 1;
+            }
+        }
+    }
     if (!role) return 0;
     if (role == VK_TUP_COPY) {   // the scene-size copy on the scaled path, or our result, goes into the frame next
         const VkExecTarget *t = &ex->color[0];
@@ -2184,8 +2278,21 @@ static int tup_draw(VkExec *ex, const GfxShader *fs) {
                    f->color.w, f->color.h, f->motion.w, f->motion.h, f->depth.w, f->depth.h, c4[0], c4[1], c4[2], c4[3],
                    c4[4], c4[5], c4[6], c4[7], c4[8], c4[9], c4[10], c4[11]);
         }
+        TU.last_color_img = f->color.image;
+        TU.last_motion_tex = ex->tex[NVN_STAGE_FS][2];
+        TU.last_depth_tex = ex->tex[NVN_STAGE_FS][3];
+        TU.last_depth_fmt = f->depth.format;
+        TU.last_depth_w = f->depth.w;
+        TU.last_depth_h = f->depth.h;
+        TU.last_rw = f->rw;
+        TU.last_rh = f->rh;
         TU.captured = 1;
         return 1;
+    }
+    if (role == VK_TUP_LAST && ex->color[0].image && ex->color[0].img) {
+        TU.last_recon_img = ex->color[0].image;
+        TU.last_recon_w = ex->color[0].img->width;
+        TU.last_recon_h = ex->color[0].img->height;
     }
     if (!TU.captured) return 0;
     if (role != VK_TUP_LAST) return 1;
@@ -2307,6 +2414,9 @@ static void tup_fixup_sampled(VkExec *ex, const GfxShader *fs) {
 // submission in queue order and before the present's blit (vk_backend.c present_image flushes the upload batch). Each
 // present also notes its image for tup_presented.
 void vk_exec_tup_present(VkImage img, VkFormat fmt, uint32_t w, uint32_t h) {
+    TU.captured = 0;
+    TU.done.image = VK_NULL_HANDLE;
+    TU.frame_depth.image = VK_NULL_HANDLE;
     if (img && (TP.img[0] != img || TP.w != w || TP.h != h || TP.fmt != fmt)) {
         if (TP.w != w || TP.h != h || TP.fmt != fmt) memset(&TP, 0, sizeof TP);
         int k = 0;
@@ -2373,6 +2483,10 @@ static int prepare_draw(VkExec *ex, int prim, int32_t count, int restart) {
     if (!ex->in_pass || TU.fix.image) tup_fixup(ex);
     if (!ex->in_pass) ex->dirty |= VK_EXEC_DIRTY_VIEWPORT | VK_EXEC_DIRTY_SCISSOR;
     vk_exec_pass_begin(ex);
+    if (TU.last_depth_w && ex->depth.image && ex->depth.img && ex->depth.img->format == TU.last_depth_fmt &&
+        ex->depth.img->width == TU.last_depth_w && ex->depth.img->height == TU.last_depth_h)
+        TU.frame_depth = (VkTupImage){ex->depth.image, ex->depth.img->format, ex->depth.img->aspect,
+                                      ex->depth.img->width, ex->depth.img->height};
     scene_widen(ex);
     VkRect2D sc = vk_exec_scissor(ex);
     if (!sc.extent.width || !sc.extent.height) return 0;
