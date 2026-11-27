@@ -1370,6 +1370,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
             else vcode = vpatched, vw = n2;
         }
     }
+    VkPipeline pipe = VK_NULL_HANDLE;
     if (s->gs) {   // bindings after the vertex shader's in set 0; what the geometry shader reads is the shaders' own business
         uint64_t gw;
         const uint32_t *gcode = gfx_shader_spirv(s->gs, &gw);
@@ -1413,7 +1414,6 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     }
     vm = make_module(vcode, vw);
     free(vpatched), free(fpatched);
-    VkPipeline pipe = VK_NULL_HANDLE;
     if (!vm || (s->fs && !fm)) goto out;
 
     VkPipelineShaderStageCreateInfo stages[3] = {
@@ -1893,13 +1893,18 @@ static struct {
 // built the pipeline and appended by the present thread (vk_pipeline_autosave) or at exit (vk_pipeline_save). A file
 // with another magic, version or record size is ignored and rewritten. Bump KEYS_VERSION when VkPipeState or the
 // record changes meaning without changing size.
-#define KEYS_VERSION 3                 // 3: shaders named by input id (gfx_shader.c)
+#define KEYS_VERSION 4                 // 3: shaders named by input id (gfx_shader.c); 4: geometry stage added
 typedef struct { char magic[8]; uint32_t version, rec_size; } KeysHeader;
 #define KEYS_MAGIC "XC3PKEY"            // 8 bytes with its NUL: the writer and the reader use this one spelling
 typedef struct {
-    uint8_t vs[32], fs[32];            // gfx_shader_input_id of each stage; fs all zero with has_fs 0
+    uint8_t vs[32], fs[32];            // KEYS_VERSION 3 layout, migrated on load
     uint32_t has_fs, pad;
-    VkPipeState s;                     // vs, fs zero
+    VkPipeState s;
+} KeyRecV3;
+typedef struct {
+    uint8_t vs[32], fs[32], gs[32];    // gfx_shader_input_id of each stage; fs/gs all zero when has_fs/has_gs is 0
+    uint32_t has_fs, has_gs;
+    VkPipeState s;                     // vs, fs, gs zero
 } KeyRec;
 static struct {
     char path[PLAT_PATH_MAX * 2];
@@ -1953,14 +1958,14 @@ static void rec_fill(KeyRec *r, const VkPipeState *s) {
     memset(r, 0, sizeof *r);
     memcpy(r->vs, gfx_shader_input_id(s->vs), 32);
     if (s->fs) memcpy(r->fs, gfx_shader_input_id(s->fs), 32), r->has_fs = 1;
+    if (s->gs) memcpy(r->gs, gfx_shader_input_id(s->gs), 32), r->has_gs = 1;
     r->s = *s;
-    r->s.vs = r->s.fs = NULL;
+    r->s.vs = r->s.fs = r->s.gs = NULL;
     r->s.prim_restart = 0;   // dynamic state: the same pipeline either way
 }
 
 // A pipeline was built for a draw: queue its record for the file. Caller holds P.lock.
 static void keys_note(const VkPipeState *s) {
-    if (s->gs) return;   // its record has no geometry shader; built on demand
     if (!A.on || !K.path[0]) return;
     KeyRec r;
     rec_fill(&r, s);
@@ -2014,8 +2019,8 @@ static void keys_open(void) {
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, KEYS_MAGIC, 8) &&
-        h.version == KEYS_VERSION && h.rec_size == sizeof(KeyRec)) {
+    int have_hdr = len >= (long)sizeof h && fread(&h, sizeof h, 1, f) == 1 && !memcmp(h.magic, KEYS_MAGIC, 8);
+    if (have_hdr && h.version == KEYS_VERSION && h.rec_size == sizeof(KeyRec)) {
         K.header_ok = 1;
         size_t n = ((size_t)len - sizeof h) / sizeof(KeyRec);
         if (n && (K.file = malloc(n * sizeof(KeyRec))) && fread(K.file, sizeof(KeyRec), n, f) == n) K.file_n = n;
@@ -2023,11 +2028,32 @@ static void keys_open(void) {
         for (size_t i = 0; i < K.file_n; i++) seen_add(rec_hash((const KeyRec *)K.file + i));
         if (len != (long)(sizeof h + n * sizeof(KeyRec)))   // a torn append: rewrite the file from what was read
             K.header_ok = 0;
+    } else if (have_hdr && h.version == 3 && h.rec_size == sizeof(KeyRecV3)) {
+        size_t n = ((size_t)len - sizeof h) / sizeof(KeyRecV3);
+        KeyRecV3 *old = n ? malloc(n * sizeof *old) : NULL;
+        KeyRec *dst = n ? calloc(n, sizeof *dst) : NULL;
+        if (old && dst && fread(old, sizeof *old, n, f) == n) {
+            for (size_t i = 0; i < n; i++) {
+                memcpy(dst[i].vs, old[i].vs, 32);
+                memcpy(dst[i].fs, old[i].fs, 32);
+                dst[i].has_fs = old[i].has_fs;
+                dst[i].s = old[i].s;
+                dst[i].s.vs = dst[i].s.fs = dst[i].s.gs = NULL;
+                dst[i].s.prim_restart = 0;
+                seen_add(rec_hash(&dst[i]));
+            }
+            K.file = (uint8_t *)dst, K.file_n = n;
+            dst = NULL;
+            rt_log("vk_pipeline: migrating %zu records in %s from version 3 to %d", n, K.path, KEYS_VERSION);
+        } else {
+            rt_log("vk_pipeline: %s has another format or version; it is rewritten", K.path);
+        }
+        free(old), free(dst);
     } else {
         rt_log("vk_pipeline: %s has another format or version; it is rewritten", K.path);
     }
     fclose(f);
-    if (!K.header_ok && K.file_n) {   // keep the whole records of a torn file
+    if (!K.header_ok && K.file_n) {   // keep the whole records of a torn or migrated file
         KeyRec *t = malloc(K.file_n * sizeof *t);
         if (t) memcpy(t, K.file, K.file_n * sizeof *t), K.pend = t, K.pend_n = K.pend_cap = (uint32_t)K.file_n;
     }
@@ -2204,7 +2230,8 @@ static Pipe *pipe_miss(const VkPipeState *s, const GKey *k, uint64_t h, int mode
     Layout *l = NULL;
     uint32_t span = binding_span(s->vs), gs_off = span - 1;
     if (s->gs) span += binding_span(s->gs) - 1;
-    if (gfx_shader_stage(s->vs) != GFX_STAGE_VS || (s->fs && gfx_shader_stage(s->fs) != GFX_STAGE_FS)) why = "stage mismatch";
+    if (gfx_shader_stage(s->vs) != GFX_STAGE_VS || (s->fs && gfx_shader_stage(s->fs) != GFX_STAGE_FS) ||
+        (s->gs && gfx_shader_stage(s->gs) != GFX_STAGE_GS)) why = "stage mismatch";
     else if (k->topo_class == 3) why = "patches need tessellation stages, which are not translated";
     else if (P.indep) {
         Bindings F = {0};
@@ -2469,8 +2496,8 @@ void vk_pipeline_prewarm(void) {
     }
     const KeyRec *r = (const KeyRec *)K.file;
     size_t n = K.file_n, m = 0;
-    uint8_t (*ids)[32] = malloc(2 * n * 32);
-    const GfxShader **sh = calloc(2 * n, sizeof *sh);
+    uint8_t (*ids)[32] = malloc(3 * n * 32);
+    const GfxShader **sh = calloc(3 * n, sizeof *sh);
     if (!ids || !sh) {
         free(ids), free(sh);
         return;
@@ -2478,6 +2505,7 @@ void vk_pipeline_prewarm(void) {
     for (size_t i = 0; i < n; i++) {
         memcpy(ids[m++], r[i].vs, 32);
         if (r[i].has_fs) memcpy(ids[m++], r[i].fs, 32);
+        if (r[i].has_gs) memcpy(ids[m++], r[i].gs, 32);
     }
     qsort(ids, m, 32, id_cmp);
     size_t u = 0;
@@ -2492,6 +2520,7 @@ void vk_pipeline_prewarm(void) {
     if (P.indep) {   // vertex output unions first: workers may take a job before the queue is complete
         uint64_t pair = 0, uni = 0, pairs = 0;
         for (size_t i = 0; i < n; i++) {
+            if (r[i].has_gs) continue;   // independent layouts skip vs_outs when a geometry shader sits between vs and fs
             const uint8_t (*v)[32] = bsearch(r[i].vs, ids, u, 32, id_cmp);
             const uint8_t (*f)[32] = r[i].has_fs ? bsearch(r[i].fs, ids, u, 32, id_cmp) : NULL;
             if (!v || !f || !sh[v - ids] || !sh[f - ids]) continue;
@@ -2510,13 +2539,14 @@ void vk_pipeline_prewarm(void) {
     for (size_t i = 0; i < n; i++) {
         const uint8_t (*v)[32] = bsearch(r[i].vs, ids, u, 32, id_cmp);
         const uint8_t (*f)[32] = r[i].has_fs ? bsearch(r[i].fs, ids, u, 32, id_cmp) : NULL;
-        const GfxShader *vs = v ? sh[v - ids] : NULL, *fs = f ? sh[f - ids] : NULL;
-        if (!vs || (r[i].has_fs && !fs)) {
+        const uint8_t (*g)[32] = r[i].has_gs ? bsearch(r[i].gs, ids, u, 32, id_cmp) : NULL;
+        const GfxShader *vs = v ? sh[v - ids] : NULL, *fs = f ? sh[f - ids] : NULL, *gs = g ? sh[g - ids] : NULL;
+        if (!vs || (r[i].has_fs && !fs) || (r[i].has_gs && !gs)) {
             dropped++;
             continue;
         }
         VkPipeState s = r[i].s;
-        s.vs = vs, s.fs = fs;
+        s.vs = vs, s.fs = fs, s.gs = gs;
         GKey k;
         gkey_fill(&s, &k);
         pr_hist[(k.clamp & 1) | (k.poly_mode & 3) << 1 | (k.minus_w & 1) << 3]++;
