@@ -33,7 +33,7 @@ static struct { uint64_t packets, words, drains, fallbacks, drain_ns, full_waits
 enum {
     R_PAD, R_BeginQuery, R_BeginRendering, R_BindDescriptorSets, R_BindIndexBuffer, R_BindPipeline, R_BindVertexBuffers2,
     R_BlitImage, R_ClearAttachments, R_ClearColorImage, R_ClearDepthStencilImage, R_CopyBuffer, R_CopyBufferToImage,
-    R_CopyImage, R_CopyImageToBuffer, R_Dispatch, R_DispatchIndirect, R_Draw, R_DrawIndexed, R_DrawIndexedIndirect,
+    R_CopyImage, R_CopyImageToBuffer, R_CopyQueryPoolResults, R_Dispatch, R_DispatchIndirect, R_Draw, R_DrawIndexed, R_DrawIndexedIndirect,
     R_EndQuery, R_EndRendering, R_FillBuffer, R_PipelineBarrier2, R_PushConstants, R_ResetQueryPool, R_ResolveImage,
     R_SetBlendConstants, R_SetCullMode, R_SetDepthBias, R_SetDepthBiasEnable, R_SetDepthCompareOp, R_SetDepthTestEnable,
     R_SetDepthWriteEnable, R_SetFrontFace, R_SetPrimitiveRestartEnable, R_SetPrimitiveTopology,
@@ -232,6 +232,11 @@ FIXED(BindIndexBuffer, (VkCommandBuffer cb, VkBuffer b, VkDeviceSize o, VkIndexT
 #define PACK_BindPipeline *a = (A_BindPipeline){bp, p}
 FIXED(BindPipeline, (VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p), (cb, bp, p), VkPipelineBindPoint bp;
       VkPipeline p)
+#define PACK_CopyQueryPoolResults *a = (A_CopyQueryPoolResults){p, f, c, d, o, s, fl}
+FIXED(CopyQueryPoolResults,
+      (VkCommandBuffer cb, VkQueryPool p, uint32_t f, uint32_t c, VkBuffer d, VkDeviceSize o, VkDeviceSize s,
+       VkQueryResultFlags fl),
+      (cb, p, f, c, d, o, s, fl), VkQueryPool p; uint32_t f, c; VkBuffer d; VkDeviceSize o, s; VkQueryResultFlags fl)
 #define PACK_Dispatch *a = (A_Dispatch){x, y, z}
 FIXED(Dispatch, (VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z), (cb, x, y, z), uint32_t x, y, z)
 #define PACK_DispatchIndirect *a = (A_DispatchIndirect){b, o}
@@ -584,6 +589,7 @@ static void exec_packet(uint32_t op, void *p) {
     F(BeginQuery, a->p, a->q, a->f)
     F(BindIndexBuffer, a->b, a->o, a->t)
     F(BindPipeline, a->bp, a->p)
+    F(CopyQueryPoolResults, a->p, a->f, a->c, a->d, a->o, a->s, a->fl)
     F(Dispatch, a->x, a->y, a->z)
     F(DispatchIndirect, a->b, a->o)
     F(Draw, a->n, a->i, a->f, a->fi)

@@ -272,10 +272,30 @@ static void reset_counter(VkExec *ex, const p_reset_counter *p) {
     oq_counting = 1, oq_reported = 0;
 }
 
-// A samples-passed report: the segment goes with it (addr 0: no CPU-visible memory) and counting stops until the next
-// reset, unless reports came without resets before.
-static void oq_report(VkExec *ex, uint64_t addr) {
-    oq_segment(ex, addr, 0);
+// A samples-passed report: write the 64-bit count on the GPU so shaders in the same submission that bind the counter
+// buffer as a UBO (XC3's volumetric clouds and atmospheric fog) see the current frame's result, then hand the segment
+// to the completion thread to reset the query slots and publish {counter, timestamp} to guest CPU memory.
+static void oq_report(VkExec *ex, uint64_t addr, const VkMemSpan *dst) {
+    if (dst && (dst->offset & 7) == 0 && dst->avail >= 8) {
+        vk_exec_pass_end(ex);   // ends any active occlusion query (oq_close) and leaves the render pass
+        vk_exec_barrier(ex);
+        VkMemSpan d = *dst;
+        VK_MEM_PICK(d);
+        if (!oq_keep && !oq_lost && oq_nseg == 1) {
+            vkCmdCopyQueryPoolResults(ex->cb, oq_pool, oq_seg[0], 1, d.buffer, d.offset, 8,
+                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        } else if (!oq_keep && !oq_lost && oq_nseg == 0) {
+            vkCmdFillBuffer(ex->cb, d.buffer, d.offset, 8, 0);
+        } else {
+            vkCmdFillBuffer(ex->cb, d.buffer, d.offset, 4, 1);
+            vkCmdFillBuffer(ex->cb, d.buffer, d.offset + 4, 4, 0);
+        }
+        vk_mem_gpu_wrote(&d, 8);
+        ex->recorded++;
+        vk_exec_barrier(ex);
+        note_gpu_write(ex, addr, 8);
+    }
+    oq_segment(ex, (addr && !nvn_gpu_only(addr)) ? addr : 0, 0);
     if (oq_reported && !oq_keep) {
         oq_keep = 1;
         rt_log("vk: samples passed reported twice without a reset: counting every draw from now on");
@@ -293,15 +313,19 @@ static void signal_event(VkExec *ex, const p_signal_event *p) {
 
 static void report_counter(VkExec *ex, const p_report_counter *p) {
     int samples = p->type == NVN_COUNTER_TYPE_SAMPLES_PASSED && oq_ready();
-    if (nvn_gpu_only(p->addr)) {   // CPU-invisible pool: no host memory behind it
-        if (samples) oq_report(ex, 0);
-        return;
-    }
+    int gpu_only = nvn_gpu_only(p->addr);
     VkMemSpan m;
-    if (!vk_mem_resolve(p->addr, sizeof(NVNcounterData), &m))
+    int resolved = vk_mem_resolve(p->addr, sizeof(NVNcounterData), &m);
+    if (!resolved) {
+        if (gpu_only) {
+            if (samples) oq_report(ex, 0, NULL);
+            return;
+        }
         rt_fatal("vk: counter report at %#llx is in no memory pool", (unsigned long long)p->addr);
+    }
     vk_mem_count(m.cls, VK_MUSE_GPU_WRITE, sizeof(NVNcounterData));
-    if (samples) oq_report(ex, p->addr);
+    if (samples) oq_report(ex, p->addr, &m);
+    else if (gpu_only) return;
     else {
         static double test_ms = -1;
         if (test_ms < 0) {
@@ -332,7 +356,7 @@ static void report_counter(VkExec *ex, const p_report_counter *p) {
             vk_completion_add(ex->fence, counter_cb, a);
         }
     }
-    pending[pending_head++ % PENDING] = (typeof(pending[0])){p->addr, ex->fence, samples};
+    if (!gpu_only) pending[pending_head++ % PENDING] = (typeof(pending[0])){p->addr, ex->fence, samples};
 }
 
 // ---- conditional rendering
