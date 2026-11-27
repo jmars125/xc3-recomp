@@ -37,8 +37,14 @@ set realtime XC3_REALTIME 1
 site realtime main f3dc 1ac00d08 @page:x8 f9003913 b9400908
 site realtime main f3e8 1e201821 @page:x9 bd400521
 site realtime main f400 9449c331 @page:x8 bd400500
-site realtime main 124fa70 2a090108 32000108
 site realtime main 334a34 f9403668 @page:x8 f9003d13 f9403668
+
+# limiter (XC3_LIMITER_SKIP, frame_rate.c): skip the busy-wait loop inside main+0x124fa34 without skipping the
+# render-sync job at main+0x124fab0 (0x124fb58 -> nvnSyncWait + 0x124a548(2)). Skipping main+0x124fa34 before
+# 0x124fab0 left cutscene effect tracks 1 frame ahead of camera cuts (cut - 1 vanish). Replacing fcmp s3, s8 at
+# main+0x124fb0c with fmov s3, #-1.0; fcmp s3, #0.0 sets N=1 unconditionally so b.mi exits immediately after 0x124fb58.
+set limiter XC3_LIMITER_SKIP 1
+site limiter main 124fb0c 1e282060 1e3e1003 1e202068
 
 # menus (XC3_MENU_TIME, frame_rate.c): the interface's animation follows the time each frame is shown. Every layout
 # (menus, the HUD, their fades) advances each frame by its own speed (+0x290) times the layout manager's rate (+0x80 of

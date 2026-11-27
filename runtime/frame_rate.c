@@ -68,6 +68,7 @@ static void step_store(float seconds) {
 static void frame_limit_live(void);
 static int cut_now;   // a cutscene or title menu runs (cutscene below)
 static int limit_hz;
+static int limiter_set = -1, limiter_allow;   // patch set limiter: off during cutscenes so main+0x124fa34 paces natively
 
 // The game's vsync count per frame (main+0x1b42db0; setter main+0x124a528, getter main+0x1249b6c).
 static _Atomic uint32_t *vsyncs_word;
@@ -91,10 +92,14 @@ void frame_step_init(void) {
         rt_log("frame rate: the vsync count is not at main+0x1b42db0; shipping 30 fps whole-vsync steps");
         return;
     }
+    limiter_set = rt_patch_set("limiter");
     if (realtime >= 0 && rt_patch_enabled(realtime)) {
         step_word = (_Atomic uint64_t *)rt_patch_page();
         step_fps = (_Atomic int32_t *)((uint8_t *)rt_patch_page() + 8);
         step_store((float)STEP_FIRST_S);
+        limiter_allow = limiter_set >= 0 && rt_patch_enabled(limiter_set);
+    } else if (limiter_set >= 0) {
+        rt_patch_disable(limiter_set);
     }
     int menus = rt_patch_set("menus");
     if (!step_word && rt_patch_enabled(menus)) {
@@ -107,6 +112,7 @@ void frame_step_init(void) {
 }
 
 int frame_step_realtime(void) { return step_word != NULL; }
+int frame_step_cutscene(void) { return cut_now; }
 
 // The frame limit (menu, XC3_FPS_LIMIT, live): 30 to 360 in the menu's steps, any whole rate from 30 to 360, or display (the
 // refresh rate of the window's monitor). Unset, the older XC3_FPS60=0 still means 30. Without the real-time step the
@@ -309,6 +315,7 @@ void frame_step_present(uint64_t display_ns, int interval) {
     int cut = cutscene();
     if (cut != cut_now) {
         cut_now = cut;
+        if (limiter_allow) rt_patch_switch(limiter_set, !cut);
         sample_count = sample_next = 0;   // the average starts again at the new rate
         rt_log("frame rate: %s", cut ? "cutscene, event or title menu, 30 fps" : "play, the limit again");
     }

@@ -276,6 +276,7 @@ void ether_orbs_init(void);                                // ether_orbs.c: patc
 void mod_archive_boot(void);                               // mod_archive.c: patch set modfiles, before hostfn_seal
 void frame_step_init(void);                                // after rt_patches_init: the real-time step's first value
 int frame_step_realtime(void);                             // the real-time step is on: presents ignore the interval
+int frame_step_cutscene(void);                             // a cutscene, event or title menu runs at the game's 30 fps
 uint64_t frame_step_cap_ns(void);                          // with the real-time step: the shortest frame in ns
 double frame_step_limit_hz(void);                         // the frame rate the limit gives (overlay); 0 unknown
 int gfx_frame_gen_factor(void);                            // shown frames per drawn frame: 2 while frame generation runs
