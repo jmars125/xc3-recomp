@@ -45,8 +45,8 @@ typedef struct { uint64_t lo, hi, off; int dropped; } Reg;
 typedef struct { uint64_t lo, hi, fence; } Wrote;
 typedef struct { Rng *col, *tmp; int ncol, ccol, ctmp; } Col;   // collected ranges and the sort's scratch
 
-// vk_usnap_take's copy for one queued submission: regions as in U.reg (off into data), then the bytes.
-typedef struct UsnapTake { int nreg; uint64_t total, refused, copy_ns; Reg *reg; uint8_t *data; } UsnapTake;
+// vk_usnap_take's copy for one queued submission: regions as in U.reg (off into data), done fence at copy time, then the bytes.
+typedef struct UsnapTake { int nreg; uint64_t total, refused, copy_ns, done; Reg *reg; uint8_t *data; } UsnapTake;
 
 static struct {
     int mode;                   // rt_knob: 0 off, 1 on, 2 ab
@@ -181,10 +181,9 @@ static void sort_col(Col *k) {
     if (src != k->col) memcpy(k->col, src, (size_t)n * sizeof *src);   // three passes end in tmp
 }
 
-// Keeps the GPU writes of submissions that are not done, merged into disjoint ranges sorted by lo (the terrain rewrites
-// one block before every draw: hundreds of equal entries), each with the newest fence among its parts.
-static void wr_prune(void) {
-    uint64_t done = vk_sync_fence_done();
+// Keeps the GPU writes of submissions that are not done as of `done`, merged into disjoint ranges sorted by lo (the
+// terrain rewrites one block before every draw: hundreds of equal entries), each with the newest fence among its parts.
+static void wr_prune(uint64_t done) {
     int n = 0;
     for (int i = 0; i < U.nwr; i++)
         if (U.wr[i].fence > done) U.wr[n++] = U.wr[i];
@@ -275,6 +274,7 @@ void *vk_usnap_take(const uint64_t *handles, int n) {
         return NULL;
     }
     if (!(t->data = malloc(t->total))) rt_fatal("vk_usnap: out of memory (%llu bytes)", (unsigned long long)t->total);
+    t->done = vk_sync_fence_done();   // GPU writes with fence > t->done have not written back to guest yet
     for (int i = 0; i < t->nreg; i++)
         memcpy(t->data + t->reg[i].off, (const void *)(uintptr_t)t->reg[i].lo, t->reg[i].hi - t->reg[i].lo);
     t->refused = refused;
@@ -305,10 +305,10 @@ void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence) {
         U.off_subs++;
         return;
     }
-    uint64_t t0 = kern_now_ns();
-    wr_prune();
-    uint64_t total = 0;
     if (t == (void *)&U) return;   // queued: the take found nothing
+    uint64_t t0 = kern_now_ns();
+    wr_prune(t ? t->done : vk_sync_fence_done());
+    uint64_t total = 0;
     if (t) {
         // Queued: the bytes as of the submit call, less the regions a GPU write of an earlier submission touches.
         U.refused += t->refused;

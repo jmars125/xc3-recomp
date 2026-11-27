@@ -944,7 +944,7 @@ static void walk(VkExec *ex, const op_hdr *h, int depth) {
             break;
         case OP_SET_RT: set_rt(ex, a); break;
         case OP_CLEAR_COLOR: clear_color(ex, a); break;
-        case OP_FENCE_SYNC: nvn_fence_sync_replayed(((const p_fence_sync *)a)->sync); break;
+        case OP_FENCE_SYNC: break;   // fenced at QueueSubmitCommands (nvn_api_cmd.c resolve_deferred)
         case OP_CLEAR_DS: clear_ds(ex, a); break;
         case OP_VIEWPORTS: {
             const p_viewports *v = a;
