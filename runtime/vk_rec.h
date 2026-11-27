@@ -68,6 +68,8 @@ void rec_write_mask(PFN_vkCmdSetColorWriteMaskEXT fn, VkCommandBuffer cb, uint32
                   const VkImageCopy *r), (cb, s, sl, d, dl, n, r))                                                       \
     X(CopyImageToBuffer, (VkCommandBuffer cb, VkImage s, VkImageLayout sl, VkBuffer d, uint32_t n,                       \
                           const VkBufferImageCopy *r), (cb, s, sl, d, n, r))                                             \
+    X(CopyQueryPoolResults, (VkCommandBuffer cb, VkQueryPool p, uint32_t f, uint32_t c, VkBuffer d, VkDeviceSize o,      \
+                             VkDeviceSize s, VkQueryResultFlags fl), (cb, p, f, c, d, o, s, fl))                         \
     X(Dispatch, (VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z), (cb, x, y, z))                                 \
     X(DispatchIndirect, (VkCommandBuffer cb, VkBuffer b, VkDeviceSize o), (cb, b, o))                                    \
     X(Draw, (VkCommandBuffer cb, uint32_t n, uint32_t i, uint32_t f, uint32_t fi), (cb, n, i, f, fi))                    \
@@ -123,6 +125,7 @@ REC_CMDS(REC_DECL)
 #define vkCmdCopyBufferToImage rc_vkCmdCopyBufferToImage
 #define vkCmdCopyImage rc_vkCmdCopyImage
 #define vkCmdCopyImageToBuffer rc_vkCmdCopyImageToBuffer
+#define vkCmdCopyQueryPoolResults rc_vkCmdCopyQueryPoolResults
 #define vkCmdDispatch rc_vkCmdDispatch
 #define vkCmdDispatchIndirect rc_vkCmdDispatchIndirect
 #define vkCmdDraw rc_vkCmdDraw
