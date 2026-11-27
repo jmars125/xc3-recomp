@@ -1193,6 +1193,9 @@ static int resolve_deferred(const uint8_t *p, int depth) {   // returns the numb
             memcpy(&t, p + 8, 8);
             if (depth >= 16) rt_fatal("nvn: deferred bind resolution: call depth over 16");
             nd += resolve_deferred((const uint8_t *)(uintptr_t)t, depth + 1);
+        } else if (h.op == OP_FENCE_SYNC) {
+            const p_fence_sync *fs = (const p_fence_sync *)(uintptr_t)(p + 8);
+            nvn_fence_sync_replayed(fs->sync);
         } else if (h.op == OP_BIND_TEX || h.op == OP_BIND_IMG || h.op == OP_BIND_SAMP) {
             p_bind_handles *b = (p_bind_handles *)(uintptr_t)(p + 8);
             if (b->src && b->n > 0 && b->n <= 32) {

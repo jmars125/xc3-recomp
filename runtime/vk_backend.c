@@ -229,7 +229,6 @@ static void replay_main(void *arg) {
             if (f != it.value)
                 rt_fatal("vk: replayed submission signalled %llu, queued as %llu", (unsigned long long)f,
                          (unsigned long long)it.value);
-            nvn_replayed_syncs_fence(f);   // the CommandBufferFenceSyncs this replay reached
             free(it.h);
         } else if (it.kind == RI_RELEASE) {
             vk_present_drain();

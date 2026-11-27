@@ -636,13 +636,14 @@ NVN_API(nvnQueueSubmitCommands) {
         plat_mutex_lock(&submit_lock);
         nvn_submit_prepare_async(h, hs, n);
         f = gfx_backend()->submit(hs, n);
+        nvn_replayed_syncs_fence(f);
         plat_mutex_unlock(&submit_lock);
         if (hs != local) free(hs);
     } else {
         nvn_submit_prepare(h, n);
         f = gfx_backend()->submit(h, n);
+        nvn_replayed_syncs_fence(f);
     }
-    if (!gfx_replay_async()) nvn_replayed_syncs_fence(f);   // the replay thread does it (vk_backend.c replay_main)
     uint64_t prev = __atomic_load_n(&last_fence, __ATOMIC_RELAXED);
     while (f > prev && !__atomic_compare_exchange_n(&last_fence, &prev, f, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
     __atomic_store_n(&lod_fence[no % LOD_RING], f, __ATOMIC_RELAXED);
